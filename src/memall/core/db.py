@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS identities (
     agent_type TEXT NOT NULL DEFAULT 'ai',
     description TEXT NOT NULL DEFAULT '',
     icon TEXT NOT NULL DEFAULT '🤖',
+    identity_profile TEXT NOT NULL DEFAULT '{}',
+    profile_json TEXT NOT NULL DEFAULT '{}',
+    persona_updated_at TEXT NOT NULL DEFAULT '',
     last_heartbeat TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active',
     metadata TEXT NOT NULL DEFAULT '{}'
@@ -238,12 +241,16 @@ def get_conn(db_path=None) -> sqlite3.Connection:
     Sets WAL journal mode, NORMAL synchronous (safe in WAL), 8 MB cache,
     5-second busy timeout, and foreign-key enforcement.
 
+    On first call, auto-initializes the database schema and migrations
+    so no explicit ``memall init`` is required.
+
     Args:
         db_path: Optional path override.  Falls back to ``DB_PATH``.
 
     Returns:
         A ``sqlite3.Connection`` with ``row_factory = sqlite3.Row``.
     """
+    global _auto_init_done
     path = db_path or DB_PATH
     ensure_dir()
     conn = sqlite3.connect(str(path), timeout=10)
@@ -258,6 +265,11 @@ def get_conn(db_path=None) -> sqlite3.Connection:
     conn.execute("PRAGMA cache_size=-8000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=5000")
+
+    if not _auto_init_done:
+        init_db(conn=conn)
+        _auto_init_done = True
+
     return conn
 
 
@@ -331,6 +343,7 @@ class ConnectionPool:
 
     def _new_conn(self) -> sqlite3.Connection:
         """Create and configure a fresh connection."""
+        global _auto_init_done
         conn = sqlite3.connect(self.db_path, timeout=10)
         conn.row_factory = sqlite3.Row
         try:
@@ -344,6 +357,11 @@ class ConnectionPool:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=5000")
         self._conn_tids[id(conn)] = threading.get_ident()
+
+        if not _auto_init_done:
+            init_db(conn=conn)
+            _auto_init_done = True
+
         return conn
 
     def get(self) -> sqlite3.Connection:
@@ -606,3 +624,8 @@ def db_stats(db_path: "str | None" = None) -> dict:
         "wal_size_mb": wal_mb,
         "tables": tables,
     }
+
+
+# Auto-init flag: ``get_conn()`` / ``ConnectionPool._new_conn()``
+# run ``init_db()`` exactly once on the first connection.
+_auto_init_done = False

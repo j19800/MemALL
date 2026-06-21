@@ -15,6 +15,10 @@
 
 - **CLAUDE.md**: Added "自动提交" rule — each independent change auto-updates ALL relevant .md (not just CHANGELOG) + commit + push + notify user.
 
+### Changed
+
+- **Lazy Auto-Init**: `get_conn()` and `ConnectionPool._new_conn()` now call `init_db()` on their first invocation, so no explicit `memall init` is required for new users or agents that clone the repo. (`core/db.py`)
+
 ## [v0.1.0] - 2026-06-19
 
 ### Added
