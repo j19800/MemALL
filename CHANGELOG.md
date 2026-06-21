@@ -9,7 +9,7 @@
 
 ### Changed
 
-- **CLAUDE.md**: Added "自动提交" rule — each independent change auto-updates CHANGELOG + commit + push.
+- **CLAUDE.md**: Added "自动提交" rule — each independent change auto-updates ALL relevant .md (not just CHANGELOG) + commit + push.
 
 ## [v0.1.0] - 2026-06-19
 
