@@ -19,3 +19,9 @@
 1. L1/L7 教训：遇到数据分布异常先查 WHERE 条件链，不凭直觉下结论
 2. 修复节奏：改完做完整验证（import + parse + 干运行），不分步 debug
 3. 根因优先：改一行 SQL → 改配置 → 加新模块，顺序不可倒置
+
+## 自动提交
+每次完成一个独立改动后（修复/重构/新增功能 + 验证通过）：
+1. **更新文档**：在 `CHANGELOG.md` 末尾追加条目（日期 + 摘要 + 涉及文件），如有需要同步更新 `README.md` 或相关 `.md`
+2. **commit + push**：`git add -A && git commit -m "type: summary..." && git push`
+3. commit message 用英文，格式：`type: description`（type: fix/feat/refactor/docs/chore）

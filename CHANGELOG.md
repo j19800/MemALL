@@ -1,5 +1,16 @@
 # Changelog
 
+## [v0.1.1] - 2026-06-21
+
+### Fixed
+
+- **HTTP Transport Crash**: Root cause fixed — sync `handle_call()` blocked aiohttp event loop. Offloaded to `ThreadPoolExecutor` (12 fast + 2 heavy workers) with `asyncio.wait_for()`. Auto-restart on crash/port conflict. (`http_transport.py`, `shared.py`)
+- **DB Connection Deadlock**: `ConnectionPool.get()` had no timeout on `Queue.get()` — added 30s barrier. 21 raw `sqlite3.connect()` calls missing `timeout=10` — all backfilled across federation, lark, cli, pipeline modules. (`core/db.py`, 8 federation/cli/api files)
+
+### Changed
+
+- **CLAUDE.md**: Added "自动提交" rule — each independent change auto-updates CHANGELOG + commit + push.
+
 ## [v0.1.0] - 2026-06-19
 
 ### Added
