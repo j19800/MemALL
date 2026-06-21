@@ -8,7 +8,7 @@
 
 ## Highlights
 
-- **37 native MCP tools** — memory CRUD, knowledge graph, session management, federation, self-evolution
+- **38 native MCP tools** — memory CRUD, knowledge graph, session management, federation, self-evolution, **hybrid search**
 - **10-layer memory lifecycle** (P0 + L1–L10) — from raw fact to system-level insight
 - **21-step autonomous pipeline** — enrich → classify → time-slice → reflect → distill → integrate
 - **Native knowledge graph** — typed-relation traversal (`refines`, `cites`, `contradicts`, `supersedes`)
@@ -17,6 +17,7 @@
 - **LAN federation** — zero-config peer discovery, no server needed
 - **100% local** — SQLite + FTS5 + vector search, zero cloud dependency
 - **Discussion convergence engine** — multi-agent debate → consensus → traceable decision
+- **Hybrid search (FTS5 + vec0 RRF)** — dual-recall with optional cross-encoder reranking
 
 ---
 
@@ -58,12 +59,35 @@ Then connect your MCP client:
 | Scheduler → Windows Task | ✅ Pipeline 04:00, Forget 03:00 |
 | Database path | ✅ USERPROFILE-based, no SYSTEM profile leak (#8144) |
 | Decision arc closed-loop | ✅ L4 → L5 → L6 auto lifecycle |
-| Hybrid search (FTS5 + vector) | ✅ Production-ready |
+| Hybrid search (FTS5 + vec0 RRF) | ✅ Production-ready |
+| CJK FTS5 query | ✅ CJK characters split into individual tokens |
+| Cross-encoder reranking | ✅ Optional (requires `pip install memall-db[rerank]`) |
+| Search result metadata | ✅ Includes subject, category, level, owner, agent_name |
+| Auto-embed on update | ✅ Embedding refreshed when content changes |
 | LAN federation | ✅ Verified |
 | Discussion convergence | ✅ Multi-agent auto-consensus |
 | PyPI package | ✅ `memall-db` 0.1.0 published |
 
 ---
+
+## Notable Changes (v0.1.0+)
+
+### Search Architecture Upgrade (3 Phases)
+
+| Change | Description |
+|--------|-------------|
+| **CJK FTS5** | CJK characters are now split into individual tokens for correct FTS5 matching |
+| **Hybrid search** | New `memall_hybrid_search` MCP tool — FTS5 keyword + vec0 vector, merged via RRF |
+| **Metadata filters** | Filter results by category, level, owner before RRF merge |
+| **Cross-encoder reranking** | Optional `rerank=True` enables BAAI/bge-reranker-v2-m3 re-scoring (heavy: ~1.8GB) |
+| **Config-driven** | All search parameters configurable via `config.json` / `MEMALL_*` env vars |
+| **Auto-embed on update** | Embedding auto-refreshed when memory content changes |
+| **Force rebuild cleanup** | `build_index(force=True)` now also cleans orphan vec0 rows |
+| **Enriched results** | Each result includes subject, category, level, owner, agent_name |
+
+### Removed
+
+- `rerank` removed from `full` dependency group — core install stays lightweight (~50MB, no AI models)
 
 ## Notable Fixes
 
@@ -80,13 +104,13 @@ Then connect your MCP client:
 
 ---
 
-## 37 MCP Tools
+## 38 MCP Tools
 
 | Category | Tools |
 |----------|-------|
 | **Memory CRUD** | `capture`, `retrieve`, `update`, `smart_store`, `store_batch` |
 | **Knowledge Graph** | `connect`, `traverse`, `timeline` |
-| **Search** | `vector_search` |
+| **Search** | `vector_search`, `hybrid_search` |
 | **Session** | `session_start`, `session_end`, `session_summary` |
 | **Identity & Persona** | `persona`, `persona_profile`, `identity`, `ask` |
 | **Discussion & Decision** | `discussion_create`, `discussion_respond`, `discussion_status`, `trace` |

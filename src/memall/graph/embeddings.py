@@ -132,6 +132,10 @@ def build_index(batch_size: int = BATCH_SIZE, force: bool = False) -> dict:
             pending = list(rows)
             # Clear old embeddings so regenerate is clean
             conn.execute("DELETE FROM memory_embeddings")
+            try:
+                conn.execute("DELETE FROM mem_vec")
+            except Exception:
+                pass  # vec0 table may not exist yet
             conn.commit()
         else:
             pending = []

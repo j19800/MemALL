@@ -179,6 +179,12 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
     if not data.content.strip():
         raise ValueError("content cannot be empty")
 
+    content_len = len(data.content.strip())
+    if content_len < 50:
+        logger.warning(f"capture: very short memory ({content_len} chars) agent={data.agent_name} cat={data.category}: {data.content[:60]}")
+    elif content_len < 80:
+        logger.info(f"capture: short memory ({content_len} chars) agent={data.agent_name} cat={data.category}: {data.content[:60]}")
+
     # Ensure every memory has an agent_name — fallback to "system"
     if not data.agent_name:
         data.agent_name = "system"
@@ -377,6 +383,18 @@ def update(memory_id: int, **fields) -> bool:
             conn.execute("UPDATE memories SET arc_status = 'open' WHERE id = ?", (memory_id,))
 
         conn.commit()
+
+        # Auto-refresh embedding when content changes
+        if "content" in fields:
+            new_content = fields["content"]
+            h = content_hash(new_content)
+            try:
+                from memall.graph.embeddings import _auto_embed
+                _auto_embed(conn, memory_id, new_content, h)
+                conn.commit()
+            except Exception:
+                logger.warning("thin_waist.py: silent error", exc_info=True)
+
         return True
 
 
@@ -493,22 +511,43 @@ def _filter_by_trust(conn, memories: list, viewer: str) -> list:
     return filtered
 
 
+import re
+
+
+_CJK_RE = re.compile(r"[一-鿿㐀-䶿豈-﫿⺀-⻿⼀-⿟]+")
+
+
+def _split_cjk(text: str) -> str:
+    """Insert spaces between CJK characters so FTS5's unicode61 tokenizer
+    treats each CJK character as a separate token.
+
+    Non-CJK sequences (ASCII, digits) are left untouched.
+    """
+    parts: list[str] = []
+    pos = 0
+    for m in _CJK_RE.finditer(text):
+        if m.start() > pos:
+            parts.append(text[pos:m.start()])
+        parts.append(" ".join(m.group()))
+        pos = m.end()
+    if pos < len(text):
+        parts.append(text[pos:])
+    return "".join(parts)
+
+
 def fts_query(raw: str) -> str:
     """Build an FTS5 MATCH query string from a raw user query.
 
-    FTS5''s default ``unicode61`` tokenizer keeps contiguous CJK characters
-    as single tokens (e.g. ``"南海归墟"`` is ONE token, not four), so the
-    standard phrase-match syntax works correctly for Chinese text.
-
-    Each whitespace-separated term is quoted as a phrase match::
+    CJK characters are split into individual tokens so that ``unicode61``
+    tokenizer can index them correctly::
 
         "胡八一 南海归墟 1983"
-        -> ''"胡八一" AND "南海归墟" AND "1983"''
+        -> ''"胡 八 一" AND "南 海 归 墟" AND "1983"''
     """
     terms = raw.strip().split()
     if not terms:
         return ""
-    return " AND ".join(f'"{t}"' for t in terms)
+    return " AND ".join(f'"{_split_cjk(t)}"' for t in terms)
 
 
 VALID_RELATIONS = ["extends", "contradicts", "refines", "cites", "supersedes", "related"]
@@ -673,6 +712,60 @@ def store_batch(items: list) -> dict:
     return {"ids": ids, "count": len(ids)}
 
 
+# ── Cross-encoder reranker (Phase 2) ──
+
+_reranker = None          # cached CrossEncoder instance
+_reranker_model_name = None  # track which model is loaded
+
+
+def _rerank(results: list[dict], query: str, top_k: int) -> list[dict]:
+    """Re-rank RRF results with a cross-encoder model.
+
+    Lazy-loads ``CrossEncoder`` on first call (cached thereafter).  Falls
+    back to the original RRF ordering if ``sentence-transformers`` is not
+    installed or the model fails to load / infer.
+    """
+    global _reranker, _reranker_model_name
+
+    if not results:
+        return results
+
+    from memall.config import get_config
+
+    model_name = get_config("search.reranker_model", "BAAI/bge-reranker-v2-m3")
+    rerank_top_k = get_config("search.rerank_top_k", 30)
+
+    # (Re)load the model if first call or model changed
+    if _reranker is None or _reranker_model_name != model_name:
+        _reranker = None
+        _reranker_model_name = None
+        try:
+            from sentence_transformers import CrossEncoder
+            _reranker = CrossEncoder(model_name, device="cpu")
+            _reranker_model_name = model_name
+            logger.info("reranker loaded: %s", model_name)
+        except ImportError:
+            logger.warning("sentence-transformers not installed; cross-encoder reranking disabled")
+            return results[:top_k]
+        except Exception:
+            logger.warning("failed to load reranker %s; using RRF results", model_name, exc_info=True)
+            _reranker = None
+            return results[:top_k]
+
+    # Score candidates
+    try:
+        candidates = results[:rerank_top_k]
+        pairs = [(query, r.get("content", "")[:512]) for r in candidates]
+        scores = _reranker.predict(pairs, show_progress_bar=False)
+        for r, s in zip(candidates, scores):
+            r["rerank_score"] = float(s)
+        candidates.sort(key=lambda x: -x.get("rerank_score", 0))
+        return candidates[:top_k]
+    except Exception:
+        logger.warning("reranker inference failed; using RRF results", exc_info=True)
+        return results[:top_k]
+
+
 def vector_search(query: str, top_k: int = 10, provider: Optional[str] = None) -> dict:
     """Semantic vector search.
 
@@ -690,17 +783,43 @@ def vector_search(query: str, top_k: int = 10, provider: Optional[str] = None) -
     return graph_retrieve(query, mode="vector", top_k=top_k)
 
 
-def hybrid_search(query: str, top_k: int = 10, rrf_k: int = 60) -> dict:
+def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
+                  category: Optional[str] = None, level: Optional[str] = None,
+                  owner: Optional[str] = None, rerank: bool = False) -> dict:
     """RRF (Reciprocal Rank Fusion) hybrid search combining FTS5 + vec0.
 
     1. FTS5 keyword search → ranked results
     2. vec0 KNN vector search → ranked results
     3. RRF merge: score = 1/(rrf_k + rank_fts) + 1/(rrf_k + rank_vec)
+    4. (optional) Cross-encoder reranking of top candidates
 
-    Returns dict with ``results``, ``total``, and per-source hit counts.
+    Optional metadata filters (``category``, ``level``, ``owner``) are applied
+    before the RRF merge, reducing candidate pool size.
+
+    When ``rerank=True`` the top ``search.rerank_top_k`` candidates
+    are re-scored by a cross-encoder model for improved relevance ordering.
+    Requires ``pip install memall-db[rerank]`` (heavy: ~1.8GB with PyTorch).
+    Falls back to RRF-only ordering if the model is unavailable.
+
+    Returns dict with ``results`` (each includes memory_id, content, subject,
+    category, level, owner, agent_name, rrf_score, fts_rank, vec_rank),
+    ``total``, and per-source hit counts.
     """
     from memall.graph.retrieve import _query_embed, _vec0_knn
-    import struct
+    from memall.config import get_config
+
+    if rrf_k is None:
+        rrf_k = get_config("search.rrf_k", 60)
+
+    def _apply_meta_filters(rows: list) -> list:
+        filtered = rows
+        if category:
+            filtered = [r for r in filtered if r.get("category") == category]
+        if level:
+            filtered = [r for r in filtered if r.get("level") == level]
+        if owner:
+            filtered = [r for r in filtered if r.get("owner") == owner]
+        return filtered
 
     with _pool_conn() as conn:
         # FTS5 results
@@ -716,9 +835,10 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: int = 60) -> dict:
                 ids = [r["rowid"] for r in fts_rowids]
                 placeholders = ",".join("?" * len(ids))
                 fts_rows = conn.execute(
-                    f"SELECT id, content, subject, category FROM memories WHERE id IN ({placeholders})",
+                    f"SELECT id, content, subject, category, level, owner, agent_name FROM memories WHERE id IN ({placeholders})",
                     ids,
                 ).fetchall()
+        fts_rows = _apply_meta_filters(fts_rows)
 
         # vec0 KNN results
         query_vec = _query_embed(query)
@@ -727,18 +847,18 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: int = 60) -> dict:
             vec_results = _vec0_knn(conn, query_vec, top_k * 2)
             for vr in vec_results:
                 row = conn.execute(
-                    "SELECT id, content, subject, category FROM memories WHERE id = ?",
+                    "SELECT id, content, subject, category, level, owner, agent_name FROM memories WHERE id = ?",
                     (vr["memory_id"],),
                 ).fetchone()
                 if row:
                     vec_rows.append(row)
+        vec_rows = _apply_meta_filters(vec_rows)
 
         if not fts_rows and not vec_rows:
-            # Fallback: pure FTS5
             return {
                 "query": query, "mode": "hybrid_rrf",
-                "results": [{"memory_id": r["id"], "content": r["content"][:200], "source": "fts"} for r in fts_rows],
-                "total": len(fts_rows),
+                "results": [],
+                "total": 0,
             }
 
         # RRF merge
@@ -747,6 +867,11 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: int = 60) -> dict:
             scores[r["id"]] = {
                 "memory_id": r["id"],
                 "content": r["content"][:200],
+                "subject": r["subject"] or "",
+                "category": r["category"] or "",
+                "level": r["level"] or "",
+                "owner": r["owner"] or "",
+                "agent_name": r["agent_name"] or "",
                 "rrf_score": 1.0 / (rrf_k + rank + 1),
                 "fts_rank": rank + 1,
                 "vec_rank": None,
@@ -759,15 +884,29 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: int = 60) -> dict:
                 scores[r["id"]] = {
                     "memory_id": r["id"],
                     "content": r["content"][:200],
+                    "subject": r["subject"] or "",
+                    "category": r["category"] or "",
+                    "level": r["level"] or "",
+                    "owner": r["owner"] or "",
+                    "agent_name": r["agent_name"] or "",
                     "rrf_score": 1.0 / (rrf_k + rank + 1),
                     "fts_rank": None,
                     "vec_rank": rank + 1,
                 }
 
-        sorted_results = sorted(scores.values(), key=lambda x: -x["rrf_score"])[:top_k]
+        sorted_results = sorted(scores.values(), key=lambda x: -x["rrf_score"])
+        if rerank:
+            from memall.config import get_config
+            if get_config("search.rerank_enabled", True):
+                sorted_results = _rerank(sorted_results, query, top_k)
+            else:
+                sorted_results = sorted_results[:top_k]
+        else:
+            sorted_results = sorted_results[:top_k]
+
         return {
             "query": query,
-            "mode": "hybrid_rrf",
+            "mode": "hybrid_rerank" if rerank else "hybrid_rrf",
             "results": sorted_results,
             "total": len(scores),
             "fts_hits": len(fts_rows),

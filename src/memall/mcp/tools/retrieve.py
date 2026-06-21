@@ -32,6 +32,19 @@ def handle_vector_search(arguments: dict) -> str:
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
+def handle_hybrid_search(arguments: dict) -> str:
+    result = hybrid_search(
+        query=arguments["query"],
+        top_k=arguments.get("top_k", 10),
+        rrf_k=arguments.get("rrf_k", 60),
+        category=arguments.get("category"),
+        level=arguments.get("level"),
+        owner=arguments.get("owner"),
+        rerank=arguments.get("rerank", False),
+    )
+    return json.dumps(result, ensure_ascii=False, default=str)
+
+
 def handle_trace(arguments: dict) -> str:
     mem_id = arguments["memory_id"]
     conn = get_conn()

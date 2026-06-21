@@ -200,6 +200,24 @@ registry.register(ToolDef(
     intercept_category="query",
 ))
 
+# ── Hybrid Search (FTS5 + vec0 RRF) ──
+registry.register(ToolDef(
+    name="memall_hybrid_search",
+    description="Dual-recall search: FTS5 keyword + vec0 vector, merged via RRF (Reciprocal Rank Fusion). Supports optional metadata filters.",
+    input_schema={"type": "object", "properties": {
+        "query": {"type": "string", "description": "Search query (supports CJK)"},
+        "top_k": {"type": "integer", "default": 10, "description": "Results to return"},
+        "rrf_k": {"type": "integer", "default": 60, "description": "RRF constant — higher = smoother rank fusion"},
+        "category": {"type": "string", "description": "Optional: filter by category"},
+        "level": {"type": "string", "description": "Optional: filter by memory level (e.g. L4, L6)"},
+        "owner": {"type": "string", "description": "Optional: filter by owner"},
+        "rerank": {"type": "boolean", "default": False, "description": "Enable cross-encoder reranking (requires pip install memall-db[rerank], downloads ~1.8GB)"},
+    }, "required": ["query"]},
+    handler=retrieve.handle_hybrid_search,
+    annotations={"readOnlyHint": True, "idempotentHint": True},
+    intercept_category="query",
+))
+
 # ── Session Start ──
 registry.register(ToolDef(
     name="memall_session_start",
@@ -498,10 +516,11 @@ registry.register(ToolDef(
     description="Create a new discussion as an L5 memory. Returns memory_id.",
     input_schema={"type": "object", "properties": {
         "title": {"type": "string", "description": "Short title for the discussion"},
-        "background": {"type": "string", "description": "Context and background"},
-        "options": {"type": "array", "items": {"type": "string"}},
+        "background": {"type": "string", "description": "问题描述：以事实和数据为依据描述问题和背景"},
+        "options": {"type": "array", "items": {"type": "string"}, "description": "解决方案：列出各方案的描述和预估工作量"},
         "participants": {"type": "array", "items": {"type": "string"}},
         "open_questions": {"type": "array", "items": {"type": "string"}},
+        "recommendation": {"type": "string", "description": "建议：明确推荐哪个方案及理由"},
         "convergence_rule": {"type": "string", "enum": ["unanimous", "majority", "any"], "default": "unanimous"},
         "timeout_hours": {"type": "integer", "default": 24},
         "action_items": {"type": "array", "items": {"type": "object", "properties": {

@@ -27,6 +27,10 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "search": {
         "provider": "tfidf",
+        "rrf_k": 60,
+        "reranker_model": "BAAI/bge-reranker-v2-m3",
+        "rerank_top_k": 30,
+        "rerank_enabled": False,
     },
     "forget": {
         "ttl_days": 90,

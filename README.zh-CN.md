@@ -23,7 +23,9 @@
 MemALL 为 AI Agent 提供**跨会话、跨工具、跨 Agent 的持久化记忆**。安装后连接 Claude Desktop / Cursor / Cline 或任何 MCP 客户端，你的 Agent 就不再每次对话都从零开始。
 
 ```bash
-pip install memall-db          # 安装
+pip install memall-db          # 安装（轻量，无 AI 模型）
+pip install memall-db[full]    # 安装 + viz + FAISS
+pip install memall-db[rerank]  # 安装 + 交叉编码器重排（重型：~1.8GB，需 PyTorch）
 memall init                    # 初始化
 memall start                   # 启动服务
 # → MCP 就绪于 http://127.0.0.1:9876/mcp
@@ -111,7 +113,7 @@ SQLite + FTS5 + 向量搜索。零云端依赖。数据留在你的机器上。
 |------|------|
 | **记忆 CRUD** | `capture`, `retrieve`, `update`, `smart_store`, `store_batch` |
 | **知识图谱** | `connect`, `traverse`, `timeline` |
-| **搜索** | `vector_search`, FTS5 全文搜索 |
+| **搜索** | `vector_search`, FTS5 全文搜索, `hybrid_search` (FTS5+vec0 RRF，可选交叉编码器重排[¹]) |
 | **会话** | `session_start`, `session_end`, `session_summary` |
 | **身份与人格** | `persona`, `persona_profile`, `identity`, `ask` |
 | **讨论与决策** | `discussion_create`, `discussion_respond`, `discussion_status`, `trace` |
@@ -210,3 +212,5 @@ src/memall/
 ## 📄 许可证
 
 MIT License。详见 [LICENSE](LICENSE)。
+
+> [¹] 交叉编码器重排需要 `pip install memall-db[rerank]`（首次使用时下载 PyTorch + ~560MB 模型）。核心搜索功能无需此依赖，基于 FTS5 + vec0 的 RRF 融合即可工作。

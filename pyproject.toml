@@ -63,7 +63,11 @@ dev = [
 faiss = [
     "faiss-cpu>=1.14.0",
 ]
-# Full install: core + visualization + faiss
+# Cross-encoder reranker (Phase 2 optional — dense re-ranking of hybrid search results)
+rerank = [
+    "sentence-transformers>=3.0.0",
+]
+# Full install: core + visualization + faiss (no heavy rerank/PyTorch)
 full = [
     "memall[viz,faiss]",
 ]

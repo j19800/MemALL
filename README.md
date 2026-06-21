@@ -23,7 +23,9 @@
 MemALL gives AI Agents **memory that persists across sessions, tools, and agents**. Install it, connect it to Claude Desktop / Cursor / Cline / any MCP client, and your agents stop starting from scratch every conversation.
 
 ```bash
-pip install memall-db          # install
+pip install memall-db          # install (lightweight, no AI models)
+pip install memall-db[full]    # install + viz + FAISS
+pip install memall-db[rerank]  # install + cross-encoder reranking (HEAVY: ~1.8GB, requires PyTorch)
 memall init                    # initialize
 memall start                   # start services
 # → MCP ready at http://127.0.0.1:9876/mcp
@@ -111,7 +113,7 @@ SQLite + FTS5 + vector search. Zero cloud dependency. Your data stays on your ma
 |----------|-------|
 | **Memory CRUD** | `capture`, `retrieve`, `update`, `smart_store`, `store_batch` |
 | **Knowledge Graph** | `connect`, `traverse`, `timeline` |
-| **Search** | `vector_search`, FTS5 full-text search |
+| **Search** | `vector_search`, FTS5 full-text search, `hybrid_search` (FTS5+vec0 RRF, optional cross-encoder[¹]) |
 | **Session** | `session_start`, `session_end`, `session_summary` |
 | **Identity & Persona** | `persona`, `persona_profile`, `identity`, `ask` |
 | **Discussion & Decision** | `discussion_create`, `discussion_respond`, `discussion_status`, `trace` |
@@ -210,3 +212,5 @@ PRs welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 ## 📄 License
 
 MIT License. See [LICENSE](LICENSE) for details.
+
+> [¹] Cross-encoder reranking requires `pip install memall-db[rerank]` (downloads PyTorch + ~560MB model on first use). Core search works without it using RRF fusion of FTS5 + vec0.
