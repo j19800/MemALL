@@ -406,6 +406,8 @@ class ConnectionPool:
             self._conn_tids.pop(id(conn), None)
             try:
                 conn.close()
+            except sqlite3.ProgrammingError:
+                pass  # can't close connection owned by another thread
             except Exception:
                 logger.warning("db.py: silent error", exc_info=True)
             return self._new_conn()
@@ -476,12 +478,18 @@ def pool_conn(db_path: "str | None" = None):
             conn.execute("SELECT ...")
 
     The connection is automatically returned to the pool on exit.
+    Any uncommitted implicit transaction is committed to prevent
+    stale write locks from causing "database is locked" errors.
     """
     pool = get_pool(db_path)
     conn = pool.get()
     try:
         yield conn
     finally:
+        try:
+            conn.commit()
+        except Exception:
+            pass  # stale connection, discard
         pool.put(conn)
 
 

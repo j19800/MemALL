@@ -29,7 +29,7 @@ _CJK_CHARS_RE = re.compile(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]')
 def _cjk_aware_tokenizer(text: str):
     """Tokenize text for TF-IDF with CJK character bigrams.
 
-    Standard ``TfidfVectorizer`` uses ``token_pattern=r'(?u)\b\w+\b'`` which
+    Standard ``TfidfVectorizer`` uses ``token_pattern=r'(?u)\\b\\w+\\b'`` which
     groups consecutive CJK characters into a single token (because ``\b``
     does not separate them).  This makes Chinese text effectively
     unsearchable via vector similarity.
@@ -86,6 +86,7 @@ def _auto_embed(conn, memory_id: int, content: str, content_hash_val: str) -> No
     new memory's vector.  Silently no-ops if there aren't enough texts for SVD.
     """
     try:
+        _ensure_embeddings_table(conn)
         recent_ctx = conn.execute(
             "SELECT m.content FROM memory_embeddings me "
             "JOIN memories m ON me.memory_id = m.id "
@@ -177,7 +178,10 @@ def build_index(batch_size: int = BATCH_SIZE, force: bool = False) -> dict:
 
         conn.execute("BEGIN")
         for i, (row, vec) in enumerate(zip(pending, vecs)):
-            vec_bytes = np.array(vec, dtype=np.float32).tobytes()
+            vec = np.array(vec, dtype=np.float32)
+            if vec.ndim == 1 and vec.shape[0] < EMBED_DIM:
+                vec = np.pad(vec, (0, EMBED_DIM - vec.shape[0]), mode='constant')
+            vec_bytes = vec.tobytes()
             conn.execute(
                 "INSERT OR REPLACE INTO memory_embeddings (memory_id, embedding, model_name, dims, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (row["id"], vec_bytes, "tfidf-256", EMBED_DIM, row["content_hash"], now),
@@ -209,6 +213,7 @@ def index_status() -> dict:
 def _load_embeddings_matrix(conn) -> tuple:
     if np is None:
         return (), [], []
+    _ensure_embeddings_table(conn)
     rows = conn.execute("SELECT me.memory_id, me.embedding, m.content FROM memory_embeddings me JOIN memories m ON me.memory_id = m.id ORDER BY me.memory_id").fetchall()
     if not rows:
         return (), [], []

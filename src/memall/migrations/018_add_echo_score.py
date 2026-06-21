@@ -1,8 +1,9 @@
 import logging
-"""
-Migration 018: Add echo_score column to memories table.
+
 logger = logging.getLogger(__name__)
 
+"""
+Migration 018: Add echo_score column to memories table.
 
 Echo score measures a memory's "staying power" based on how frequently
 it is cited (incoming edges) and accessed. Higher echo_score = more

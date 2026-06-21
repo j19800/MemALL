@@ -1,8 +1,9 @@
 import logging
-"""
-Migration 015: Drop dead embedding column from memories table.
+
 logger = logging.getLogger(__name__)
 
+"""
+Migration 015: Drop dead embedding column from memories table.
 
 The embedding BLOB column was never populated — vector data lives in
 the memory_embeddings table (graph/embeddings.py). SQLite does not

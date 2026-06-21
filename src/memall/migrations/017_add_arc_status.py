@@ -1,8 +1,9 @@
 import logging
-"""
-Migration 017: Add arc_status column to memories table.
+
 logger = logging.getLogger(__name__)
 
+"""
+Migration 017: Add arc_status column to memories table.
 
 Tracks decision arc lifecycle for L4 memories:
   NULL       = non-L4 or not yet scanned

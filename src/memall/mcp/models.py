@@ -210,11 +210,11 @@ class OpsInput(BaseModel):
     before: Optional[str] = None
     after: Optional[str] = None
     days: Optional[int] = Field(None, ge=1, le=3650)
-    threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
-    max_pairs: Optional[int] = Field(None, ge=1, le=100000)
-    max_memories: Optional[int] = Field(None, ge=2, le=50000)
-    length_ratio_max: Optional[float] = Field(None, ge=1.0, le=100.0)
-    dry_run: Optional[bool] = False
+    threshold: float = Field(0.9, ge=0.0, le=1.0)
+    max_pairs: int = Field(5000, ge=1, le=100000)
+    max_memories: int = Field(10000, ge=2, le=50000)
+    length_ratio_max: float = Field(5.0, ge=1.0, le=100.0)
+    dry_run: bool = False
     op_id: Optional[int] = Field(None, ge=1)
 
 

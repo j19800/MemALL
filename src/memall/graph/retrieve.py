@@ -25,7 +25,12 @@ def _query_embed(query: str) -> np.ndarray | None:
     svd = model["svd"]
     X = vec.transform([query[:1000]])
     try:
-        return svd.transform(X)[0]
+        qv = svd.transform(X)[0]
+        if len(qv) < EMBED_DIM:
+            padded = np.zeros(EMBED_DIM, dtype=np.float32)
+            padded[:len(qv)] = qv
+            return padded
+        return qv
     except Exception:
         return np.zeros(EMBED_DIM)
 

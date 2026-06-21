@@ -1,5 +1,25 @@
 # Changelog
 
+## [v0.1.2] - 2026-06-22
+
+### Added
+
+- **E2E Test Suite**: 25-test end-to-end test covering capture, retrieve, timeline, connect, traverse, session lifecycle, smart store, vector search, DB ops, identity, persona, onboarding, pipeline, index rebuild, dedup, and error handling — all calling `handle_call` directly (no HTTP server) with retry-on-BUSY pattern. (`tests/test_e2e.py`, `tests/test_helpers.py`)
+
+### Fixed
+
+- **Connection Pool Write Lock**: `pool_conn()` returned connections with uncommitted implicit write transactions, causing "database is locked" on reused connections. Added `conn.commit()` in pool_conn context manager's finally block. (`core/db.py`)
+- **vec0 Dimension Mismatch**: `build_index()` passed raw k-dim SVD vectors (k ≪ 256 for small datasets) to vec0 expecting 256-dim vectors. Added padding to `EMBED_DIM=256` before `tobytes()`. (`graph/embeddings.py`)
+- **Pipeline Hook TypeError**: `_hook_pipeline_stop` assumed all step results were `int`, but `classify_step()` returns `dict`. Added `_count()` helper to extract integer from dict. (`mcp/hooks_builtin.py`)
+- **OpsInput None Defaults**: Pydantic model had `Optional[int] = None` which `model_dump()` preserved as `None`, causing `TypeError` in dedup operator. Changed to explicit `Field(...)` defaults. (`mcp/models.py`)
+- **`_auto_embed` Missing Table**: Called `SELECT` on `memory_embeddings` before table existed on fresh DB. Added `_ensure_embeddings_table()` guard. (`graph/embeddings.py`)
+- **`_load_embeddings_matrix` Missing Table**: Queried `memory_embeddings` without creating it first. Added `_ensure_embeddings_table()` call. (`graph/embeddings.py`)
+- **`_query_embed` Dimension Mismatch**: SVD produced k-dim query vectors (k < `EMBED_DIM`) causing matmul shape error. Added padding to `EMBED_DIM=256`. (`graph/retrieve.py`)
+- **Migration 015/017/018 Silent Errors**: `logger = logging.getLogger(__name__)` placed inside docstrings, never executed — migrations silently caught all exceptions. Extracted logger assignment above docstring. (`migrations/015_*.py`, `migrations/017_*.py`, `migrations/018_*.py`)
+- **Missing `identity_profile` Column**: Column referenced in code but missing from base schema DDL. Added to `CREATE TABLE identities`. (`core/db.py`)
+- **Thread-Safe Connection Close**: `ConnectionPool.get()` tried to close connections owned by another thread, causing `ProgrammingError`. Added specific catch for `sqlite3.ProgrammingError`. (`core/db.py`)
+- **SyntaxWarning `\\w`**: Invalid escape sequence `\w` in docstring triggered Python 3.12 warning. Escaped backslash. (`graph/embeddings.py`)
+
 ## [v0.1.1] - 2026-06-21
 
 ### Fixed

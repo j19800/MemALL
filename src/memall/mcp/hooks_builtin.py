@@ -18,9 +18,15 @@ def _hook_tool_error(tool_name: str, arguments: dict, error: str = "", **kwargs)
 
 def _hook_pipeline_stop(arguments: dict, **kwargs) -> None:
     """Log pipeline completion summary after each run."""
-    results = arguments.get("results", {})
+    raw = arguments.get("results", {})
     elapsed = arguments.get("elapsed", 0)
-    ok = results.get("enrich", 0) + results.get("classify", 0) + results.get("link", 0)
+
+    def _count(v):
+        if isinstance(v, dict):
+            return v.get("changed", 0) or 0
+        return v or 0
+
+    ok = _count(raw.get("enrich", 0)) + _count(raw.get("classify", 0)) + _count(raw.get("link", 0))
     logger.info("HOOK|stop: pipeline done in %.1fs, %d items processed", elapsed, ok)
 
 
