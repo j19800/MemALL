@@ -399,6 +399,37 @@ def cmd_doctor(args):
     if fail_count + warn_count > 0:
         print("Use --fix to auto-repair orphan records and rebuild FTS.")
 
+    # ── Deep health check ──
+    if getattr(args, "deep", False):
+        try:
+            from memall.core.health import collect
+            h = collect()
+
+            print(f"\n{'─' * 70}")
+            print(f"  Deep Health: score {h['score']}/100")
+            print(f"{'─' * 70}")
+            print(f"  记忆总数:      {h['total_memories']}")
+            print(f"  知识图谱覆盖率: {h['graph_coverage_pct']}%")
+            print(f"  反思覆盖率:    {h['reflection_pct']}%")
+            print(f"  数据库大小:    {h['db_size_mb']} MB")
+            print(f"  Pipeline:      {'正常' if h['pipeline_fresh'] else '⚠ 超过 2 天未运行'}")
+            print(f"  孤立记忆:      {h['isolated_count']}")
+            print(f"  零访问记忆:    {h['zero_access_count']}")
+            print(f"  超时讨论:      {h['stale_discussions']}")
+            print(f"  待索引嵌入:    {h['pending_embeddings']}")
+            print(f"  FTS 索引:      {'正常' if h['fts_ok'] else '⚠ 不一致'}")
+            print(f"  待应用迁移:    {h['pending_migrations']}")
+            if h["issues"]:
+                print(f"\n  ⚠ 发现 {len(h['issues'])} 个问题:")
+                for issue in h["issues"]:
+                    print(f"    · {issue}")
+            if h["tips"]:
+                print(f"\n  💡 建议:")
+                for tip in h["tips"]:
+                    print(f"    · {tip}")
+        except Exception as e:
+            print(f"\n  Deep health check failed: {e}")
+
 
 # ──────────────────────────────────────────────
 # cmd_migrate

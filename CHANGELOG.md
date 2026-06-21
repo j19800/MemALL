@@ -5,6 +5,11 @@
 ### Added
 
 - **E2E Test Suite**: 25-test end-to-end test covering capture, retrieve, timeline, connect, traverse, session lifecycle, smart store, vector search, DB ops, identity, persona, onboarding, pipeline, index rebuild, dedup, and error handling — all calling `handle_call` directly (no HTTP server) with retry-on-BUSY pattern. (`tests/test_e2e.py`, `tests/test_helpers.py`)
+- **Memory Health System**: New `memall.core.health` module with `collect()` for actionable memory diagnostics. Integrated into `memall doctor --deep` for deep health checks and `session_start` as `[HEALTH]` section. Reports graph coverage, reflection rate, isolated memories, stale discussions, pipeline freshness, and DB size with issue/recommendation hints. (`core/health.py`, `cli/commands/management_commands.py`, `pipeline/session.py`)
+
+### Changed
+
+- **Lazy Auto-Init**: `get_conn()` and `ConnectionPool._new_conn()` now call `init_db()` on their first invocation, so no explicit `memall init` is required for new users or agents that clone the repo. (`core/db.py`)
 
 ### Fixed
 

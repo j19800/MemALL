@@ -106,6 +106,7 @@ def app():
 
     p_doc = sub.add_parser("doctor", help="Diagnose and fix database")
     p_doc.add_argument("--fix", action="store_true", help="Apply fixes")
+    p_doc.add_argument("--deep", action="store_true", help="Deep health check with recommendations")
     p_doc.add_argument("--metrics", action="store_true", help="Show system metrics")
     p_doc.set_defaults(func=cmd_doctor)
 

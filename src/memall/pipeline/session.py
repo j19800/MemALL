@@ -15,6 +15,7 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from memall.core.db import get_conn
+from memall.core.health import collect as collect_health
 
 
 def _ensure_sessions_table(conn):
@@ -659,6 +660,18 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                     narrative_data["has_weekly"] = True
             except Exception:
                 logger.warning("session.py: silent error", exc_info=True)
+
+            #[HEALTH] memory health snapshot
+            try:
+                h = collect_health()
+                health_line = f"  · 健康 {h['score']}/100 | 图谱 {h['graph_coverage_pct']}% | 反思 {h['reflection_pct']}% | 数据库 {h['db_size_mb']}MB"
+                if h['issues']:
+                    top_issues = h['issues'][:2]
+                    health_line += "\n  · " + " | ".join(f"⚠ {i}" for i in top_issues)
+                fmt_parts.append("")
+                fmt_parts.append(f"[HEALTH] {health_line}")
+            except Exception:
+                pass
 
             # [PULSE] memory pulse — gentle nudge for stale P0/P1 items
             try:
