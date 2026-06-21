@@ -25,6 +25,7 @@ from .echo import echo_step
 from .epoch import epoch_step
 from .convergence import convergence_step, resolve_pending_deliberations
 from .improve import improve_step
+from .distill_l7 import distill_l7_step
 from memall.core.db import get_conn
 from memall.mcp.hooks import HookRegistry, HOOK_STOP
 
@@ -144,6 +145,9 @@ def run_pipeline(
         # Reflect before distill: ensure refined L6 content is available for distillation
         if include_reflect:
             results["reflect"] = reflect_step()
+
+        # Distill L7 from L6 reflections: extract lessons/improvement points
+        results["distill_l7"] = distill_l7_step()
 
         # Distill after reflect: L9 created from enriched+classified+reflected content
         if include_distill:

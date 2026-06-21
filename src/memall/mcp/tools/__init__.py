@@ -224,7 +224,7 @@ registry.register(ToolDef(
     description="Start a new conversation session for tracking",
     input_schema={"type": "object", "properties": {
         "agent_name": {"type": "string", "default": "", "description": "Agent starting the session"},
-        "auto_inject": {"type": "boolean", "default": False, "description": "Auto-inject Agent Profile + semantic fragments"},
+        "auto_inject": {"type": "boolean", "default": True, "description": "Auto-inject Agent Profile + semantic fragments"},
     }},
     handler=session.handle_session_start,
     annotations={"readOnlyHint": False, "idempotentHint": False},

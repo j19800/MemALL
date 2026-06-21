@@ -70,7 +70,7 @@ Not just "store and retrieve". Every memory has a semantic level:
 | **L9** | **Distillation** | "10k conversations → 200 knowledge nodes" |
 | **L10** | **System insight** | Cross-domain pattern detection |
 
-**21-step auto pipeline** enriches → classifies → time-slices → reflects → distills → integrates. No manual CRUD needed.
+**22-step auto pipeline** enriches → classifies → time-slices → reflects → distills → integrates. No manual CRUD needed.
 
 ### 🔗 Knowledge Graph
 
@@ -164,7 +164,7 @@ pip install -e .
 |---------|--------|------|-------|-----|
 | **Memory model** | 10 layers (P0-L10) | user/session | agent/memory-block | session/summary |
 | **Knowledge graph** | ✅ Native + traversal | ❌ | ❌ | ❌ |
-| **Self-evolving pipeline** | ✅ 21-step auto | ❌ | ❌ | ❌ |
+| **Self-evolving pipeline** | ✅ 22-step auto | ❌ | ❌ | ❌ |
 | **Multi-agent shared** | ✅ Federation | ❌ | Same agent only | ❌ |
 | **Decision tracking** | ✅ Arc lifecycle | ❌ | ❌ | ❌ |
 | **Discussion convergence** | ✅ Multi-agent auto | ❌ | ❌ | ❌ |
@@ -182,7 +182,7 @@ src/memall/
 ├── core/         # SQLite / NLP / vector search
 ├── api/          # FastAPI REST (35 routes)
 ├── mcp/          # MCP adapter (38 tools)
-├── pipeline/     # 21-step auto pipeline
+├── pipeline/     # 22-step auto pipeline
 ├── graph/        # Knowledge graph
 ├── federation/   # Cross-device memory sync
 ├── plugins/      # Dashboard / export / scheduler

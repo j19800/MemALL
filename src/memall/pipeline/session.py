@@ -214,7 +214,7 @@ def _build_cross_agent_section(conn, agent_name: str) -> list:
     return lines if len(lines) > 1 else []
 
 
-def session_start(agent_name: str = "", auto_inject: bool = False) -> dict:
+def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
     """Start a new session. Optionally auto-inject Agent Profile + semantic fragments."""
     conn = get_conn()
     try:

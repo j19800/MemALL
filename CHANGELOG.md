@@ -7,6 +7,10 @@
 - **HTTP Transport Crash**: Root cause fixed — sync `handle_call()` blocked aiohttp event loop. Offloaded to `ThreadPoolExecutor` (12 fast + 2 heavy workers) with `asyncio.wait_for()`. Auto-restart on crash/port conflict. (`http_transport.py`, `shared.py`)
 - **DB Connection Deadlock**: `ConnectionPool.get()` had no timeout on `Queue.get()` — added 30s barrier. 21 raw `sqlite3.connect()` calls missing `timeout=10` — all backfilled across federation, lark, cli, pipeline modules. (`core/db.py`, 8 federation/cli/api files)
 
+### Added
+
+- **L7 Lifecycle Closure**: `auto_inject` defaults to True across all entry points (5 files) — new sessions automatically inject `[L7约束]` behavioral rules. L6→L7 auto-distillation via `distill_l7.py` regex-based lesson extraction, registered in pipeline after `reflect_step()`. (`pipeline/distill_l7.py`, `mcp/models.py`, `mcp/tools/__init__.py`, `mcp/tools/session.py`, `pipeline/session.py`, `api/server.py`, `pipeline/pipeline.py`)
+
 ### Changed
 
 - **CLAUDE.md**: Added "自动提交" rule — each independent change auto-updates ALL relevant .md (not just CHANGELOG) + commit + push + notify user.

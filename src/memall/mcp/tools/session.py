@@ -5,7 +5,7 @@ from memall.pipeline.session import session_start, session_end, session_summary
 def handle_session_start(arguments: dict) -> str:
     result = session_start(
         agent_name=arguments.get("agent_name", ""),
-        auto_inject=arguments.get("auto_inject", False),
+        auto_inject=arguments.get("auto_inject", True),
     )
     return json.dumps(result, ensure_ascii=False, default=str)
 

@@ -631,7 +631,7 @@ def check_pending_discussions(agent_name: str) -> list[dict]:
                 "reminder_for": agent_name,
             })
             conn.execute(
-                """INSERT INTO memories
+                """INSERT OR IGNORE INTO memories
                    (content, content_hash, level, owner, agent_name, subject,
                     category, summary, occurred_at, created_at, updated_at,
                     supersedes, confidence, visibility, metadata, arc_status)

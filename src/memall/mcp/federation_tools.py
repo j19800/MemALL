@@ -27,6 +27,7 @@ from memall.federation.family import get_family_db_path, init_family_db
 from memall.federation.conflict import detect_conflicts, list_conflicts
 from memall.pipeline.convergence import check_pending_discussions
 
+logger = logging.getLogger(__name__)
 
 _REDACT_RE = re.compile(r'<private>.*?</private>', re.DOTALL | re.IGNORECASE)
 

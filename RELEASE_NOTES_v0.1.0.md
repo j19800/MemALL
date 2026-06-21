@@ -10,7 +10,7 @@
 
 - **38 native MCP tools** — memory CRUD, knowledge graph, session management, federation, self-evolution, **hybrid search**
 - **10-layer memory lifecycle** (P0 + L1–L10) — from raw fact to system-level insight
-- **21-step autonomous pipeline** — enrich → classify → time-slice → reflect → distill → integrate
+- **22-step autonomous pipeline** — enrich → classify → time-slice → link → reflect → distill_l7 → distill → integrate
 - **Native knowledge graph** — typed-relation traversal (`refines`, `cites`, `contradicts`, `supersedes`)
 - **Multi-agent shared memory** — cross-agent federation queries out of the box
 - **L6 self-reflection + L9 distillation + OODA self-evolution**

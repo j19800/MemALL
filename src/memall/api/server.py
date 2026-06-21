@@ -137,7 +137,7 @@ class ConnectRequest(BaseModel):
 
 class SessionStartRequest(BaseModel):
     agent_name: str = ""
-    auto_inject: bool = False
+    auto_inject: bool = True
 
 class SessionEndRequest(BaseModel):
     session_id: str

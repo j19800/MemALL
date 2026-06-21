@@ -119,7 +119,7 @@ class VectorSearchInput(BaseModel):
 
 class SessionStartInput(BaseModel):
     agent_name: str = Field("", max_length=200)
-    auto_inject: bool = False
+    auto_inject: bool = True
 
 
 class SessionEndInput(BaseModel):
