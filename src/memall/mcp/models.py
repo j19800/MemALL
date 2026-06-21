@@ -258,6 +258,8 @@ class DiscussionCreateInput(BaseModel):
     options: Optional[list] = None
     participants: list = Field(..., min_length=1)
     open_questions: Optional[list] = None
+    recommendation: str = Field("", max_length=5000)
+    action_items: Optional[list] = None
     timeout_hours: int = Field(24, ge=1, le=720)
 
 

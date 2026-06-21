@@ -73,7 +73,7 @@ def init_family_db(force: bool = False):
     if _FAMILY_DB_INITIALIZED and not force:
         return
     db_path = get_family_db_path()
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
@@ -150,7 +150,7 @@ def family_init(circle_name: str, owner_name: str = "admin") -> dict:
     now = datetime.now(timezone.utc).isoformat()
 
     db_path = get_family_db_path()
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=10)
     try:
         # Check if circle already exists
         existing = conn.execute(
@@ -186,7 +186,7 @@ def family_invite(circle_name: str, member_name: str, role: str = "member",
     now = datetime.now(timezone.utc).isoformat()
 
     db_path = get_family_db_path()
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=10)
     try:
         # Find circle
         circle = conn.execute(
@@ -230,7 +230,7 @@ def family_list(circle_name: str = "") -> list:
     """
     init_family_db()
     db_path = get_family_db_path()
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=10)
     conn.row_factory = sqlite3.Row
     try:
         if circle_name:
@@ -295,7 +295,7 @@ def publish_memory(memory_id: int, scope: str = "family",
 
     init_family_db()
     db_path = get_family_db_path()
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=10)
     try:
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
@@ -332,7 +332,7 @@ def search_family(query: str, limit: int = 20, trust_level: str = "",
     """
     init_family_db()
     db_path = get_family_db_path()
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=10)
     conn.row_factory = sqlite3.Row
     try:
         # Escape SQL LIKE wildcards (% and _) to prevent unintended pattern matching
@@ -377,7 +377,7 @@ def get_family_stats() -> dict:
     """Get family library statistics."""
     init_family_db()
     db_path = get_family_db_path()
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=10)
     conn.row_factory = sqlite3.Row
     try:
         total = conn.execute("SELECT COUNT(*) FROM shared_memories").fetchone()[0]

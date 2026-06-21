@@ -6,6 +6,7 @@ Implements MCP 2025-03-26 Streamable HTTP spec:
 """
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
@@ -15,6 +16,35 @@ from pathlib import Path
 from typing import Any
 
 from aiohttp import web
+
+# Thread pool for synchronous tool calls (keeps event loop responsive)
+_TOOL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=12)
+_TOOL_HEAVY = concurrent.futures.ThreadPoolExecutor(max_workers=2)  # slow ops: pipeline, index_rebuild, etc.
+_TOOL_TIMEOUT = 120  # max seconds for a single tool call
+_HEAVY_TIMEOUT = 600  # max seconds for heavy operations
+
+# ── Global exception middleware ────────────────────────────────────────
+@web.middleware
+async def _error_middleware(request: web.Request, handler) -> web.Response:
+    """Catch all unhandled exceptions and return 500 instead of crashing."""
+    try:
+        return await handler(request)
+    except web.HTTPException:
+        raise
+    except Exception as e:
+        _log.error("Unhandled error in %s %s: %s", request.method, request.path, e, exc_info=True)
+        return web.json_response(
+            {"jsonrpc": "2.0", "error": {"code": -32603, "message": f"internal error: {e}"}},
+            status=500,
+        )
+
+
+# ── Graceful shutdown ──────────────────────────────────────────────────
+async def _on_shutdown(app: web.Application):
+    _log.info("MCP HTTP server shutting down")
+    # Give in-flight requests time to finish
+    await asyncio.sleep(0.5)
+
 
 # Harden DB_PATH to current user's home (bypass SYSTEM profile when run as service)
 # Use USERPROFILE on Windows (correct even when running as SYSTEM service),
@@ -111,13 +141,28 @@ async def handle_mcp_post(request: web.Request) -> web.Response:
         arguments = params.get("arguments", {})
         _arg_preview = str(arguments.get("action", "") or arguments.get("query", "") or arguments.get("id", ""))
         _log.info("Call tool: %s %s", tool_name, _arg_preview[:60])
-        try:
+
+        # Route heavy ops to separate pool (pipeline, index_rebuild, etc.) to
+        # avoid exhausting the regular tool pool.
+        _HEAVY_TOOLS = frozenset({
+            "memall_run_pipeline", "memall_index_rebuild", "memall_adaptive",
+            "memall_forget", "memall_gateway", "memall_hub_sync",
+            "memall_persona_profile",
+        })
+        if tool_name in _HEAVY_TOOLS:
+            _pool = _TOOL_HEAVY
+            _timeout = _HEAVY_TIMEOUT
+        else:
+            _pool = _TOOL_EXECUTOR
+            _timeout = _TOOL_TIMEOUT
+
+        # Run synchronous tool execution in thread pool (preserves event loop)
+        def _run_tool():
             result_str = handle_call(tool_name, arguments)
             _intercept(tool_name, arguments, result_str)
             result_data = json.loads(result_str)
             content = [{"type": "text", "text": json.dumps(result_data, ensure_ascii=False)}]
-
-            # ── Agent notifications: piggyback on every tool response ──
+            # Agent notifications (DB query, also sync)
             agent_name = arguments.get("agent_name", "")
             if agent_name:
                 try:
@@ -135,14 +180,27 @@ async def handle_mcp_post(request: web.Request) -> web.Response:
                             "text": f"[NOTIFICATION] 你有 {task_count} 个待完成任务。"
                         })
                 except Exception:
-                    logger.warning("http_transport.py: silent error", exc_info=True)
-
+                    _log.warning("http_transport.py: silent error", exc_info=True)
             session_note = consume_session_note()
             if session_note:
                 content.append({"type": "text", "text": session_note})
+            return content
+
+        try:
+            loop = asyncio.get_event_loop()
+            content = await asyncio.wait_for(
+                loop.run_in_executor(_pool, _run_tool),
+                timeout=_timeout,
+            )
             return web.json_response({
                 "jsonrpc": "2.0", "id": req_id,
                 "result": {"content": content},
+            })
+        except asyncio.TimeoutError:
+            _log.error("Tool %s timed out after %ss", tool_name, _timeout)
+            return web.json_response({
+                "jsonrpc": "2.0", "id": req_id,
+                "error": {"code": -32603, "message": f"tool {tool_name} timed out after {_timeout}s"},
             })
         except Exception as e:
             _log.error("Tool %s failed: %s", tool_name, e, exc_info=True)
@@ -184,22 +242,33 @@ async def handle_sse(request: web.Request) -> web.Response:
         while True:
             await asyncio.sleep(30)
             await response.write(b": heartbeat\n\n")
-    except (ConnectionResetError, ConnectionAbortedError):
-        logger.warning("http_transport.py: silent error", exc_info=True)
+    except (ConnectionResetError, ConnectionAbortedError, ConnectionError):
+        _log.info("SSE client disconnected")
+    except asyncio.CancelledError:
+        _log.info("SSE task cancelled")
+    except Exception:
+        _log.warning("SSE unexpected error", exc_info=True)
     return response
 
 
 async def handle_info(request: web.Request) -> web.Response:
+    def _check_db():
+        try:
+            from memall.core.db import get_conn
+            conn = get_conn()
+            total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+            db_ok = conn.execute("PRAGMA quick_check").fetchone()[0]
+            conn.close()
+            return ("ok", total) if db_ok == "ok" else ("error", total)
+        except Exception as e:
+            return (f"error: {e}", 0)
+
     try:
-        from memall.core.db import get_conn
-        conn = get_conn()
-        total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
-        db_ok = conn.execute("PRAGMA quick_check").fetchone()[0]
-        conn.close()
-        db_status = "ok" if db_ok == "ok" else "error"
-    except Exception as e:
+        loop = asyncio.get_event_loop()
+        db_status, total = await loop.run_in_executor(_TOOL_EXECUTOR, _check_db)
+    except Exception:
+        db_status = "error"
         total = 0
-        db_status = f"error: {e}"
 
     return web.json_response({
         "server": "memall MCP HTTP transport",
@@ -240,11 +309,12 @@ _start_time = None  # set in _startup
 
 
 def create_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[_error_middleware])
     app.router.add_get("/health", handle_info)
     app.router.add_post("/mcp", handle_mcp_post)
     app.router.add_get("/mcp", handle_sse)
     app.router.add_get("/", handle_info)
+    app.on_shutdown.append(_on_shutdown)
     async def _startup(app):
         global _start_time
         _start_time = datetime.now(timezone.utc).timestamp()
@@ -255,17 +325,56 @@ def create_app() -> web.Application:
         _correct_path = os.path.join(_user_home, ".memall", "data.db")
         _memall_db.DB_PATH = Path(_correct_path)
         _log.info("DB_PATH set to: %s", _correct_path)
-        init_db()
+        try:
+            init_db()
+        except Exception as e:
+            _log.error("DB init failed: %s", e, exc_info=True)
+            raise
     app.on_startup.append(_startup)
     return app
 
 
+def serve_http_forever(port: int = 9876, max_retries: int = 0):
+    """Run MCP HTTP server with auto-restart on crash.
+
+    Args:
+        port: TCP port to listen on.
+        max_retries: 0 = unlimited restart.
+    """
+    import time as _time
+    retries = 0
+    while True:
+        try:
+            logging.basicConfig(
+                level=logging.INFO,
+                format="[MCP-HTTP %(asctime)s] %(levelname)s %(message)s",
+                datefmt="%H:%M:%S",
+            )
+            app = create_app()
+            _log.info("MCP HTTP server starting on http://127.0.0.1:%d/mcp", port)
+            web.run_app(app, host="127.0.0.1", port=port, print=lambda _: None)
+            # Normal shutdown — exit loop
+            break
+        except OSError as e:
+            # Port conflict — wait and retry
+            _log.error("Port %d conflict: %s — retrying in 3s", port, e)
+            _time.sleep(3)
+            retries += 1
+            if max_retries and retries >= max_retries:
+                _log.critical("Max retries (%d) reached, giving up", max_retries)
+                raise
+        except Exception as e:
+            _log.error("Server crashed: %s — restarting in 2s", e, exc_info=True)
+            _time.sleep(2)
+            retries += 1
+            if max_retries and retries >= max_retries:
+                _log.critical("Max retries (%d) reached, giving up", max_retries)
+                raise
+
+
 def serve_http(port: int = 9876):
-    """Start MCP Streamable HTTP server on given port."""
-    logging.basicConfig(level=logging.INFO, format="[MCP-HTTP %(asctime)s] %(levelname)s %(message)s", datefmt="%H:%M:%S")
-    app = create_app()
-    _log.info("MCP HTTP server listening on http://127.0.0.1:%d/mcp", port)
-    web.run_app(app, host="127.0.0.1", port=port, print=lambda _: None)
+    """Start MCP Streamable HTTP server (auto-restart on crash)."""
+    serve_http_forever(port)
 
 
 if __name__ == "__main__":

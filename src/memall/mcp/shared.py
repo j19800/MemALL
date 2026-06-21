@@ -60,27 +60,22 @@ def consume_session_note() -> str | None:
 
 def write_intercept_log(tool_name: str, summary: str):
     try:
-        conn = sqlite3.connect(str(DB_PATH))
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS intercept_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tool_name TEXT NOT NULL,
-                summary TEXT NOT NULL,
-                created_at TEXT NOT NULL
+        from memall.core.db import pool_conn
+        with pool_conn() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS intercept_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tool_name TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute(
+                "INSERT INTO intercept_logs (tool_name, summary, created_at) VALUES (?, ?, ?)",
+                (tool_name, summary, datetime.now(timezone.utc).isoformat()),
             )
-        """)
-        conn.execute(
-            "INSERT INTO intercept_logs (tool_name, summary, created_at) VALUES (?, ?, ?)",
-            (tool_name, summary, datetime.now(timezone.utc).isoformat()),
-        )
-        conn.commit()
     except Exception:
         logger.warning("shared.py: silent error", exc_info=True)
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            logger.warning("shared.py: silent error", exc_info=True)
 
 
 def run_intercept(tool_name: str, arguments: dict):

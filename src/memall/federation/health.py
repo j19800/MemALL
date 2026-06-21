@@ -37,7 +37,7 @@ def _snapshot_metrics(conn, stats: dict):
 
 def federation_health(detail: bool = False) -> dict:
     db_path = get_family_db_path()
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=10)
     conn.row_factory = sqlite3.Row
     try:
         _ensure_metrics_table(conn)

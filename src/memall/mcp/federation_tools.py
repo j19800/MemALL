@@ -39,7 +39,7 @@ def redact_content(content: str) -> str:
 def _get_family_conn():
     db_path = get_family_db_path()
     init_family_db()
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
 

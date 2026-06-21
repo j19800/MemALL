@@ -82,7 +82,13 @@ def _mark_session_inline(conn, session_id: str) -> None:
             params,
         ).fetchall()
         key_decisions = [r["content"][:100] for r in decision_rows]
-        l4_content = f"[L4 会话] {agent_name} · {count}条记忆 · {cat_summary}"
+        decision_text = ""
+        if key_decisions:
+            decision_text = "；".join(d[:80] for d in key_decisions[:3] if d)
+        parts = [f"[L4 会话] {agent_name} · {count}条记忆 · {cat_summary}"]
+        if decision_text:
+            parts.append(f"关键决策：{decision_text}")
+        l4_content = "。".join(parts)
         import hashlib
         ch = hashlib.sha256(l4_content.encode()).hexdigest()
         conn.execute(
@@ -822,8 +828,14 @@ def session_end(session_id: str, auto_extract: bool = False) -> dict:
                 "continuation_note": continuation_note,
             }
 
-            # Build L4 content
-            l4_content = f"[L4 会话] {agent_name or 'unknown'} · {count}条记忆 · {cat_summary}"
+            # Build L4 content with key decisions
+            parts = [f"[L4 会话] {agent_name or 'unknown'} · {count}条记忆 · {cat_summary}"]
+            if key_decisions:
+                dec_text = "；".join(d[:80] for d in key_decisions[:3] if d)
+                parts.append(f"关键决策：{dec_text}")
+            if continuation_note:
+                parts.append(f"后续：{continuation_note}")
+            l4_content = "。".join(parts)
 
             from memall.core.models import MemoryInput
             from memall.core.thin_waist import capture

@@ -1,8 +1,9 @@
 import logging
-"""
-Pipeline observation step (第二刀 第3点).
+
 logger = logging.getLogger(__name__)
 
+"""
+Pipeline observation step (第二刀 第3点).
 
 After pipeline runs, produces a structured "本轮观察" report capturing:
 - Level distribution changes
@@ -385,10 +386,12 @@ def reflection_dashboard(days: int = 30) -> dict:
             try:
                 meta = json.loads(r["metadata"]) if r["metadata"] else {}
                 q = meta.get("quality", "medium")
+                if isinstance(q, dict):
+                    q = q.get("value", "medium")
                 if q in quality:
                     quality[q] += 1
             except (json.JSONDecodeError, TypeError):
-                logger.warning("observe.py: silent error", exc_info=True)
+                logger.warning("observe.py: quality parse error", exc_info=True)
 
         # Correction chain
         chain_rows = conn.execute(

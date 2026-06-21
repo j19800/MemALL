@@ -74,7 +74,7 @@ def _fetch_latest_messages(agent: str, page_size: int = 10) -> list[dict]:
 class SessionStore:
     def __init__(self, db_path: Path = _SESSION_DB):
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        self._conn = sqlite3.connect(str(db_path), timeout=10, check_same_thread=False)
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS sessions ("
             "session_key TEXT PRIMARY KEY, history TEXT, "

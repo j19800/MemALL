@@ -59,10 +59,16 @@ def create_discussion(
     options: list | None = None,
     open_questions: list | None = None,
     action_items: list | None = None,
+    recommendation: str = "",
     creator: str = "system",
     **kwargs,
 ) -> dict:
     """Create a discussion as an L5 memory (category=discussion).
+
+    Required format (enforced by content builder):
+      == 问题描述 ==   ← background field
+      == 解决方案 ==   ← options list
+      == 建议 ==       ← recommendation field
 
     Simplified: no participants/convergence_rule/timeout — a single
     confirm_discussion() call converges it.  Extra kwargs are silently
@@ -73,7 +79,19 @@ def create_discussion(
         now = _now()
         uid = _short_id()
         subject = f"[讨论] {title}"[:200]
-        content = f"[讨论] {title} [{uid}]\n\n{background}"[:2000]
+
+        # Build structured content: 问题描述 → 方案 → 建议
+        parts = [f"[讨论] {title} [{uid}]"]
+        if background:
+            parts.append(f"\n\n== 问题描述（事实与数据）==\n{background}")
+        if options:
+            parts.append(f"\n\n== 解决方案 ==\n" + "\n".join(f"{i}. {o}" for i, o in enumerate(options, 1)))
+        if recommendation:
+            parts.append(f"\n\n== 建议 ==\n{recommendation}")
+        content = "".join(parts)[:2000]
+        if not content:
+            content = f"[讨论] {title} [{uid}]"
+
         h = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
         meta = json.dumps({

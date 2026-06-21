@@ -37,7 +37,7 @@ def _vacuum_backup(source: Path, dest: Path) -> bool:
     """Create a clean SQLite backup using VACUUM INTO."""
     import sqlite3
     try:
-        conn = sqlite3.connect(str(source))
+        conn = sqlite3.connect(str(source), timeout=10)
         conn.execute("VACUUM INTO ?", (str(dest),))
         conn.close()
         return True
@@ -132,7 +132,7 @@ def restore_db(backup_path: str, auto: bool = False) -> dict:
 
     # Verify it's a valid SQLite database
     try:
-        test_conn = sqlite3.connect(str(source))
+        test_conn = sqlite3.connect(str(source), timeout=10)
         test_conn.execute("SELECT count(*) FROM memories")
         test_conn.close()
     except sqlite3.Error as e:

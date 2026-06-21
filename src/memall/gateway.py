@@ -1107,6 +1107,8 @@ class MemAllGateway:
             background=data.get("background", ""),
             options=data.get("options"),
             open_questions=data.get("open_questions"),
+            recommendation=data.get("recommendation", ""),
+            action_items=data.get("action_items"),
         )
         return web.json_response(result, headers=_cors_headers(request))
 

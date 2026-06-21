@@ -372,7 +372,7 @@ def check_access(requester_agent: str, target_agent: str) -> Dict[str, Any]:
                     ),
                 }
             try:
-                fam_conn = sqlite3.connect(str(fam_db_path))
+                fam_conn = sqlite3.connect(str(fam_db_path), timeout=10)
                 fam_conn.row_factory = sqlite3.Row
                 row = fam_conn.execute(
                     "SELECT 1 FROM family_circle WHERE member_name = ? AND status = 'active' LIMIT 1",

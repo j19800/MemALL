@@ -40,7 +40,7 @@ def _migrate_family_db():
     if _CONFLICT_DB_MIGRATED:
         return
     db_path = get_family_db_path()
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     try:
         cur = conn.execute("PRAGMA table_info(shared_memories)")
@@ -80,7 +80,7 @@ def _detect_contradiction(text_a: str, text_b: str) -> bool:
 def detect_conflicts(threshold: float = 0.85, mode: str = "all") -> dict:
     _migrate_family_db()
     db_path = get_family_db_path()
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=10)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
@@ -179,7 +179,7 @@ def detect_conflicts(threshold: float = 0.85, mode: str = "all") -> dict:
 def list_conflicts(status: str = "open") -> list:
     _migrate_family_db()
     db_path = get_family_db_path()
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=10)
     conn.row_factory = sqlite3.Row
     try:
         where = ""
@@ -221,7 +221,7 @@ def list_conflicts(status: str = "open") -> list:
 def resolve_conflict(conflict_id: int, winner_memory_id: int) -> dict:
     _migrate_family_db()
     db_path = get_family_db_path()
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=10)
     conn.row_factory = sqlite3.Row
     try:
         now = datetime.now(timezone.utc).isoformat()
@@ -250,7 +250,7 @@ def resolve_conflict(conflict_id: int, winner_memory_id: int) -> dict:
 def auto_resolve() -> dict:
     _migrate_family_db()
     db_path = get_family_db_path()
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=10)
     conn.row_factory = sqlite3.Row
     try:
         conflicts = conn.execute(

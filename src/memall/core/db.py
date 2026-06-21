@@ -3,9 +3,12 @@ import hashlib
 import os
 import threading
 import queue
+import logging
 from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 import sqlite_vec
 
@@ -367,8 +370,14 @@ class ConnectionPool:
                 if self._created < self.max_connections:
                     self._created += 1
                     return self._new_conn()
-            # Pool exhausted — block until one is returned
-            conn = self._pool.get()
+            # Pool exhausted — block until one is returned (max 30s to avoid deadlock)
+            try:
+                conn = self._pool.get(timeout=30)
+            except queue.Empty:
+                raise RuntimeError(
+                    "ConnectionPool: no connection available after 30s timeout "
+                    f"(max_connections={self.max_connections})"
+                )
 
         # The returned connection may belong to a different thread —
         # discard it and create a new one for the current thread.

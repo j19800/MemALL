@@ -9,6 +9,7 @@ def handle_create(arguments: dict) -> str:
         options=arguments.get("options"),
         open_questions=arguments.get("open_questions"),
         action_items=arguments.get("action_items"),
+        recommendation=arguments.get("recommendation", ""),
         creator=arguments.get("agent_name", "system"),
     )
     return json.dumps(result, ensure_ascii=False, default=str)

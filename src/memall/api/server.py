@@ -316,7 +316,7 @@ def api_traverse(node_id: int, depth: int = 1, relation_filter: str = ""):
     kwargs = {"node_id": node_id, "depth": min(depth, 5)}
     if relation_filter:
         kwargs["relation_filter"] = relation_filter
-    return traverse(**kwargs)
+    return _ok(traverse(**kwargs))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -520,6 +520,16 @@ def api_db_optimize():
     from memall.core.db import optimize_db
     return optimize_db()
 
+@app.get("/agents")
+def api_agents():
+    """List all agents with their memory counts."""
+    from memall.core.thin_waist import _pool_conn
+    with _pool_conn() as conn:
+        rows = conn.execute(
+            "SELECT agent_name, COUNT(*) as cnt FROM memories WHERE agent_name != '' AND agent_name IS NOT NULL GROUP BY agent_name ORDER BY cnt DESC"
+        ).fetchall()
+        return _ok([{"name": r["agent_name"], "count": r["cnt"]} for r in rows])
+
 @app.get("/db/stats")
 def api_db_stats():
     """Database statistics."""
@@ -541,7 +551,7 @@ def api_db_vacuum():
 def api_reflection_dashboard(days: int = 30):
     """L6 reflection dashboard data: density, quality, topics, chain."""
     from memall.pipeline.observe import reflection_dashboard
-    return reflection_dashboard(days=days)
+    return _ok(reflection_dashboard(days=days))
 
 
 @app.post("/reflection/interact")

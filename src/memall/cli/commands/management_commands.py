@@ -456,7 +456,7 @@ def cmd_migrate(args):
 
     init_db()
     import sqlite3
-    src = sqlite3.connect(str(source))
+    src = sqlite3.connect(str(source), timeout=10)
     src.row_factory = sqlite3.Row
     try:
         tables = [r["name"] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]

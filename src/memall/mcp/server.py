@@ -277,7 +277,7 @@ def serve():
                                         "text": f"[NOTIFICATION] {'，'.join(notes)}。"
                                     })
                             except Exception:
-                                logger.warning("server.py: silent error", exc_info=True)
+                                _log.warning("server.py: silent error", exc_info=True)
 
                         session_note = consume_session_note()
                         if session_note:

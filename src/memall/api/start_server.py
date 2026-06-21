@@ -13,7 +13,7 @@ memall_db.DB_PATH = Path.home() / ".memall" / "data.db"
 # Verify at startup
 import sqlite3
 try:
-    conn = sqlite3.connect(str(memall_db.DB_PATH))
+    conn = sqlite3.connect(str(memall_db.DB_PATH), timeout=10)
     cnt = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
     max_id = conn.execute("SELECT MAX(id) FROM memories").fetchone()[0]
     conn.close()
