@@ -25,3 +25,4 @@
 1. **更新文档**：在 `CHANGELOG.md` 末尾追加条目（日期 + 摘要 + 涉及文件），同时排查所有相关 `.md`（`README*.md`、`QUICKSTART.md`、`architecture_*.md`、`COMPARISON.md` 等），按实际情况更新内容——不局限于追加，过期内容要改、废弃内容要删
 2. **commit + push**：`git add -A && git commit -m "type: summary..." && git push`
 3. commit message 用英文，格式：`type: description`（type: fix/feat/refactor/docs/chore）
+4. 推送完后主动告知用户（一句短消息，例如 "已推送 (hash)"）
