@@ -1,0 +1,155 @@
+# ── Python ──
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+*.so
+
+# ── IDE / Editor ──
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Environment / Secrets ──
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+bot_credentials.json
+api_key
+
+# ── Claude / AI agent artifacts ──
+.claude/
+.skills/
+.agents/
+
+# ── Browser automation artifacts (page captures, recovery codes, console logs) ──
+.playwright-mcp/
+playwright-report/
+test-results/
+
+# ── Internal knowledge base (Agent WAL, conversations, deployment details) ──
+memall知识库/
+
+# ── Bot scripts (internal, hardcoded IDs) ──
+bot_service.cjs
+debug_token.cjs
+get_token.*
+ws_*
+
+# ── MCP server config (contains API keys) ──
+mcp_servers.json
+
+# ── Desktop tools (internal use only) ──
+desktop/capture_tray.py
+
+# ── Internal ops scripts ──
+scripts/
+start_headroom.bat
+start_mcp_http.ps1
+start_mcp_http.vbs
+sync_to_vault.*
+install.bat
+install.sh
+run_bot.bat
+
+# ── Node.js ──
+node_modules/
+freellmapi/node_modules/
+
+# ── Binary/vendored deps (keep in repo but flag as generated) ──
+sql.js-*.tgz
+
+# ── Database ──
+*.db
+*.db-*
+*.db-shm
+*.db-wal
+*.sqlite
+chroma/
+data/
+chroma_data/
+
+# ── Logs ──
+*.log
+logs/
+bot_runtime.log
+
+# ── Backup / Export ──
+*.bak
+*.bak-*
+exports/
+reports/
+*.csv
+memall-frontend-snapshot.md
+memories-page.md
+
+# ── Build artifacts (frontend bundles live in desktop/v30/) ──
+frontend/dist/
+desktop/v30/
+
+# ── Marketing / sales materials (not source code) ──
+marketing/
+
+# ── Internal / third-party subprojects (not part of MemALL open-source) ──
+freellmapi/
+paperclip/
+.workbuddy/
+
+# ── Test archive (internal debug scripts) ──
+tests/archive/
+_*.py
+_*.txt
+
+# ── Vector model artifacts (regeneratable) ──
+.vector_model/
+
+# ── Internal design docs / plans ──
+*.plan.md
+l5_completion_plan.md
+前端设计文档_v2.md
+
+# ── Marketing media files (large, not code) ──
+marketing/*.mp4
+
+# ── Internal reports / docs ──
+architecture_*.md
+code_review_suggestions.md
+project_recommendations.md
+network_architecture_plan.md
+BOM_list.md
+self_reflection_*.md
+memory_design_reference.md
+recall_result.txt
+tmp_check_debt.py
+
+# ── Board / inventory artifacts ──
+board.html
+board_err.txt
+memall-feature-inventory/
+
+# ── Generated / internal reports (*.docx) ──
+*.docx
+
+# ── Unrelated files accidentally tracked ──
+ODF_jump_table.md
+
+# ── Bridge message inboxes (internal Feishu messages) ──
+src/memall/bridge/inboxes/
+
+# ── Output / test artifacts ──
+output/
+test_frontend.html
+test_mcp_*.jsonl

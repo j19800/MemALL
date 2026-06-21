@@ -1,0 +1,10 @@
+{
+  "id": "memall-sync",
+  "name": "MemALL Sync",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "Bidirectional sync between MemALL memory system and Obsidian vault. Push memories to categorized notes, pull edits back into MemALL.",
+  "author": "MemALL",
+  "isDesktopOnly": true,
+  "fundingUrl": ""
+}

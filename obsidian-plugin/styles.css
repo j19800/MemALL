@@ -1,0 +1,16 @@
+/* MemALL Sync Plugin Styles */
+
+.memall-status-bar {
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.memall-status-bar:hover {
+  opacity: 0.8;
+}
+
+.memall-sync-progress {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+}

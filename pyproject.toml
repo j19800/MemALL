@@ -1,0 +1,84 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memall"]
+
+[project]
+name = "memall-db"
+version = "0.1.0"
+description = "Multi-agent collaborative memory OS"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [
+    { name = "MemALL Contributors" },
+]
+keywords = [
+    "memory", "ai-agents", "llm", "knowledge-base",
+    "multi-agent", "semantic-search", "vector-database",
+    "mcp", "agent-memory",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+    "pydantic>=2.0.0",
+    "scikit-learn>=1.0.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "aiohttp>=3.9.0",
+    "numpy>=1.24.0",
+    "python-dateutil>=2.8.0",
+    "win10toast>=0.9; sys_platform == 'win32'",
+    "sqlite-vec>=0.1.9",
+]
+
+# Optional dependency groups
+[project.optional-dependencies]
+# Visualization: graph plotting and interactive charts
+viz = [
+    "matplotlib>=3.0.0",
+    "networkx>=3.0",
+    "pyvis>=0.3.0",
+]
+# Development: linting, type checking, testing
+dev = [
+    "pytest>=7.0.0",
+    "flake8>=7.0.0",
+    "mypy>=1.0.0",
+    "autoflake>=2.0.0",
+]
+# FAISS vector search (Phase 2, optional — only needed at million-scale)
+faiss = [
+    "faiss-cpu>=1.14.0",
+]
+# Full install: core + visualization + faiss
+full = [
+    "memall[viz,faiss]",
+]
+
+[project.urls]
+Homepage = "https://github.com/j19800/MemALL"
+Repository = "https://github.com/j19800/MemALL"
+BugTracker = "https://github.com/j19800/MemALL/issues"
+Changelog = "https://github.com/j19800/MemALL/releases"
+
+[project.scripts]
+memall = "memall.cli.main:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+# Exclude archive and venv
+norecursedirs = [".venv", "tests/archive"]

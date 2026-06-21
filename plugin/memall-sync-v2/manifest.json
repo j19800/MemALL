@@ -1,0 +1,9 @@
+{
+  "id": "memall-sync-v2",
+  "name": "MemALL Sync V2",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "MemALL Agent Hub status and quick commands",
+  "author": "MemALL",
+  "isDesktopOnly": true
+}

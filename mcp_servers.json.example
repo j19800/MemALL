@@ -1,0 +1,14 @@
+{
+    "mcpServers": {
+        "memall": {
+            "url": "http://127.0.0.1:9876/mcp"
+        },
+        "tavily": {
+            "command": "cmd.exe",
+            "args": ["/c", "npx", "-y", "tavily-mcp"],
+            "env": {
+                "TAVILY_API_KEY": "${TAVILY_API_KEY}"
+            }
+        }
+    }
+}
