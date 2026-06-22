@@ -356,7 +356,6 @@ def cmd_doctor(args):
 
     # ── Fix mode ──
     if args.fix:
-        import json
         fix_conn = get_conn()
         try:
             fix_conn.execute("DELETE FROM edges WHERE source_id NOT IN (SELECT id FROM memories)")

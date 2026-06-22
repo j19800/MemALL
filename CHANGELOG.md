@@ -31,6 +31,7 @@
 - **Missing `identity_profile` Column**: Column referenced in code but missing from base schema DDL. Added to `CREATE TABLE identities`. (`core/db.py`)
 - **Thread-Safe Connection Close**: `ConnectionPool.get()` tried to close connections owned by another thread, causing `ProgrammingError`. Added specific catch for `sqlite3.ProgrammingError`. (`core/db.py`)
 - **SyntaxWarning `\\w`**: Invalid escape sequence `\w` in docstring triggered Python 3.12 warning. Escaped backslash. (`graph/embeddings.py`)
+- **`doctor --deep` UnboundLocalError**: Redundant `import json` inside `cmd_doctor()` shadowed the module-level import, causing `UnboundLocalError` on all non-`--fix` runs. Removed the local import. (`cli/commands/management_commands.py`)
 
 ## [v0.1.1] - 2026-06-21
 
