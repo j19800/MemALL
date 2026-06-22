@@ -7,6 +7,8 @@ All operations use transactions for atomicity.
 
 import hashlib
 import json
+import json
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any, Sequence
 
@@ -919,8 +921,6 @@ def deduplicate(
                     "error": str(e)[:200],
                 })
         if errors:
-            import logging
-logger = logging.getLogger(__name__)
             logging.getLogger("memall.ops").warning(
                 "deduplicate: %d / %d merges failed", len(errors), len(pairs)
             )
