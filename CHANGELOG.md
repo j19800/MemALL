@@ -8,6 +8,11 @@
 - **Memory Health System**: New `memall.core.health` module with `collect()` for actionable memory diagnostics. Integrated into `memall doctor --deep` for deep health checks and `session_start` as `[HEALTH]` section. Reports graph coverage, reflection rate, isolated memories, stale discussions, pipeline freshness, and DB size with issue/recommendation hints. (`core/health.py`, `cli/commands/management_commands.py`, `pipeline/session.py`)
 - **Export/Import/Sync System**: JSONL export format with content_hash dedup, `--since` time filter, `memall import <file>` for JSON/JSONL import, and `memall sync --from <file>` for incremental sync with state tracking in `~/.memall/sync_state.json`. (`cli/export.py`, `cli/main.py`, `cli/commands/management_commands.py`)
 
+### Fixed
+
+- **Category Taxonomy Normalization**: Eliminated all 122 composite categories and consolidated 100+ labels → 25 clean categories. Fixed root cause in `integrate.py` (L10 merge no longer concatenates categories with `、`; picks majority category instead). Applied DB cleanup via migration script to standardize synonyms (`bugfix→fix`, `business_idea→business`, `discussion_response→discussion`, `daily_summary→report`, etc.). (`pipeline/integrate.py`)
+- **ops.py SyntaxError**: Moved `import logging` to module level to fix `expected 'except' or 'finally' block` crash introduced in earlier commit. (`pipeline/ops.py`)
+
 ### Changed
 
 - **Lazy Auto-Init**: `get_conn()` and `ConnectionPool._new_conn()` now call `init_db()` on their first invocation, so no explicit `memall init` is required for new users or agents that clone the repo. (`core/db.py`)

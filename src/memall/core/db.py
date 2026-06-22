@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS memories (
     occurred_at TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-	    supersedes INTEGER REFERENCES memories(id),
+	    supersedes TEXT NOT NULL DEFAULT '[]',
 	    trust_level REAL NOT NULL DEFAULT 1.0,
     access_count INTEGER NOT NULL DEFAULT 0,
     metadata TEXT NOT NULL DEFAULT '{}',

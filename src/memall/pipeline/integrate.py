@@ -96,9 +96,14 @@ def integrate_step(access_total_threshold: int = _MIN_L9_ACCESS_TOTAL,
             texts = [t["content"] for t in targets if t["content"]]
             summary_text = summarize_extractive(texts, top_n=5, max_chars=3500)
 
-            cat_list = "、".join(sorted(set(m["category"] for m in targets)))
+            cat_counts: dict[str, int] = {}
+            for m_cat in (m["category"] for m in targets if m["category"]):
+                # If category is already composite, take the first component
+                primary = m_cat.split("、")[0] if "、" in m_cat else m_cat
+                cat_counts[primary] = cat_counts.get(primary, 0) + 1
+            best_cat = max(cat_counts, key=cat_counts.get) if cat_counts else "general"
             merged = (
-                f"[L10 整合] {agent} 跨领域系统洞察（{cat_list}）：\n"
+                f"[L10 整合] {agent} 跨领域系统洞察（{best_cat}）：\n"
                 f"来源：{len(source_ids)} 条 L9 蒸馏\n"
                 f"{summary_text}"
             )[:4000]
@@ -117,7 +122,7 @@ def integrate_step(access_total_threshold: int = _MIN_L9_ACCESS_TOTAL,
                 "(content, content_hash, level, category, agent_name, metadata, occurred_at, created_at, updated_at) "
                 "VALUES (?, ?, 'L10', ?, ?, ?, ?, ?, ?)",
                 (
-                    merged, ch, cat_list, agent,
+                    merged, ch, best_cat, agent,
                     json.dumps({"layer_source": {"value": "integrate_auto_v1", "_meta": {"version": 1, "written_at": now}}}, ensure_ascii=False),
                     now, now, now,
                 ),
