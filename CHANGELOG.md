@@ -35,6 +35,10 @@
 - **MCP stdout GBK crash**: `_respond()` wrote JSON with `ensure_ascii=False` to `sys.stdout`, which crashes on Windows GBK consoles when Unicode chars (✅) appear. Added `sys.stdout.reconfigure(encoding='utf-8')` at `serve()` entry + `PYTHONIOENCODING=utf-8` env var in MCP config. (`mcp/server.py`, `.claude/settings.json`)
 - **DB default on C: drive**: `_resolve_db_path()` now prefers first available non-system drive (D:, E:, …) on Windows instead of always dropping in `C:\Users\...\.memall`. Backups and `memall doctor` path checks follow the same logic. (`core/db.py`, `cli/backup_restore.py`, `cli/commands/management_commands.py`)
 
+### Publishing
+
+- **PyPI `memall-os` 0.1.2 published** under account `j19800-dev` (new account created after the old `j19800` account got locked out by 2FA). Package renamed from `memall-db` → `memall-os` since `memall` is too similar to the existing `memall-db` project (PyPI rejects similar names). Install: `pip install memall-os`.
+
 ## [v0.1.1] - 2026-06-21
 
 ### Fixed

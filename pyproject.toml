@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 packages = ["src/memall"]
 
 [project]
-name = "memall-db"
+name = "memall-os"
 version = "0.1.2"
 description = "Multi-agent collaborative memory OS"
 readme = "README.md"

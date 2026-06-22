@@ -23,9 +23,9 @@
 MemALL gives AI Agents **memory that persists across sessions, tools, and agents**. Install it, connect it to Claude Desktop / Cursor / Cline / any MCP client, and your agents stop starting from scratch every conversation.
 
 ```bash
-pip install memall-db          # install (lightweight, no AI models)
-pip install memall-db[full]    # install + viz + FAISS
-pip install memall-db[rerank]  # install + cross-encoder reranking (HEAVY: ~1.8GB, requires PyTorch)
+pip install memall-os          # install (lightweight, no AI models)
+pip install memall-os[full]    # install + viz + FAISS
+pip install memall-os[rerank]  # install + cross-encoder reranking (HEAVY: ~1.8GB, requires PyTorch)
 memall init                    # initialize
 memall start                   # start services
 # → MCP ready at http://127.0.0.1:9876/mcp
@@ -130,7 +130,7 @@ SQLite + FTS5 + vector search. Zero cloud dependency. Your data stays on your ma
 
 ```bash
 # 1. Install
-pip install memall-db
+pip install memall-os
 
 # 2. Initialize
 memall init
@@ -214,4 +214,4 @@ PRs welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 MIT License. See [LICENSE](LICENSE) for details.
 
-> [¹] Cross-encoder reranking requires `pip install memall-db[rerank]` (downloads PyTorch + ~560MB model on first use). Core search works without it using RRF fusion of FTS5 + vec0.
+> [¹] Cross-encoder reranking requires `pip install memall-os[rerank]` (downloads PyTorch + ~560MB model on first use). Core search works without it using RRF fusion of FTS5 + vec0.

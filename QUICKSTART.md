@@ -3,7 +3,7 @@
 ## 安装
 
 ```bash
-pip install memall-db
+pip install memall-os
 ```
 
 或从源码安装：

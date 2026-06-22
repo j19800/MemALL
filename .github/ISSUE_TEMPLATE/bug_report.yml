@@ -20,7 +20,7 @@ body:
     id: version
     attributes:
       label: MemALL version
-      description: Run `memall --version` or check `pip show memall-db`
+      description: Run `memall --version` or check `pip show memall`
   - type: dropdown
     id: os
     attributes:

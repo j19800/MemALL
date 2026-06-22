@@ -1,7 +1,7 @@
 # MemALL v0.1.0 — First Public Release
 
 > **Tag**: v0.1.0 | **License**: MIT | **Python**: ≥3.9
-> **PyPI**: `pip install memall-db`
+> **PyPI**: `pip install memall-os`
 > **Release date**: 2026-06-20
 
 ---
@@ -24,7 +24,7 @@
 ## Quick Start
 
 ```bash
-pip install memall-db
+pip install memall-os
 memall init
 memall start
 ```
@@ -61,12 +61,12 @@ Then connect your MCP client:
 | Decision arc closed-loop | ✅ L4 → L5 → L6 auto lifecycle |
 | Hybrid search (FTS5 + vec0 RRF) | ✅ Production-ready |
 | CJK FTS5 query | ✅ CJK characters split into individual tokens |
-| Cross-encoder reranking | ✅ Optional (requires `pip install memall-db[rerank]`) |
+| Cross-encoder reranking | ✅ Optional (requires `pip install memall-os[rerank]`) |
 | Search result metadata | ✅ Includes subject, category, level, owner, agent_name |
 | Auto-embed on update | ✅ Embedding refreshed when content changes |
 | LAN federation | ✅ Verified |
 | Discussion convergence | ✅ Multi-agent auto-consensus |
-| PyPI package | ✅ `memall-db` 0.1.0 published |
+| PyPI package | ✅ `memall` 0.1.0 published |
 
 ---
 
