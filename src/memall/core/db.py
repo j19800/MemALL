@@ -22,7 +22,17 @@ def _resolve_db_path() -> Path:
     if _env:
         return Path(_env)
     _home = os.environ.get("USERPROFILE") or str(Path.home())
-    return Path(_home) / ".memall" / "data.db"
+    _default = Path(_home) / ".memall" / "data.db"
+    # Prefer non-system drive on Windows (DB + backups too large for C:)
+    if os.name == "nt" and str(_default).startswith("C:\\"):
+        for drive in "DEFGH":
+            candidate = Path(f"{drive}:") / ".memall" / "data.db"
+            try:
+                if candidate.parent.exists() or candidate.parent.mkdir(parents=True, exist_ok=True):
+                    return candidate
+            except (OSError, PermissionError):
+                continue
+    return _default
 
 DB_PATH = _resolve_db_path()
 

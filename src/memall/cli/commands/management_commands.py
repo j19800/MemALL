@@ -143,7 +143,7 @@ def cmd_doctor(args):
         _add("SQLite DB", "FAIL", f"Connection failed: {e}", "memall init")
 
     # ── Check 2: Directory permissions ──
-    memall_dir = Path.home() / ".memall"
+    memall_dir = Path(get_db_path()).parent
     if not memall_dir.exists():
         _add("Directory", "WARN", f"{memall_dir} does not exist", "memall init")
     else:

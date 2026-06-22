@@ -1,15 +1,12 @@
-import logging
-"""
-memall backup / restore: manual backup and recovery operations.
-logger = logging.getLogger(__name__)
-
+"""memall backup / restore: manual backup and recovery operations.
 
 Data-never-leaves-you principle:
 - Every restore auto-backs up current db to .before-restore.db
-- Backups stored in ~/.memall/backups/daily/ and weekly/
+- Backups stored alongside DB in backups/daily/ and weekly/
 - Clean command with retention policy
 """
 
+import logging
 import shutil
 import sys
 from pathlib import Path
@@ -17,8 +14,9 @@ from datetime import datetime
 
 from memall.core.db import DB_PATH
 
+logger = logging.getLogger(__name__)
 
-BACKUP_DIR = Path.home() / ".memall" / "backups"
+BACKUP_DIR = DB_PATH.parent / "backups"
 DAILY_DIR = BACKUP_DIR / "daily"
 WEEKLY_DIR = BACKUP_DIR / "weekly"
 
