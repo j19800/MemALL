@@ -86,6 +86,11 @@ def serve():
     Implements required lifecycle per MCP 2025-03-26 spec:
       initialize → [initialized notification] → tools/list → tools/call
     """
+    # Force UTF-8 on stdout to prevent UnicodeEncodeError on Windows GBK consoles
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except AttributeError:
+        pass  # Python < 3.7 or non-TTY streams that don't support reconfigure
     _ensure_logging()
     _start_polling_consumers()
     global _initialized, _client_name, _client_version

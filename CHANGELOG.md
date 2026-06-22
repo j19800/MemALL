@@ -32,6 +32,7 @@
 - **Thread-Safe Connection Close**: `ConnectionPool.get()` tried to close connections owned by another thread, causing `ProgrammingError`. Added specific catch for `sqlite3.ProgrammingError`. (`core/db.py`)
 - **SyntaxWarning `\\w`**: Invalid escape sequence `\w` in docstring triggered Python 3.12 warning. Escaped backslash. (`graph/embeddings.py`)
 - **`doctor --deep` UnboundLocalError**: Redundant `import json` inside `cmd_doctor()` shadowed the module-level import, causing `UnboundLocalError` on all non-`--fix` runs. Removed the local import. (`cli/commands/management_commands.py`)
+- **MCP stdout GBK crash**: `_respond()` wrote JSON with `ensure_ascii=False` to `sys.stdout`, which crashes on Windows GBK consoles when Unicode chars (✅) appear. Added `sys.stdout.reconfigure(encoding='utf-8')` at `serve()` entry + `PYTHONIOENCODING=utf-8` env var in MCP config. (`mcp/server.py`, `.claude/settings.json`)
 
 ## [v0.1.1] - 2026-06-21
 
