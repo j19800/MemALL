@@ -122,6 +122,7 @@ SQLite + FTS5 + vector search. Zero cloud dependency. Your data stays on your ma
 | **Pipeline & Evolution** | `run_pipeline`, `reflect_interact`, `forget`, `adaptive`, `index_rebuild` |
 | **Security & Ops** | `security`, `ops`, `gateway`, `db` |
 | **Onboarding** | `onboarding` |
+| **Export/Import** | `export`, `import`, `sync` |
 
 ---
 

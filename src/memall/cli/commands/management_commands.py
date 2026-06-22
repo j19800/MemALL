@@ -1008,3 +1008,140 @@ def cmd_arcs(args):
 
     finally:
         conn.close()
+
+
+# ──────────────────────────────────────────────
+# cmd_import — 导入记忆（JSON / JSONL）
+# ──────────────────────────────────────────────
+
+def cmd_import(args):
+    """Import memories from a JSON or JSONL export file."""
+    path = Path(args.file)
+    if not path.exists():
+        print(f"error: file not found: {path}", file=sys.stderr)
+        sys.exit(1)
+
+    suffix = path.suffix.lower()
+    if suffix == ".jsonl":
+        memories = []
+        edges = []
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                if obj.get("type") == "memory":
+                    memories.append(obj)
+                elif obj.get("type") == "edge":
+                    edges.append(obj)
+
+        if not memories and not edges:
+            print("No memories or edges found in JSONL file.")
+            return
+
+        bundle = {"memories": memories, "edges": edges, "agent_name": "imported"}
+        from memall.gateway import import_bundle
+        result = import_bundle(bundle)
+
+    elif suffix == ".json":
+        bundle = json.loads(path.read_text(encoding="utf-8"))
+        # Normalise: gateway expects "memories" key
+        memories = bundle.get("memories", [])
+        edges = bundle.get("edges", []) or []
+        # Extract edges from relations inside each memory (export format)
+        if not edges:
+            edges = []
+            for m in memories:
+                for rel in m.pop("relations", []):
+                    edges.append({
+                        "source_id": m["id"],
+                        "target_id": rel.get("target_id"),
+                        "relation_type": rel.get("relation"),
+                        "weight": rel.get("weight", 1.0),
+                    })
+        bundle.setdefault("edges", edges)
+        bundle.setdefault("agent_name", "imported")
+        from memall.gateway import import_bundle
+        result = import_bundle(bundle)
+
+    else:
+        print(f"Unsupported file format: {suffix}. Use .json or .jsonl.", file=sys.stderr)
+        sys.exit(1)
+
+    mem_count = result.get("imported_memories", 0)
+    edge_count = result.get("imported_edges", 0)
+    identity = result.get("identity_updated", False)
+    print(f"Imported: {mem_count} memories, {edge_count} edges" + (", identity updated" if identity else ""))
+
+
+# ──────────────────────────────────────────────
+# cmd_sync — 增量同步
+# ──────────────────────────────────────────────
+
+SYNC_STATE_PATH = Path.home() / ".memall" / "sync_state.json"
+
+
+def _read_sync_state():
+    if SYNC_STATE_PATH.exists():
+        try:
+            return json.loads(SYNC_STATE_PATH.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def _write_sync_state(state: dict):
+    SYNC_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SYNC_STATE_PATH.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def cmd_sync(args):
+    """Incremental sync from a JSONL export file.
+
+    Two-phase flow:
+        1. Export side: memall export --since <last_sync> --format jsonl
+        2. Import side: memall sync --from <file>
+
+    Uses content_hash dedup for idempotent re-import.
+    Tracks last sync time in ~/.memall/sync_state.json.
+    """
+    source = Path(args.source)
+    if not source.exists():
+        print(f"error: source file not found: {source}", file=sys.stderr)
+        sys.exit(1)
+
+    state = _read_sync_state()
+
+    memories = []
+    edges = []
+    with open(source, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            if obj.get("type") == "memory":
+                memories.append(obj)
+            elif obj.get("type") == "edge":
+                edges.append(obj)
+
+    if not memories:
+        print("No new memories to sync (empty or all previously synced).")
+        return
+
+    bundle = {"memories": memories, "edges": edges, "agent_name": "sync"}
+    from memall.gateway import import_bundle
+    result = import_bundle(bundle)
+
+    mem_count = result.get("imported_memories", 0)
+    edge_count = result.get("imported_edges", 0)
+
+    timestamps = [m.get("updated_at", "") for m in memories if m.get("updated_at")]
+    if timestamps:
+        latest = max(timestamps)
+        state["last_sync"] = latest
+    _write_sync_state(state)
+
+    print(f"Sync complete: {mem_count} new memories, {edge_count} new edges")
+    print(f"  Last sync: {state.get('last_sync', '?')}")

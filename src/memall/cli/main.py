@@ -27,7 +27,7 @@ from memall.cli.commands.management_commands import (
     cmd_graph_visualize, cmd_index, cmd_retrieve, cmd_onboarding,
     cmd_serve, cmd_db,
     cmd_setup, cmd_register, cmd_uninstall, cmd_backup,
-    cmd_restore, cmd_export, cmd_mcp_connect,
+    cmd_restore, cmd_export, cmd_import, cmd_sync, cmd_mcp_connect,
     cmd_arcs,
 )
 
@@ -291,12 +291,23 @@ def app():
     p_restore.add_argument("--auto", action="store_true", help="Restore from latest available backup")
     p_restore.set_defaults(func=cmd_restore)
 
-    p_export = sub.add_parser("export", help="Export memories (json/markdown/yaml)")
-    p_export.add_argument("--format", default="json", choices=["json", "markdown", "yaml"],
+    p_export = sub.add_parser("export", help="Export memories (json/jsonl/markdown/yaml)")
+    p_export.add_argument("--format", default="json", choices=["json", "jsonl", "markdown", "yaml"],
                           help="Export format (default: json)")
     p_export.add_argument("--category", help="Filter by category (e.g. decision, code, meeting)")
+    p_export.add_argument("--since", help="Export only memories updated after this ISO timestamp (e.g. 2026-06-01 or 2026-06-01T12:00:00)")
     p_export.add_argument("--output", help="Output file path (default: ~/.memall/exports/memall-export-DATE.ext)")
     p_export.set_defaults(func=cmd_export)
+
+    p_import = sub.add_parser("import", help="Import memories from a JSON or JSONL file")
+    p_import.add_argument("file", help="Path to export file (.json or .jsonl)")
+    p_import.set_defaults(func=cmd_import)
+
+    p_sync = sub.add_parser("sync", help="Incremental sync from an exported JSONL file")
+    p_sync.add_argument("--from", dest="source", required=True,
+                        help="Source JSONL file path (produced by memall export --format jsonl)")
+    p_sync.add_argument("--since", help="Override last-sync timestamp (ISO format)")
+    p_sync.set_defaults(func=cmd_sync)
 
     p_uninstall = sub.add_parser("uninstall", help="Remove MemALL MCP config from agents")
     p_uninstall.add_argument("--all", action="store_true", help="Remove from all agents")

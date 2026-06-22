@@ -1,6 +1,6 @@
 import logging
 import json
-from memall.core.thin_waist import retrieve, vector_search
+from memall.core.thin_waist import retrieve, vector_search, hybrid_search
 from memall.core.db import get_conn
 logger = logging.getLogger(__name__)
 

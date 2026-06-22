@@ -920,6 +920,7 @@ def deduplicate(
                 })
         if errors:
             import logging
+logger = logging.getLogger(__name__)
             logging.getLogger("memall.ops").warning(
                 "deduplicate: %d / %d merges failed", len(errors), len(pairs)
             )

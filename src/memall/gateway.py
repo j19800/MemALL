@@ -1632,7 +1632,7 @@ def _import_memories(conn, memories: list, agent_name: str) -> tuple:
     existing_hashes = {
         r["content_hash"]
         for r in conn.execute(
-            "SELECT content_hash FROM memories WHERE agent_name = ?", (agent_name,)
+            "SELECT content_hash FROM memories WHERE content_hash IS NOT NULL AND content_hash != ''"
         ).fetchall()
     }
     imported = 0
@@ -1642,8 +1642,8 @@ def _import_memories(conn, memories: list, agent_name: str) -> tuple:
         h = m.get("content_hash", "")
         if h and h in existing_hashes:
             row = conn.execute(
-                "SELECT id FROM memories WHERE content_hash = ? AND agent_name = ?",
-                (h, agent_name),
+                "SELECT id FROM memories WHERE content_hash = ?",
+                (h,),
             ).fetchone()
             if row:
                 old_id_to_new[m["id"]] = row["id"]

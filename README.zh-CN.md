@@ -122,6 +122,7 @@ SQLite + FTS5 + 向量搜索。零云端依赖。数据留在你的机器上。
 | **管线与进化** | `run_pipeline`, `reflect_interact`, `forget`, `adaptive`, `index_rebuild` |
 | **安全与运维** | `security`, `ops`, `gateway`, `db` |
 | **引导** | `onboarding` |
+| **导出/导入** | `export`, `import`, `sync` |
 
 ---
 

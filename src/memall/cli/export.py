@@ -1,5 +1,5 @@
 """
-memall export: export memories in multiple formats (JSON / Markdown / YAML).
+memall export: export memories in multiple formats (JSON / JSONL / Markdown / YAML).
 
 Design principle: data never leaves you — exports go to ~/.memall/exports/ by default.
 """
@@ -18,13 +18,23 @@ def _ensure_export_dir():
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _get_all_memories(category=None):
+def _get_all_memories(category=None, since=None):
     conn = get_conn()
     try:
-        if category:
+        if category and since:
+            rows = conn.execute(
+                "SELECT * FROM memories WHERE category = ? AND updated_at >= ? ORDER BY occurred_at DESC",
+                (category, since),
+            ).fetchall()
+        elif category:
             rows = conn.execute(
                 "SELECT * FROM memories WHERE category = ? ORDER BY occurred_at DESC",
                 (category,),
+            ).fetchall()
+        elif since:
+            rows = conn.execute(
+                "SELECT * FROM memories WHERE updated_at >= ? ORDER BY occurred_at DESC",
+                (since,),
             ).fetchall()
         else:
             rows = conn.execute(
@@ -56,6 +66,43 @@ def _get_all_memories(category=None):
         conn.close()
 
 
+def _format_jsonl(memories, output_path):
+    """Export as JSONL (one JSON object per line), including content_hash for dedup."""
+    output_path = Path(output_path)
+    with open(output_path, "w", encoding="utf-8") as f:
+        for m in memories:
+            edges = m.pop("_edges", [])
+            entry = {
+                "type": "memory",
+                "id": m["id"],
+                "content": m["content"],
+                "content_hash": m["content_hash"],
+                "category": m["category"],
+                "level": m["level"],
+                "owner": m["owner"],
+                "agent_name": m["agent_name"],
+                "subject": m["subject"],
+                "project": m["project"],
+                "summary": m["summary"],
+                "occurred_at": m["occurred_at"],
+                "created_at": m["created_at"],
+                "updated_at": m["updated_at"],
+                "confidence": m["confidence"],
+                "visibility": m["visibility"],
+                "metadata": m.get("metadata", "{}"),
+            }
+            f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+            for e in edges:
+                f.write(json.dumps({
+                    "type": "edge",
+                    "source_id": m["id"],
+                    "target_id": e["target_id"],
+                    "relation_type": e["relation"],
+                    "weight": e["weight"],
+                }, ensure_ascii=False) + "\n")
+    return output_path
+
+
 def _format_json(memories, output_path):
     payload = {
         "exported_at": datetime.now(timezone.utc).isoformat(),
@@ -77,6 +124,8 @@ def _format_json(memories, output_path):
             "summary": m["summary"],
             "occurred_at": m["occurred_at"],
             "created_at": m["created_at"],
+            "updated_at": m["updated_at"],
+            "content_hash": m["content_hash"],
             "confidence": m["confidence"],
             "visibility": m["visibility"],
             "metadata": m.get("metadata", "{}"),
@@ -167,6 +216,8 @@ def _format_yaml(memories, output_path):
             "summary": m["summary"] or "",
             "occurred_at": m["occurred_at"],
             "created_at": m["created_at"],
+            "updated_at": m["updated_at"],
+            "content_hash": m["content_hash"],
             "confidence": m["confidence"],
             "visibility": m.get("visibility", "private"),
             "relations": edges,
@@ -182,7 +233,8 @@ def cmd_export(args):
     _ensure_export_dir()
 
     category = getattr(args, "category", None)
-    memories = _get_all_memories(category=category)
+    since = getattr(args, "since", None)
+    memories = _get_all_memories(category=category, since=since)
 
     if not memories:
         print("No memories to export.")
@@ -194,18 +246,20 @@ def cmd_export(args):
     if args.output:
         output_path = Path(args.output)
     else:
-        ext = {"json": ".json", "markdown": ".md", "yaml": ".yaml"}.get(fmt, ".json")
+        ext = {"json": ".json", "jsonl": ".jsonl", "markdown": ".md", "yaml": ".yaml"}.get(fmt, ".json")
         filename = f"memall-export-{date_str}{ext}"
         output_path = EXPORT_DIR / filename
 
-    if fmt == "json":
+    if fmt == "jsonl":
+        out = _format_jsonl(memories, output_path)
+    elif fmt == "json":
         out = _format_json(memories, output_path)
     elif fmt == "markdown":
         out = _format_markdown(memories, output_path)
     elif fmt == "yaml":
         out = _format_yaml(memories, output_path)
     else:
-        print(f"Unsupported format: {fmt}. Use json, markdown, or yaml.", file=sys.stderr)
+        print(f"Unsupported format: {fmt}. Use json, jsonl, markdown, or yaml.", file=sys.stderr)
         sys.exit(1)
 
     size_kb = out.stat().st_size / 1024
