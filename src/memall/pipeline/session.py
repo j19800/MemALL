@@ -196,13 +196,20 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
             "SELECT id FROM memories WHERE content_hash = ?", (l6_ch,)
         ).fetchone()
         if not existing_l6:
+            # Generate meaningful subject
+            l6_subject_parts = [f"[L6] {agent_name}"]
+            if distinctive_words:
+                l6_subject_parts.append(" ".join(distinctive_words[:4]))
+            else:
+                l6_subject_parts.append(f"{count}条记忆·{cat_summary[:20]}")
+            l6_subject = " · ".join(l6_subject_parts)[:80]
             conn.execute(
                 "INSERT OR IGNORE INTO memories "
                 "(content, content_hash, level, owner, agent_name, category, project, summary, "
                 "occurred_at, created_at, updated_at, confidence, visibility, metadata) "
                 "VALUES (?, ?, 'L6', 'system', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?, ?)",
                 (l6_content[:2000], l6_ch, agent_name, session_project,
-                 f"会话 {session_id} 自动反思", now, now, now, 0.6, "private",
+                 l6_subject, now, now, now, 0.6, "private",
                  json.dumps({"session_id": session_id, "source": "pipeline_harvest"})),
             )
             result["l6_created"] = True
@@ -712,13 +719,14 @@ def session_end(session_id: str, auto_extract: bool = False) -> dict:
                     l6_parts.append(f"后续关注：{continuation_note}")
                 l6_content = "。".join(l6_parts) + "。"
                 l6_ch = hashlib.sha256(l6_content.encode()).hexdigest()
+                l6_subj = f"[L6] {agent_name or 'system'} · {count}条·{cat_summary[:20]}"
                 conn.execute(
                     "INSERT OR IGNORE INTO memories "
                     "(content, content_hash, level, owner, agent_name, category, project, summary, "
                     "occurred_at, created_at, updated_at, confidence, visibility, metadata) "
                     "VALUES (?, ?, 'L6', 'system', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?, ?)",
                     (l6_content[:2000], l6_ch, agent_name or "system",
-                     session_project, f"会话 {session_id} 自动反思", now, now, now, 0.6, "private", "{}"),
+                     session_project, l6_subj, now, now, now, 0.6, "private", "{}"),
                 )
             except Exception:
                 logger.warning("session.py: silent error", exc_info=True)
