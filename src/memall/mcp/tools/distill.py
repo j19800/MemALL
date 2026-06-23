@@ -55,7 +55,14 @@ def handle(arguments: dict) -> str:
         group_id = arguments.get("group_id")
 
         if action == "summarize" and group_id:
-            return _do_summarize(conn, group_id, arguments.get("summary", ""))
+            analysis = {}
+            if arguments.get("insight"):
+                analysis["insight"] = arguments["insight"]
+            if arguments.get("gap"):
+                analysis["gap"] = arguments["gap"]
+            if arguments.get("next"):
+                analysis["next"] = arguments["next"]
+            return _do_summarize(conn, group_id, arguments.get("summary", ""), analysis or None)
 
         # Find L9 groups with minimal content (need LLM summary)
         l9_rows = conn.execute(
@@ -133,10 +140,10 @@ def handle(arguments: dict) -> str:
         conn.close()
 
 
-def _do_summarize(conn, group_id: int, summary: str) -> str:
-    """Write LLM-written narrative back to the L9/L10 memory."""
+def _do_summarize(conn, group_id: int, summary: str, analysis: dict = None) -> str:
+    """Write LLM-written narrative + optional structured analysis to L9/L10."""
     row = conn.execute(
-        "SELECT id, level, content FROM memories WHERE id = ? AND level IN ('L9', 'L10')",
+        "SELECT id, level, content, metadata FROM memories WHERE id = ? AND level IN ('L9', 'L10')",
         (group_id,),
     ).fetchone()
     if not row:
@@ -144,34 +151,71 @@ def _do_summarize(conn, group_id: int, summary: str) -> str:
 
     current = row["content"] or ""
     level = row["level"]
+    existing_meta = json.loads(row["metadata"]) if row["metadata"] and row["metadata"] != "{}" else {}
 
-    # Preserve the existing metadata header (before first \n\n or key line)
-    # and append the summary as a new section
+    if not summary or len(summary.strip()) < 10:
+        return json.dumps({"error": "summary too short (min 10 chars)"})
+
+    # Validate: summary should include narrative language markers
+    narrative_markers = ["这组", "讨论", "核心", "涉及", "总结"]
+    has_marker = any(m in summary for m in narrative_markers)
+    if not has_marker:
+        return json.dumps({
+            "warning": "summary may be too thin — try including what this group is about",
+            "hint": "add context like '这组记忆讨论了...'",
+        })
+
+    # Preserve the existing metadata header (keywords + samples)
     lines = current.split("\n")
-    header_lines = []
     body_start = 0
     for i, line in enumerate(lines):
-        header_lines.append(line)
-        if line.startswith("•") or line.startswith("关键词"):
-            # After the last metadata line
-            pass
         body_start = i + 1
+        if line.startswith("•") or line.startswith("关键词") or line.strip() == "":
+            continue
+        if i > 0 and lines[i-1].startswith("[L9") or lines[i-1].startswith("[L10"):
+            continue
+        break
 
-    # Keep header, add human-readable summary section
+    # Keep header, append human-readable summary + analysis sections
     header = "\n".join(lines[:body_start]) if body_start < len(lines) else current
-    new_content = f"{header}\n\n{summary}"
+    parts = [header, "", summary]
+
+    if analysis:
+        insight = analysis.get("insight", "").strip()
+        gap = analysis.get("gap", "").strip()
+        next_step = analysis.get("next", "").strip()
+        if insight:
+            parts.append(f"\n💡 洞察：{insight}")
+        if gap:
+            parts.append(f"🔍 缺失：{gap}")
+        if next_step:
+            parts.append(f"👉 建议：{next_step}")
+
+    new_content = "\n".join(parts)
 
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
+
+    # Store analysis in metadata for machine readability
+    if analysis:
+        existing_meta["distill_analysis"] = {
+            "value": {k: v for k, v in analysis.items() if v},
+            "_meta": {"version": 1, "written_at": now},
+        }
+
     conn.execute(
-        "UPDATE memories SET content = ?, updated_at = ? WHERE id = ?",
-        (new_content[:4000], now, group_id),
+        "UPDATE memories SET content = ?, metadata = ?, updated_at = ? WHERE id = ?",
+        (new_content[:4000], json.dumps(existing_meta, ensure_ascii=False), now, group_id),
     )
     conn.commit()
 
-    return json.dumps({
+    response = {
         "status": "updated",
         "id": group_id,
         "level": level,
         "summary_length": len(summary),
-    }, ensure_ascii=False)
+    }
+    if analysis:
+        response["analysis"] = {k: v for k, v in analysis.items() if v}
+
+    return json.dumps(response, ensure_ascii=False)

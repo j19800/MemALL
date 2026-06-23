@@ -562,12 +562,15 @@ registry.register(ToolDef(
 # ── Distill Pending ──
 registry.register(ToolDef(
     name="memall_distill_pending",
-    description="列出待 LLM 补充叙述性摘要的 L9/L10 组。管道只生成关键词和样本，需要 AI 来写人话。",
+    description="列出待 LLM 补充叙述性摘要的 L9/L10 组，支持结构化分析（洞察/缺失/建议）。",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["list", "summarize"], "default": "list", "description": "list=查看待处理组, summarize=写入摘要"},
+        "action": {"type": "string", "enum": ["list", "summarize"], "default": "list", "description": "list=查看待处理组, summarize=写入摘要+分析"},
         "limit": {"type": "integer", "default": 10, "description": "最多返回多少组"},
         "group_id": {"type": "integer", "description": "要摘要的 L9/L10 记忆 ID（action=summarize 时必填）"},
-        "summary": {"type": "string", "description": "人类可读的叙述性摘要内容（action=summarize 时必填）"},
+        "summary": {"type": "string", "description": "人类可读的叙述性摘要。必须包含：这组记忆在聊什么 + 核心结论/决策。至少 10 字，建议 50-200 字。"},
+        "insight": {"type": "string", "description": "可选：从这组记忆中能得出什么有趣的结构模式或发现"},
+        "gap": {"type": "string", "description": "可选：这组记忆覆盖不到什么、缺少什么信息"},
+        "next": {"type": "string", "description": "可选：下一步建议——还需要补充什么记忆、做什么决策"},
     }, "required": ["action"]},
     handler=distill.handle,
     annotations={"readOnlyHint": True, "idempotentHint": False},
