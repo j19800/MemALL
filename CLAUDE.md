@@ -6,6 +6,17 @@
 - 重要分析/决策结论存
 - session 反思自主存（L6）
 
+## 对话记忆自动提取
+对话中产生的有价值信息，**自动**识别并调用 `capture()` 存入，不等用户说"存记忆"。包括：
+- **决策**：方案选型、技术选型、架构决定（level=L4, category=decision）
+- **根因分析**：bug 根因、数据异常根因（level=P1, category=fix）
+- **方案设计**：模块设计、接口设计、重构方案（level=P1, category=architecture）
+- **用户偏好**：明确表达的工作方式偏好（level=L7, category=preference）
+- **教训**：做错的事、应该避免的模式（level=L6, category=reflection）
+- **讨论结论**：多轮讨论后达成共识的结论，关联参与方（level=P1, category=discussion）
+
+不存的：日常闲聊、确认性对话（"好的"、"明白了"）、只是执行没有结论的工具调用。
+
 ## 修复流程
 1. 先分析根因，再考虑 workaround
 2. 异常数据分布先查数据流路径的 WHERE 条件
