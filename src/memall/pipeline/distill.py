@@ -55,7 +55,10 @@ def distill_step() -> dict:
             if distinctive_topics:
                 header += f"\n关键话题：{distinctive_topics}"
             merged_content = f"{header}\n{merged}"
-            l9_subject = f"[L9] {key[0]} · {key[1]} · {len(mems)}条"
+            if distinctive_topics:
+                l9_subject = f"[L9] {key[0]} · {key[1]} · {distinctive_topics}"
+            else:
+                l9_subject = f"[L9] {key[0]} · {key[1]} · {len(mems)}条"
 
             # Majority project from source memories
             source_ids = mem_ids[:10]
