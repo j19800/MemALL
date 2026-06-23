@@ -36,11 +36,10 @@ def _run_lark(agent: str, args: list[str], timeout: int = 10) -> dict:
     """Run a ``lark-cli`` command for *agent* and return parsed JSON."""
     profile = _PROFILES_DIR / agent
     env = {**os.environ, "USERPROFILE": str(profile)}
-    cmdline = subprocess.list2cmdline([str(_LARK_CLI)] + args)
     try:
         r = subprocess.run(
-            cmdline, capture_output=True, timeout=timeout,
-            shell=True, encoding="utf-8", errors="replace",
+            [str(_LARK_CLI)] + args, capture_output=True, timeout=timeout,
+            encoding="utf-8", errors="replace",
             env=env,
         )
         out = r.stdout.strip()

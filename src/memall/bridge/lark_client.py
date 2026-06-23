@@ -53,12 +53,11 @@ class LarkClient:
     def _run(self, args: list[str], timeout: int = 15, _retry: int = 2) -> dict:
         profile = _PROFILES_DIR / self.agent_name
         env = {**os.environ, "USERPROFILE": str(profile)}
-        cmdline = subprocess.list2cmdline([self._lark_path] + args)
         for attempt in range(1 + _retry):
             try:
                 r = subprocess.run(
-                cmdline, capture_output=True, timeout=timeout,
-                shell=True, encoding="utf-8", errors="replace",
+                [self._lark_path] + args, capture_output=True, timeout=timeout,
+                encoding="utf-8", errors="replace",
                 env=env,
             )
                 stdout = r.stdout.strip()
@@ -147,11 +146,9 @@ class LarkClient:
         """
         profile = _PROFILES_DIR / self.agent_name
         env = {**os.environ, "USERPROFILE": str(profile)}
-        cmdline = subprocess.list2cmdline([
-            self._lark_path, "event", "consume", "im.message.receive_v1",
-        ])
         proc = subprocess.Popen(
-            cmdline, shell=True, env=env,
+            [self._lark_path, "event", "consume", "im.message.receive_v1"],
+            env=env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             encoding="utf-8", errors="replace",
         )

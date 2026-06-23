@@ -19,11 +19,10 @@ _CHAT_ID = os.environ.get("MEMALL_CHAT_ID", "")
 def _lark(args: list[str]) -> dict:
     """Run lark-cli and return parsed JSON result."""
     try:
-        cmdline = subprocess.list2cmdline(["lark-cli"] + args)
         result = subprocess.run(
-            cmdline,
+            ["lark-cli"] + args,
             capture_output=True, text=True, timeout=30,
-            shell=True, encoding="utf-8", errors="replace",
+            encoding="utf-8", errors="replace",
         )
         if result.returncode != 0:
             logger.warning(f"lark-cli error ({result.returncode}): {result.stderr[:200]}")

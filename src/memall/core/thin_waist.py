@@ -489,7 +489,7 @@ def _get_agent_read_level(conn, agent_name: str) -> str:
         (agent_name,),
     ).fetchone()
     if not row:
-        return "public"
+        return "private"  # unknown agents default to most restrictive
     agent_type = row["agent_type"]
     if agent_type == "human":
         return "private"
@@ -530,6 +530,51 @@ def _filter_by_trust(conn, memories: list, viewer: str) -> list:
         elif mem_rank <= viewer_rank:
             filtered.append(m)
     return filtered
+
+
+def _filter_by_trust_dict(results: list[dict], viewer: str) -> dict[int, bool]:
+    """Dict-compatible visibility filter for hybrid_search results.
+
+    Returns a dict mapping memory_id → allowed (True/False).
+    Uses the same VISIBILITY_RANK logic as _filter_by_trust.
+    """
+    with _pool_conn() as conn:
+        viewer_level = _get_agent_read_level(conn, viewer)
+    viewer_rank = VISIBILITY_RANK.get(viewer_level, 0)
+
+    allowed: dict[int, bool] = {}
+    for r in results:
+        mid = r["memory_id"]
+        owner = r.get("owner") or ""
+        agent = r.get("agent_name") or ""
+        # Include if viewer is the owner or creator
+        if owner == viewer or agent == viewer:
+            allowed[mid] = True
+            continue
+        # Need visibility — lazy fetch from DB
+        _visibility = _fetch_visibility(mid, viewer)
+        mem_rank = VISIBILITY_RANK.get(_visibility, 4)
+        allowed[mid] = mem_rank <= viewer_rank
+    return allowed
+
+
+def _fetch_visibility(memory_id: int, viewer: str) -> str:
+    """Fetch a single memory's visibility with cache (module-level dict)."""
+    if memory_id in _VIS_CACHE:
+        return _VIS_CACHE[memory_id]
+    with _pool_conn() as conn:
+        row = conn.execute(
+            "SELECT visibility FROM memories WHERE id = ?", (memory_id,)
+        ).fetchone()
+        vis = row["visibility"] if row else "private"
+    # Cache up to 1000 entries
+    if len(_VIS_CACHE) > 1000:
+        _VIS_CACHE.clear()
+    _VIS_CACHE[memory_id] = vis
+    return vis
+
+
+_VIS_CACHE: dict[int, str] = {}
 
 
 import re
@@ -1057,6 +1102,12 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
                 }
 
         sorted_results = sorted(scores.values(), key=lambda x: -x["rrf_score"])
+
+        # Visibility filter: apply before returning results
+        if viewer and sorted_results:
+            visibility_scores = _filter_by_trust_dict(sorted_results, viewer)
+            sorted_results = [r for r in sorted_results if visibility_scores.get(r["memory_id"], True)]
+
         if rerank:
             from memall.config import get_config
             if get_config("search.rerank_enabled", True):
