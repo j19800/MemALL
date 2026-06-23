@@ -31,6 +31,21 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "reranker_model": "BAAI/bge-reranker-v2-m3",
         "rerank_top_k": 30,
         "rerank_enabled": False,
+        "context_rerank": {
+            "enabled": False,
+            "weight": 0.15,
+            "freshness_boost": 1.1,
+            "affinity_boost": 1.2,
+        },
+    },
+    "dream": {
+        "enabled": True,
+        "threshold": 0.4,
+        "scan_window": 50,
+    },
+    "persona": {
+        "dynamic_window_days": 7,
+        "static_half_life_days": 60,
     },
     "forget": {
         "ttl_days": 90,

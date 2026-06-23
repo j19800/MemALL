@@ -12,7 +12,7 @@ from memall.cli.commands.base import (
 from memall.cli.commands.pipeline_commands import (
     cmd_pipeline, cmd_forget, cmd_persona, cmd_cluster,
     cmd_cluster_show, cmd_narrative, cmd_suggest, cmd_bridge,
-    cmd_ask, cmd_adaptive, cmd_security, cmd_ops,
+    cmd_ask, cmd_adaptive, cmd_security, cmd_ops, cmd_dream,
 )
 from memall.cli.commands.federation_commands import (
     cmd_publish, cmd_family, cmd_federation,
@@ -95,6 +95,11 @@ def app():
     p_pl.add_argument("--dry-run", action="store_true")
     p_pl.set_defaults(func=cmd_pipeline)
 
+    p_dream = sub.add_parser("dream", help="Dynamic Dreaming — active contradiction detection")
+    p_dream_sub = p_dream.add_subparsers(dest="dream_action")
+    p_dream_status = p_dream_sub.add_parser("status", help="Show active contradiction network")
+    p_dream_status.set_defaults(func=cmd_dream)
+
     p_start = sub.add_parser("start", help="Start scheduler")
     p_start.set_defaults(func=cmd_start)
 
@@ -157,6 +162,9 @@ def app():
     p_per.add_argument("--window", type=int, default=30, help="Window size in days for evolution (default: 30)")
     p_per.add_argument("--profile", action="store_true", help="Generate 3-layer profile (Phase 10)")
     p_per.add_argument("--layer", choices=["1", "2", "3", "all"], default="all", help="Profile layer to show")
+    p_per.add_argument("--mode", choices=["static", "dynamic", "dual"], default="static",
+                       help="Static (full history), dynamic (recent 7d), or dual (both + delta)")
+    p_per.add_argument("--dynamic-days", type=int, default=7, help="Window in days for dynamic persona (default: 7)")
     p_per.set_defaults(func=cmd_persona)
 
     p_cl = sub.add_parser("cluster", help="Manage topic clusters")

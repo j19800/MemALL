@@ -1,5 +1,18 @@
 # Changelog
 
+## [v0.1.3] - 2026-06-23
+
+### Added
+
+- **Ontology-aware Relationship Edges**: Added `updates` and `derives` to `VALID_RELATIONS`. Formalized `ONTOLOGY_HIERARCHY` for ontology-driven inference (updates→supersedes, derives→refines, extends→cites). Link pipeline now detects version-bump (`vX.X`, 升级, 迁移) and conclusion-drawing (由此, 综上, 推导) patterns. Traversal with `--relation` auto-expands to child types in the ontology. (`core/thin_waist.py`, `pipeline/link.py`)
+- **Dynamic Dreaming — Active Contradiction Detection**: New `pipeline/dream.py` module that scans recent memories of the same agent+category when a new memory is stored, detects conflicting stances via Jaccard+regex, and creates timestamp-resolved `contradicts` edges. Hooked into `capture()` as best-effort (never blocks). New CLI: `memall dream status` shows contradiction network stats. (`pipeline/dream.py`, `core/thin_waist.py`, `cli/main.py`, `cli/commands/pipeline_commands.py`)
+- **Context-Aware Retrieval Reranking**: New `_context_rerank()` layer after cross-encoder reranking. Micro-adjusts scores based on viewer's recent category affinities (domain affinity ×1.2), agent authorship (same-agent boost), and freshness (24h boost ×1.1). Top-3 from cross-encoder are pinned to preserve ranking integrity. Enabled via `search.context_rerank.enabled` or `hybrid_search(rerank=True, viewer=...)`. (`core/thin_waist.py`)
+- **Static/Dynamic Persona Layering**: `extract_features()` now accepts `time_range` parameter (`"all"` or `"recent_Nd"`). New `generate_dual_persona()` returns static (full history) + dynamic (recent N days) profiles plus delta (prototype shift, color deltas, activity ratio). Added `--mode static|dynamic|dual` to `memall persona` CLI and MCP persona tool. Dynamic profile computation < 50ms for typical 7-day windows. (`pipeline/persona.py`, `cli/commands/pipeline_commands.py`, `cli/main.py`, `mcp/tools/persona.py`)
+
+### Changed
+
+- **Config defaults**: Added `dream.enabled`, `dream.threshold`, `dream.scan_window`, `search.context_rerank.*`, `persona.dynamic_window_days`, `persona.static_half_life_days` to built-in default configuration. (`config.py`)
+
 ## [v0.1.2] - 2026-06-22
 
 ### Added

@@ -1,12 +1,22 @@
 import json
-from memall.pipeline.persona import generate_persona, get_evolution as persona_evolution, generate_profile_3layer
+from memall.pipeline.persona import generate_persona, generate_dual_persona, get_evolution as persona_evolution, generate_profile_3layer
 from memall.pipeline.ask import ContextAssembler
 from memall.core.db import get_conn
 
 
 def handle_persona(arguments: dict) -> str:
     agent = arguments.get("agent_name", "")
-    profile = generate_persona(agent)
+    mode = arguments.get("mode", "static")
+
+    if mode == "dual":
+        dynamic_days = arguments.get("dynamic_window_days", 7)
+        profile = generate_dual_persona(agent, dynamic_days=dynamic_days)
+    elif mode == "dynamic":
+        dynamic_days = arguments.get("dynamic_window_days", 7)
+        profile = generate_persona(agent, time_range=f"recent_{dynamic_days}d")
+    else:
+        profile = generate_persona(agent, time_range="all")
+
     if arguments.get("evolution"):
         evolution = persona_evolution(agent, window_days=arguments.get("window_days", 30))
         profile["evolution"] = evolution

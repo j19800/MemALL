@@ -19,10 +19,24 @@ from memall.pipeline.security import audit_sensitive, set_permission, check_acce
 # Helper functions
 # ──────────────────────────────────────────────
 
-def print_persona(agent: str, profile: dict):
+def print_persona(agent: str, profile: dict, compact: bool = False):
     proto = profile.get("prototype", {})
     features = profile.get("features", {})
     colors = profile.get("color_ratios", {})
+
+    if compact:
+        pc = proto.get("primary_color", {})
+        sc = proto.get("secondary_color")
+        color_str = f"{pc.get('name','?')}" + (f"+{sc.get('name','?')}" if sc else "")
+        print(f"  {proto.get('cn', '?')} ({proto.get('en', '?')}) | {color_str} | n={features.get('sample_size',0)}")
+        sorted_c = sorted(colors.items(), key=lambda x: -x[1])
+        bar = " ".join(f"{k}={v:.0%}" for k, v in sorted_c[:3])
+        if bar:
+            print(f"  Colors: {bar}")
+        time_range = profile.get("time_range", "")
+        if time_range:
+            print(f"  Time range: {time_range}")
+        return
 
     print(f"=== {agent} Persona ===")
     print(f"Prototype: {proto.get('cn', '?')} ({proto.get('en', '?')})")
@@ -243,7 +257,45 @@ def cmd_persona(args):
         return
 
     if args.agent:
-        profile = generate_persona(args.agent)
+        mode = getattr(args, "mode", "static")
+        dynamic_days = getattr(args, "dynamic_days", 7)
+
+        if mode == "dual":
+            from memall.pipeline.persona import generate_dual_persona
+            profile = generate_dual_persona(args.agent, dynamic_days=dynamic_days)
+            if "error" in profile:
+                print(profile["error"], file=sys.stderr)
+                sys.exit(1)
+            print(f"=== {args.agent} 双画像 (static + dynamic) ===")
+            print()
+            s = profile.get("static", {})
+            d = profile.get("dynamic", {})
+            print("【静态画像 — 全量历史】")
+            print_persona(args.agent, s, compact=True)
+            print()
+            print("【动态画像 — 最近 " + str(dynamic_days) + " 天】")
+            if d.get("note"):
+                print(f"  ⚠ {d['note']}")
+            else:
+                print_persona(args.agent, d, compact=True)
+            print()
+            delta = profile.get("delta", {})
+            print("【变化趋势】")
+            print(f"  原型变化:     {delta.get('prototype_shift', '?')}")
+            print(f"  活跃比例:     {delta.get('activity_ratio', 0):.1%}")
+            color_deltas = delta.get("color_deltas", {})
+            if color_deltas:
+                print(f"  色彩偏移:")
+                for c, dv in color_deltas.items():
+                    arrow = "↑" if dv > 0 else "↓"
+                    print(f"    {c}: {arrow} {abs(dv):.3f}")
+            return
+
+        if mode == "dynamic":
+            profile = generate_persona(args.agent, time_range=f"recent_{dynamic_days}d")
+        else:
+            profile = generate_persona(args.agent, time_range="all")
+
         if "error" in profile:
             print(profile["error"], file=sys.stderr)
             sys.exit(1)
@@ -680,3 +732,61 @@ def cmd_ops(args):
         print("  archive --agent X [--days 30]")
         print("  restore --agent X")
         print("  dedup [--agent X] [--threshold 0.9]")
+
+
+# ──────────────────────────────────────────────
+# cmd_dream — Dynamic Dreaming status
+# ──────────────────────────────────────────────
+
+def cmd_dream(args):
+    """CLI handler for ``memall dream status`` — active contradiction network."""
+    action = getattr(args, "dream_action", "status")
+
+    if action == "status":
+        conn = get_conn()
+        try:
+            total = conn.execute(
+                "SELECT COUNT(*) as c FROM edges WHERE relation_type = 'contradicts'"
+            ).fetchone()["c"]
+            resolved = conn.execute(
+                "SELECT COUNT(*) as c FROM edges WHERE relation_type = 'contradicts' AND json_extract(metadata, '$.resolved_by') IS NOT NULL"
+            ).fetchone()["c"]
+            recent = conn.execute(
+                "SELECT e.id, e.source_id, e.target_id, e.weight, e.created_at, "
+                "m1.content as src_content, m2.content as tgt_content, "
+                "m1.agent_name as src_agent, m2.agent_name as tgt_agent, "
+                "e.metadata "
+                "FROM edges e "
+                "JOIN memories m1 ON e.source_id = m1.id "
+                "JOIN memories m2 ON e.target_id = m2.id "
+                "WHERE e.relation_type = 'contradicts' "
+                "ORDER BY e.created_at DESC LIMIT 15"
+            ).fetchall()
+
+            print(f"=== Dynamic Dreaming ===")
+            print(f"  Total contradiction edges: {total}")
+            print(f"  Resolved by timestamp:     {resolved}")
+            print(f"  Resolution rate:           {resolved/max(total,1)*100:.1f}%")
+            print()
+            if recent:
+                print(f"  Recent contradictions (last {len(recent)}):")
+                for r in recent:
+                    meta = {}
+                    try:
+                        raw = r["metadata"]
+                        meta = json.loads(raw) if raw and raw.strip() else {}
+                    except Exception:
+                        pass
+                    verdict = meta.get("verdict", "undecided")
+                    badge = {"newer_wins": "✓", "older_wins": "←", "undecided": "?"}.get(verdict, "?")
+                    src_snip = (r["src_content"] or "")[:60].replace("\n", " ")
+                    tgt_snip = (r["tgt_content"] or "")[:60].replace("\n", " ")
+                    created = (r["created_at"] or "")[:19]
+                    print(f"    {badge} [#{r['source_id']}] {src_snip}")
+                    print(f"      ↔ [#{r['target_id']}] {tgt_snip}")
+                    print(f"      at {created}  wt={r['weight']:.2f}  verdict={verdict}")
+                    print()
+            else:
+                print("  No contradiction edges found.")
+        finally:
+            conn.close()

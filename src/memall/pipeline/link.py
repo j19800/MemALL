@@ -17,6 +17,14 @@ RELATION_PATTERNS = [
     (r'(基于|根据|参考|from|according)', 'cites'),
     (r'(细化|具体|展开|detail|specific)', 'refines'),
     (r'(决定后面|基于上一条|延续|继续|continue|further)', 'extends'),
+    # updates: version bumps, migration, technology transition
+    (r'(v\d+\.\d+|版本\d+|升级到|更新到|改用|回退到)', 'updates'),
+    (r'(从\s*\S+\s*(改为|变成|迁移到|切换到|升级到|降级到))', 'updates'),
+    (r'(弃用|废弃|不再使用|停止支持)', 'updates'),
+    # derives: conclusion drawn from prior reasoning
+    (r'(由此|据此|综上|综上所述|归纳|推导|可以得出)', 'derives'),
+    (r'(总结[:：]|结论[:：]|综上所述)', 'derives'),
+    (r'(延伸|引申|推而广之)', 'derives'),
 ]
 
 # Contradiction detection: opposite stance on same subject
@@ -121,12 +129,18 @@ def link_step() -> int:
                         rel = 'contradicts'
                 if rel:
                     if (a["id"], b["id"], rel) not in done_pairs:
-                        if rel == 'contradicts' and (a["id"], b["id"], 'refines') in done_pairs:
-                            conn.execute(
-                                "UPDATE edges SET relation_type = 'contradicts' WHERE source_id = ? AND target_id = ? AND relation_type = 'refines'",
-                                (a["id"], b["id"]),
-                            )
-                        else:
+                        # Ontology upgrade: if a more specific relation is detected,
+                        # upgrade any existing broader relation
+                        upgraded = False
+                        for broader in ('refines', 'cites'):
+                            if rel != broader and (a["id"], b["id"], broader) in done_pairs:
+                                conn.execute(
+                                    "UPDATE edges SET relation_type = ? WHERE source_id = ? AND target_id = ? AND relation_type = ?",
+                                    (rel, a["id"], b["id"], broader),
+                                )
+                                upgraded = True
+                                break
+                        if not upgraded:
                             conn.execute(
                                 "INSERT OR IGNORE INTO edges (source_id, target_id, relation_type, weight, created_at, metadata) VALUES (?,?,?,?,datetime('now'),'{}')",
                                 (a["id"], b["id"], rel, round(sim, 2)),

@@ -306,6 +306,27 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
             conn.commit()
         except Exception:
             logger.warning("thin_waist.py: silent error", exc_info=True)
+
+        # Dynamic Dream: active contradiction detection (best-effort, never blocks)
+        try:
+            from memall.config import get_config as _get_dream_config
+            if _get_dream_config("dream.enabled", True):
+                from memall.pipeline.dream import dream_scan
+                _dreams = dream_scan(
+                    conn,
+                    new_mem_id=mem_id,
+                    agent_name=data.agent_name,
+                    content=data.content,
+                    category=data.category,
+                    scan_window=_get_dream_config("dream.scan_window", 50),
+                    threshold=_get_dream_config("dream.threshold", 0.4),
+                )
+                if _dreams:
+                    conn.commit()
+                    logger.info("capture: dream found %d conflict(s) for memory #%d", len(_dreams), mem_id)
+        except Exception:
+            logger.debug("capture: dream scan skipped (non-fatal)", exc_info=True)
+
         return mem_id
 
 
@@ -550,7 +571,36 @@ def fts_query(raw: str) -> str:
     return " AND ".join(f'"{_split_cjk(t)}"' for t in terms)
 
 
-VALID_RELATIONS = ["extends", "contradicts", "refines", "cites", "supersedes", "related"]
+VALID_RELATIONS = [
+    "extends", "contradicts", "refines", "cites", "supersedes", "related",
+    "updates", "derives",
+]
+
+# Ontology hierarchy: broader → narrower.
+# Used for traversing up/down the relation type hierarchy.
+# Example: "updates" implies "supersedes" — querying for updates also returns supersedes.
+ONTOLOGY_HIERARCHY = {
+    "updates": ["supersedes"],          # updating something → superseding the old
+    "derives": ["refines"],             # deriving from → refining
+    "extends": ["cites"],               # extending → citing the source
+    "refines": [],                       # leaf in ontology (no further narrowing)
+    "cites": [],
+    "supersedes": [],
+    "contradicts": [],
+    "related": [],
+    "concerns": [],
+    "context": [],
+    "integrates": [],
+    "delegates": [],
+    "derived_from": ["refines"],
+}
+
+# Inverse: narrower → broader (for downward expansion queries)
+_ONTOLOGY_PARENTS: dict[str, list[str]] = {}
+for _parent, _children in ONTOLOGY_HIERARCHY.items():
+    for _c in _children:
+        _ONTOLOGY_PARENTS.setdefault(_c, []).append(_parent)
+ONTOLOGY_PARENTS = _ONTOLOGY_PARENTS
 
 
 def connect(source_id: int, target_id: int, relation_type: str = "refines", weight: float = 1.0, metadata: str = "{}") -> int:
@@ -601,8 +651,13 @@ def traverse(node_id: int, depth: int = 1, relation_filter: Optional[str] = None
             """
             edge_params = current + current
             if relation_filter:
-                edge_sql += " AND e.relation_type = ?"
-                edge_params.append(relation_filter)
+                # Ontology expansion: include child types in the hierarchy
+                expanded_types = [relation_filter]
+                children = ONTOLOGY_HIERARCHY.get(relation_filter, [])
+                expanded_types.extend(children)
+                placeholders_in = ",".join("?" * len(expanded_types))
+                edge_sql += f" AND e.relation_type IN ({placeholders_in})"
+                edge_params.extend(expanded_types)
 
             edges_rows = conn.execute(edge_sql, edge_params).fetchall()
             next_level = set()
@@ -766,6 +821,106 @@ def _rerank(results: list[dict], query: str, top_k: int) -> list[dict]:
         return results[:top_k]
 
 
+def _context_rerank(results: list[dict], query: str, top_k: int,
+                     viewer: str | None = None) -> list[dict]:
+    """Context-aware re-ranking: micro-adjust cross-encoder scores based on
+    the caller's recent interaction patterns.
+
+    Three signals (configurable weights):
+      1. **Domain affinity** — if the viewer has recently searched a category,
+         boost results in that category by ``affinity_boost``.
+      2. **Agent affinity** — if the viewer is ``workbuddy``, boost results
+         authored by workbuddy.
+      3. **Freshness boost** — results created/updated within 24h get a small
+         ``freshness_boost``, but cannot overtake the top 3 from reranker.
+
+    This function is a no-op (returns results unchanged) when:
+      - ``viewer`` is None/empty
+      - ``search.context_rerank.enabled`` is False (config)
+      - ``sentence-transformers`` cross-encoder isn't loaded (no rerank_score)
+
+    Args:
+        results: Reranked results list (each has ``rerank_score``).
+        query: Original search query (for logging, unused in scoring).
+        top_k: Number of results to return after re-ranking.
+        viewer: Name of the calling agent/user.
+
+    Returns:
+        Re-ranked results list (sorted desc by adjusted score).
+    """
+    if not viewer or not results:
+        return results[:top_k]
+
+    from memall.config import get_config
+
+    if not get_config("search.context_rerank.enabled", False):
+        return results[:top_k]
+
+    # Only adjust if cross-encoder scores exist (reranker ran)
+    if "rerank_score" not in results[0]:
+        return results[:top_k]
+
+    weight = get_config("search.context_rerank.weight", 0.15)
+    freshness_boost = get_config("search.context_rerank.freshness_boost", 1.1)
+    affinity_boost = get_config("search.context_rerank.affinity_boost", 1.2)
+
+    # 1. Domain affinity: find viewer's recent category distribution
+    viewer_categories: dict[str, int] = {}
+    try:
+        with _pool_conn() as conn:
+            recent_searches = conn.execute(
+                "SELECT category, COUNT(*) as cnt FROM memories "
+                "WHERE LOWER(agent_name) = LOWER(?) AND category != '' "
+                "AND created_at > datetime('now', '-7 days') "
+                "GROUP BY category ORDER BY cnt DESC LIMIT 5",
+                (viewer,),
+            ).fetchall()
+            viewer_categories = {r["category"]: r["cnt"] for r in recent_searches}
+    except Exception:
+        viewer_categories = {}
+
+    viewer_lower = viewer.lower()
+
+    # 2. Apply per-result boost
+    for r in results:
+        boost = 1.0
+        cat = (r.get("category") or "").lower()
+
+        # Domain affinity: viewer's frequent categories
+        if cat in viewer_categories:
+            boost += (affinity_boost - 1.0) * min(1.0, viewer_categories[cat] / 5)
+
+        # Agent affinity: same author
+        agent = (r.get("agent_name") or "").lower()
+        if agent == viewer_lower:
+            boost += (affinity_boost - 1.0) * 0.5
+
+        # Freshness boost: recent memories
+        created = r.get("created_at") or r.get("occurred_at") or ""
+        if created and created[:10] > "2026-06-15":  # rough ~7 day window
+            boost += (freshness_boost - 1.0)
+
+        r["context_score"] = (r.get("rerank_score", 0) or 0) * (1 + weight * (boost - 1.0))
+        r["context_boost"] = round(boost - 1.0, 3)
+
+    # Sort by adjusted context_score
+    results.sort(key=lambda x: -(x.get("context_score", 0) or 0))
+
+    # Enforce: top 3 from cross-encoder stay in top 3 (freshness can't jump the queue)
+    # Re-sort: first, pin the top 3 by rerank_score at positions 0-2
+    top3_ids = {r["memory_id"] for r in sorted(
+        results, key=lambda x: -(x.get("rerank_score", 0) or 0)
+    )[:3]}
+
+    pinned = [r for r in results if r["memory_id"] in top3_ids]
+    unpinned = [r for r in results if r["memory_id"] not in top3_ids]
+    pinned.sort(key=lambda x: -(x.get("rerank_score", 0) or 0))
+    unpinned.sort(key=lambda x: -(x.get("context_score", 0) or 0))
+
+    combined = (pinned + unpinned)[:top_k]
+    return combined
+
+
 def vector_search(query: str, top_k: int = 10, provider: Optional[str] = None) -> dict:
     """Semantic vector search.
 
@@ -785,19 +940,24 @@ def vector_search(query: str, top_k: int = 10, provider: Optional[str] = None) -
 
 def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
                   category: Optional[str] = None, level: Optional[str] = None,
-                  owner: Optional[str] = None, rerank: bool = False) -> dict:
+                  owner: Optional[str] = None, rerank: bool = False,
+                  viewer: Optional[str] = None) -> dict:
     """RRF (Reciprocal Rank Fusion) hybrid search combining FTS5 + vec0.
 
     1. FTS5 keyword search → ranked results
     2. vec0 KNN vector search → ranked results
     3. RRF merge: score = 1/(rrf_k + rank_fts) + 1/(rrf_k + rank_vec)
     4. (optional) Cross-encoder reranking of top candidates
+    5. (optional) Context-aware re-ranking using viewer profile
 
     Optional metadata filters (``category``, ``level``, ``owner``) are applied
     before the RRF merge, reducing candidate pool size.
 
     When ``rerank=True`` the top ``search.rerank_top_k`` candidates
     are re-scored by a cross-encoder model for improved relevance ordering.
+    If ``viewer`` is also provided, a final context-aware micro-adjustment
+    is applied based on the viewer's recent category preferences.
+
     Requires ``pip install memall-db[rerank]`` (heavy: ~1.8GB with PyTorch).
     Falls back to RRF-only ordering if the model is unavailable.
 
@@ -835,7 +995,7 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
                 ids = [r["rowid"] for r in fts_rowids]
                 placeholders = ",".join("?" * len(ids))
                 fts_rows = conn.execute(
-                    f"SELECT id, content, subject, category, level, owner, agent_name FROM memories WHERE id IN ({placeholders})",
+                    f"SELECT id, content, subject, category, level, owner, agent_name, created_at FROM memories WHERE id IN ({placeholders})",
                     ids,
                 ).fetchall()
         fts_rows = _apply_meta_filters(fts_rows)
@@ -847,7 +1007,7 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
             vec_results = _vec0_knn(conn, query_vec, top_k * 2)
             for vr in vec_results:
                 row = conn.execute(
-                    "SELECT id, content, subject, category, level, owner, agent_name FROM memories WHERE id = ?",
+                    "SELECT id, content, subject, category, level, owner, agent_name, created_at FROM memories WHERE id = ?",
                     (vr["memory_id"],),
                 ).fetchone()
                 if row:
@@ -872,6 +1032,7 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
                 "level": r["level"] or "",
                 "owner": r["owner"] or "",
                 "agent_name": r["agent_name"] or "",
+                "created_at": r["created_at"] or "",
                 "rrf_score": 1.0 / (rrf_k + rank + 1),
                 "fts_rank": rank + 1,
                 "vec_rank": None,
@@ -889,6 +1050,7 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
                     "level": r["level"] or "",
                     "owner": r["owner"] or "",
                     "agent_name": r["agent_name"] or "",
+                    "created_at": r["created_at"] or "",
                     "rrf_score": 1.0 / (rrf_k + rank + 1),
                     "fts_rank": None,
                     "vec_rank": rank + 1,
@@ -899,6 +1061,8 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
             from memall.config import get_config
             if get_config("search.rerank_enabled", True):
                 sorted_results = _rerank(sorted_results, query, top_k)
+                # Context-aware re-ranking (micro-adjustment after cross-encoder)
+                sorted_results = _context_rerank(sorted_results, query, top_k, viewer=viewer)
             else:
                 sorted_results = sorted_results[:top_k]
         else:

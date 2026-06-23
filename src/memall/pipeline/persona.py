@@ -45,11 +45,32 @@ UNCERTAIN_KEYWORDS = ["也许", "可能", "考虑", "暂时", "先试试", "不�
 DECISION_KEYWORDS = ["决定", "选", "采用", "方案", "结论", "定为", "用", "选型"]
 
 
-def extract_features(agent_name: str) -> dict:
+def extract_features(agent_name: str, time_range: str = "all") -> dict:
+    """Extract cognitive features for an agent.
+
+    Args:
+        agent_name: Name of the agent to analyze.
+        time_range: ``"all"`` (all memories) or ``"recent_7d"`` (last 7 days)
+                    or ``"recent_Nd"`` where N is a number of days.
+
+    Returns dict of feature scores, or ``{"error": ...}`` if no memories found.
+    """
     conn = get_conn()
     try:
+        # Time filter for dynamic profile
+        time_filter = ""
+        if time_range and time_range != "all":
+            days = 7
+            if time_range.startswith("recent_"):
+                try:
+                    days = int(time_range.replace("recent_", "").replace("d", ""))
+                except ValueError:
+                    days = 7
+            time_filter = f" AND created_at > datetime('now', '-{days} days')"
+
         rows = conn.execute(
-            "SELECT id, content, category, occurred_at, created_at, updated_at, level FROM memories WHERE LOWER(agent_name) = LOWER(?) ORDER BY created_at",
+            "SELECT id, content, category, occurred_at, created_at, updated_at, level FROM memories "
+            "WHERE LOWER(agent_name) = LOWER(?)" + time_filter + " ORDER BY created_at",
             (agent_name,),
         ).fetchall()
         if not rows:
@@ -232,8 +253,17 @@ def colors_to_prototype(color_ratios: dict) -> dict:
     }
 
 
-def generate_persona(agent_name: str) -> dict:
-    features = extract_features(agent_name)
+def generate_persona(agent_name: str, time_range: str = "all") -> dict:
+    """Generate a cognitive persona (color profile + prototype) for an agent.
+
+    Args:
+        agent_name: Name of the agent to analyze.
+        time_range: ``"all"`` (full history) or ``"recent_7d"`` (last 7 days).
+
+    Returns dict with keys ``features``, ``color_ratios``, ``prototype``,
+    ``interpretation``, ``generated_at``.
+    """
+    features = extract_features(agent_name, time_range=time_range)
     if "error" in features:
         return features
     color_ratios = features_to_colors(features)
@@ -248,7 +278,78 @@ def generate_persona(agent_name: str) -> dict:
     primary = prototype.get("primary_color", {}).get("name", "").lower()
     interp = interpretations.get(primary, "")
     return {"features": features, "color_ratios": color_ratios, "prototype": prototype,
-            "interpretation": interp, "generated_at": datetime.now(timezone.utc).isoformat()}
+            "interpretation": interp, "time_range": time_range,
+            "generated_at": datetime.now(timezone.utc).isoformat()}
+
+
+def generate_dual_persona(agent_name: str, dynamic_days: int = 7) -> dict:
+    """Generate both static (full history) and dynamic (recent N days) persona.
+
+    Returns::
+
+        {
+            "agent_name": str,
+            "static": { ... full-history persona ... },
+            "dynamic": { ... recent-N-days persona ... },
+            "delta": {
+                "prototype_shift": str,        # e.g. "Stabilizer → Explorer"
+                "color_deltas": { ... },       # per-color change (+0.05, -0.02)
+                "activity_ratio": float,       # recent memories / total
+            },
+            "generated_at": str,
+        }
+
+    The ``delta`` field highlights how the agent's cognitive profile has
+    shifted in the recent window compared to its long-term baseline.
+    """
+    static = generate_persona(agent_name, time_range="all")
+    if "error" in static:
+        return {"agent_name": agent_name, "error": static["error"]}
+
+    dynamic = generate_persona(agent_name, time_range=f"recent_{dynamic_days}d")
+    if "error" in dynamic:
+        # Fall back to static if no recent memories
+        dynamic_copy = dict(static)
+        dynamic_copy["note"] = f"no memories in last {dynamic_days}d, using static as dynamic"
+        dynamic = dynamic_copy
+
+    # Compute delta
+    static_colors = static.get("color_ratios", {})
+    dynamic_colors = dynamic.get("color_ratios", {})
+    color_deltas: dict[str, float] = {}
+    all_keys = set(static_colors.keys()) | set(dynamic_colors.keys())
+    for k in all_keys:
+        sv = static_colors.get(k, 0)
+        dv = dynamic_colors.get(k, 0)
+        delta = round(dv - sv, 3)
+        if abs(delta) >= 0.01:
+            color_deltas[k] = delta
+
+    static_proto = static.get("prototype", {}).get("cn", "?")
+    dynamic_proto = dynamic.get("prototype", {}).get("cn", "?")
+    if static_proto != dynamic_proto:
+        prototype_shift = f"{static_proto} → {dynamic_proto}"
+    else:
+        prototype_shift = "stable"
+
+    s_feat = static.get("features", {})
+    d_feat = dynamic.get("features", {})
+    activity_ratio = round(
+        d_feat.get("sample_size", 0) / max(1, s_feat.get("sample_size", 1)), 3
+    )
+
+    return {
+        "agent_name": agent_name,
+        "dynamic_window_days": dynamic_days,
+        "static": static,
+        "dynamic": dynamic,
+        "delta": {
+            "prototype_shift": prototype_shift,
+            "color_deltas": color_deltas,
+            "activity_ratio": activity_ratio,
+        },
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def save_persona(agent_name: str) -> dict:
