@@ -152,10 +152,10 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
             participants = [r["agent_name"] for r in participant_rows]
 
             conn.execute(
-                "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, project, summary, occurred_at, created_at, updated_at, confidence, visibility, metadata) "
-                "VALUES (?, ?, 'L4', 'system', ?, 'session', ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, project, subject, summary, occurred_at, created_at, updated_at, confidence, visibility, metadata) "
+                "VALUES (?, ?, 'L4', 'system', ?, 'session', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (l4_content[:2000], ch, agent_name, session_project,
-                 f"会话 {session_id} 摘要", now, now, now, 0.5, "shared",
+                 f"[L4] {agent_name} · {cat_summary[:30]}", f"会话 {session_id} 摘要", now, now, now, 0.5, "shared",
                  json.dumps({"session_id": session_id, "key_decisions": key_decisions,
                              "participants": participants, "continuation_note": continuation_note,
                              "source": "pipeline_harvest"})),
