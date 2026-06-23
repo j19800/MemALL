@@ -1,19 +1,27 @@
 # Changelog
 
-## [v0.1.3] - 2026-06-23
+## [v0.1.4] - 2026-06-23
 
 ### Added
 
-- **Ontology-aware Relationship Edges**: Added `updates` and `derives` to `VALID_RELATIONS`. Formalized `ONTOLOGY_HIERARCHY` for ontology-driven inference (updates→supersedes, derives→refines, extends→cites). Link pipeline now detects version-bump (`vX.X`, 升级, 迁移) and conclusion-drawing (由此, 综上, 推导) patterns. Traversal with `--relation` auto-expands to child types in the ontology. (`core/thin_waist.py`, `pipeline/link.py`)
-- **Dynamic Dreaming — Active Contradiction Detection**: New `pipeline/dream.py` module that scans recent memories of the same agent+category when a new memory is stored, detects conflicting stances via Jaccard+regex, and creates timestamp-resolved `contradicts` edges. Hooked into `capture()` as best-effort (never blocks). New CLI: `memall dream status` shows contradiction network stats. (`pipeline/dream.py`, `core/thin_waist.py`, `cli/main.py`, `cli/commands/pipeline_commands.py`)
-- **Context-Aware Retrieval Reranking**: New `_context_rerank()` layer after cross-encoder reranking. Micro-adjusts scores based on viewer's recent category affinities (domain affinity ×1.2), agent authorship (same-agent boost), and freshness (24h boost ×1.1). Top-3 from cross-encoder are pinned to preserve ranking integrity. Enabled via `search.context_rerank.enabled` or `hybrid_search(rerank=True, viewer=...)`. (`core/thin_waist.py`)
-- **Static/Dynamic Persona Layering**: `extract_features()` now accepts `time_range` parameter (`"all"` or `"recent_Nd"`). New `generate_dual_persona()` returns static (full history) + dynamic (recent N days) profiles plus delta (prototype shift, color deltas, activity ratio). Added `--mode static|dynamic|dual` to `memall persona` CLI and MCP persona tool. Dynamic profile computation < 50ms for typical 7-day windows. (`pipeline/persona.py`, `cli/commands/pipeline_commands.py`, `cli/main.py`, `mcp/tools/persona.py`)
+- **SDK Layer — `agent_memory.py`**: New `add()` / `search()` high-level API with automatic project inference. Every memory stored via `add()` gets a non-empty `project` field — inferred from `agent_name` (workbuddy→memall, douyin-daily→douyin-daily) or content keywords, with `"memall"` as default fallback. (`agent_memory.py`)
+- **Project field fallback in all capture paths**: MCP `capture` tool, MCP `smart_store` tool now auto-fill project via `infer_project()` when the caller omits it. (`mcp/tools/capture.py`, `mcp/tools/memory_write.py`)
 
-### Changed
+### Fixed
 
-- **Config defaults**: Added `dream.enabled`, `dream.threshold`, `dream.scan_window`, `search.context_rerank.*`, `persona.dynamic_window_days`, `persona.static_half_life_days` to built-in default configuration. (`config.py`)
+- **Pipeline INSERTs missing project column**: All 6 pipeline files (`session.py`, `distill.py`, `integrate.py`, `reflect.py`, `observe.py`, `convergence.py`) — INSERT INTO memories now includes `project`, derived from source memories via majority vote. (`pipeline/*.py`)
+- **Scripts INSERTs missing project**: `daily_checkin.py`, `daily_explore.py`, `self_task.py`, `weekly_checkin.py`, `scheduler/agent_round.py` — all raw INSERTs updated to include `project` column. (`scripts/*.py`, `scheduler/agent_round.py`)
+- **Backfill migration**: `_backfill_project.py` scanned 1982 empty-project memories and backfilled 1629 (82%) via agent mapping, group majority, and content heuristics. Empty rate: 78% → 13.9%. (`pipeline/_backfill_project.py`)
+- **logger-in-docstring bugs (5 more)**: `faiss_provider.py`, `adaptive.py`, `forget.py`, `register.py`, `cleanup.py` — same pattern as the original `federation_tools.py` bug. Zero instances remain across `src/memall/`. (`search/faiss_provider.py`, `pipeline/adaptive.py`, `pipeline/forget.py`, `cli/register.py`, `pipeline/cleanup.py`)
 
-## [v0.1.2] - 2026-06-22
+### Security
+
+- **hybrid_search() visibility filtering**: Results now pass through `_filter_by_trust_dict()` before returning; unknown agents default to `read_level="private"` (was `"public"`). (`core/thin_waist.py`)
+- **4 shell=True subprocess calls removed**: All changed to list-arg style — eliminates command injection risk from user-controlled `text[:1500]`. (`lark_notify.py`, `lark/consumer.py`, `bridge/lark_client.py`)
+- **API server Bearer token auth**: 57 routes protected via middleware; token auto-generated on first start and persisted to config. CORS `"file://"` origin removed. (`api/server.py`)
+- **Federation peer token enforcement**: `_remote_retrieve` and `_remote_retrieve_async` now require peer token — skip peer with warning if unconfigured. (`gateway.py`)
+
+## [v0.1.3] - 2026-06-23
 
 ### Added
 
