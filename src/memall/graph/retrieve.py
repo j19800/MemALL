@@ -17,6 +17,42 @@ from memall.graph.embeddings import _load_embeddings_matrix, EMBED_DIM
 
 logger = logging.getLogger(__name__)
 
+# Level-based score multiplier for search ranking
+# P0-P2: working memories → full weight
+# L1-L3: identity/metadata → moderate
+# L4-L5: summaries/decisions → moderate
+# L6-L10: reflections/distillations → lower (let P0-P2 surface)
+_LEVEL_BOOST = {
+    "P0": 1.0, "P1": 1.0, "P2": 1.0,
+    "L1": 0.7, "L2": 0.7, "L3": 0.7,
+    "L4": 0.6, "L5": 0.6,
+    "L6": 0.4, "L7": 0.4, "L8": 0.4, "L9": 0.3, "L10": 0.3,
+}
+_DEFAULT_BOOST = 0.4
+
+
+def _apply_level_boost(conn, raw_results: list) -> list[dict]:
+    """Apply level-based score weighting to raw keyword results.
+
+    P0-P2 get priority, L6/L9/L10 are deboosted so working memories
+    surface before distilled content in default searches.
+    """
+    results = []
+    for r in raw_results:
+        mid = r[0]
+        row = conn.execute("SELECT level FROM memories WHERE id = ?", (mid,)).fetchone()
+        boost = _LEVEL_BOOST.get(row["level"] if row else "", _DEFAULT_BOOST)
+        score = round(boost, 4)
+        results.append({
+            "memory_id": mid,
+            "content": r[1][:200],
+            "category": r[2],
+            "score": score,
+            "source": "keyword",
+        })
+    results.sort(key=lambda x: -x["score"])
+    return results
+
 _EMBED_MODEL = None
 
 
@@ -94,9 +130,8 @@ def _get_one_hop(conn, mem_ids: list, limit: int = 5000):
 def retrieve(query: str, mode: str = "hybrid", top_k: int = 10) -> dict:
     with pool_conn() as conn:
         if mode == "keyword":
-            raw = _keyword_search(conn, query, top_k)
-            results = [{"memory_id": r[0], "content": r[1][:200], "category": r[2], "score": round(float(r[3]), 4), "source": "keyword"} for r in raw]
-            return {"query": query, "mode": "keyword", "results": results[:top_k], "total": len(results)}
+            raw = _keyword_search(conn, query, top_k * 3)  # more candidates for level reordering
+            return {"query": query, "mode": "keyword", "results": _apply_level_boost(conn, raw)[:top_k], "total": len(raw)}
 
         # Encode query using embedding model
         query_vec = _query_embed(query)
@@ -114,15 +149,17 @@ def retrieve(query: str, mode: str = "hybrid", top_k: int = 10) -> dict:
         candidates = []
         for vr in vec0_results:
             row = conn.execute(
-                "SELECT id, content, category FROM memories WHERE id = ?",
+                "SELECT id, content, category, level FROM memories WHERE id = ?",
                 (vr["memory_id"],),
             ).fetchone()
             if row:
+                boost = _LEVEL_BOOST.get(row["level"] if row else "", _DEFAULT_BOOST)
+                score = vr["score"] * boost
                 candidates.append({
                     "memory_id": vr["memory_id"],
                     "content": row["content"][:200],
                     "category": row["category"],
-                    "score": vr["score"],
+                    "score": round(score, 4),
                     "source": "vector",
                 })
 
