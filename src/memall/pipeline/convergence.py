@@ -107,11 +107,11 @@ def create_discussion(
         cur = conn.execute(
             """INSERT INTO memories
                (content, content_hash, level, owner, agent_name, subject,
-                category, summary, occurred_at, created_at, updated_at,
+                category, project, summary, occurred_at, created_at, updated_at,
                 supersedes, confidence, visibility, metadata, arc_status)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (content, h, "L5", creator, creator, subject,
-             "discussion", "", now, now, now,
+             "discussion", "", "", now, now, now,
              None, 0.5, "private", meta, "open"),
         )
         memory_id = cur.lastrowid
@@ -328,11 +328,11 @@ def confirm_discussion(
         cur = conn.execute(
             """INSERT INTO memories
                (content, content_hash, level, owner, agent_name, subject,
-                category, summary, occurred_at, created_at, updated_at,
+                category, project, summary, occurred_at, created_at, updated_at,
                 supersedes, confidence, visibility, metadata, arc_status)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (content, h, "P2", agent_name, agent_name, subject,
-             "discussion_response", "", now, now, now,
+             "discussion_response", "", "", now, now, now,
              None, 0.6, "private", rmeta, "open"),
         )
         resp_id = cur.lastrowid
@@ -480,7 +480,7 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
         cur = conn.execute(
             """INSERT INTO memories
                (content, content_hash, level, owner, agent_name, subject,
-                category, summary, occurred_at, created_at, updated_at,
+                category, project, summary, occurred_at, created_at, updated_at,
                 supersedes, confidence, visibility, metadata, arc_status)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (task_content, task_hash, "L5", assigned_to, assigned_to,

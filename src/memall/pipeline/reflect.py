@@ -229,10 +229,15 @@ def _aggregate_l6(conn, upgraded_ids: list, now: str) -> int:
         if cur.fetchone():
             continue  # already exists
 
+        # Majority project from source memories
+        mid_ph = ",".join("?" * len(mids))
+        proj_row = conn.execute(f"SELECT project, COUNT(*) as cnt FROM memories WHERE id IN ({mid_ph}) AND project IS NOT NULL AND project != '' GROUP BY project ORDER BY cnt DESC LIMIT 1", mids).fetchone()
+        l6_project = proj_row["project"] if proj_row else ""
+
         conn.execute(
-            "INSERT INTO memories (content, content_hash, level, agent_name, category, summary, occurred_at, created_at, updated_at, metadata) "
-            "VALUES (?, ?, 'L6', ?, ?, ?, ?, ?, ?, ?)",
-            (content, ch, agent_label, cat,
+            "INSERT INTO memories (content, content_hash, level, agent_name, category, project, summary, occurred_at, created_at, updated_at, metadata) "
+            "VALUES (?, ?, 'L6', ?, ?, ?, ?, ?, ?, ?, ?)",
+            (content, ch, agent_label, cat, l6_project,
              f"{len(mids)} 条反思聚合", now, now, now,
              json.dumps({"l6_source": "aggregate", "source_ids": mids, "quality": "aggregated"})),
         )

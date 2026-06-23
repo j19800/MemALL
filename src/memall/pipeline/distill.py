@@ -33,10 +33,16 @@ def distill_step() -> dict:
             merged_content = f"[L9 蒸馏] {key[0]} 在 {key[1]} 领域的 {len(mems)} 条记忆摘要：\n{merged}"
             mem_ids = [m["id"] for m in mems]
 
+            # Majority project from source memories
+            source_ids = mem_ids[:10]
+            ph = ",".join("?" * len(source_ids))
+            proj_row = conn.execute(f"SELECT project, COUNT(*) as cnt FROM memories WHERE id IN ({ph}) AND project IS NOT NULL AND project != '' GROUP BY project ORDER BY cnt DESC LIMIT 1", source_ids).fetchone()
+            l9_project = proj_row["project"] if proj_row else ""
+
             ch = hashlib.sha256(merged_content.encode()).hexdigest()
             cur = conn.execute(
                 "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, summary, created_at, updated_at, occurred_at, subject, project, trust_level, access_count, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (merged_content, ch, "L9", "", key[0], key[1], f"{len(mems)}条记忆蒸馏摘要", now, now, now, "", "", 0, 0, "{}"),
+                (merged_content, ch, "L9", "", key[0], key[1], f"{len(mems)}条记忆蒸馏摘要", now, now, now, "", l9_project, 0, 0, "{}"),
             )
             if cur.rowcount == 0:
                 # Duplicate hash → record already exists, skip

@@ -117,12 +117,17 @@ def integrate_step(access_total_threshold: int = _MIN_L9_ACCESS_TOTAL,
                 continue
 
             now = datetime.now(timezone.utc).isoformat()
+            # Majority project from source L9 memories
+            source_id_params = tuple(source_ids)
+            ph = ",".join("?" * len(source_ids))
+            proj_row = conn.execute(f"SELECT project, COUNT(*) as cnt FROM memories WHERE id IN ({ph}) AND project IS NOT NULL AND project != '' GROUP BY project ORDER BY cnt DESC LIMIT 1", source_id_params).fetchone()
+            l10_project = proj_row["project"] if proj_row else ""
             conn.execute(
                 "INSERT INTO memories "
-                "(content, content_hash, level, category, agent_name, metadata, occurred_at, created_at, updated_at) "
-                "VALUES (?, ?, 'L10', ?, ?, ?, ?, ?, ?)",
+                "(content, content_hash, level, category, agent_name, project, metadata, occurred_at, created_at, updated_at) "
+                "VALUES (?, ?, 'L10', ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    merged, ch, best_cat, agent,
+                    merged, ch, best_cat, agent, l10_project,
                     json.dumps({"layer_source": {"value": "integrate_auto_v1", "_meta": {"version": 1, "written_at": now}}}, ensure_ascii=False),
                     now, now, now,
                 ),

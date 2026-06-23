@@ -93,10 +93,17 @@ def _mark_session_inline(conn, session_id: str) -> None:
         l4_content = "。".join(parts)
         import hashlib
         ch = hashlib.sha256(l4_content.encode()).hexdigest()
+        # Infer project from session memories (majority vote)
+        project_row = conn.execute(
+            f"SELECT project, COUNT(*) as cnt FROM memories WHERE {' AND '.join(where)} "
+            f"AND project IS NOT NULL AND project != '' GROUP BY project ORDER BY cnt DESC LIMIT 1",
+            params,
+        ).fetchone()
+        session_project = project_row["project"] if project_row else ""
         conn.execute(
-            "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, summary, occurred_at, created_at, updated_at, confidence, visibility, metadata) "
-            "VALUES (?, ?, 'L4', 'system', ?, 'session', ?, ?, ?, ?, ?, ?, ?)",
-            (l4_content[:2000], ch, agent_name, f"会话 {session_id} 摘要",
+            "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, project, summary, occurred_at, created_at, updated_at, confidence, visibility, metadata) "
+            "VALUES (?, ?, 'L4', 'system', ?, 'session', ?, ?, ?, ?, ?, ?, ?, ?)",
+            (l4_content[:2000], ch, agent_name, session_project, f"会话 {session_id} 摘要",
              now, now, now, 0.5, "shared",
              json.dumps({"session_id": session_id, "key_decisions": key_decisions})),
         )
@@ -880,11 +887,11 @@ def session_end(session_id: str, auto_extract: bool = False) -> dict:
                 l6_ch = hashlib.sha256(l6_content.encode()).hexdigest()
                 conn.execute(
                     "INSERT OR IGNORE INTO memories "
-                    "(content, content_hash, level, owner, agent_name, category, summary, "
+                    "(content, content_hash, level, owner, agent_name, category, project, summary, "
                     "occurred_at, created_at, updated_at, confidence, visibility, metadata) "
-                    "VALUES (?, ?, 'L6', 'system', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, 'L6', 'system', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?, ?)",
                     (l6_content[:2000], l6_ch, agent_name or "system",
-                     f"会话 {session_id} 自动反思", now, now, now, 0.6, "private", "{}"),
+                     session_project, f"会话 {session_id} 自动反思", now, now, now, 0.6, "private", "{}"),
                 )
             except Exception:
                 logger.warning("session.py: silent error", exc_info=True)
