@@ -112,32 +112,31 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
             (session_id,),
         ).fetchone()
 
+        # Shared extraction for L4 and L6
+        decision_rows = conn.execute(
+            f"SELECT content FROM memories WHERE {' AND '.join(where)} AND category = 'decision' ORDER BY created_at DESC LIMIT 3",
+            params,
+        ).fetchall()
+        key_decisions = [r["content"][:100] for r in decision_rows]
+        last_row = conn.execute(
+            f"SELECT content FROM memories WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT 1",
+            params,
+        ).fetchone()
+        continuation_note = ""
+        if last_row:
+            for pat in [r'下一步[：:\s]*(.{5,80})', r'继续[：:\s]*(.{5,80})', r'next[：:\s]*(.{5,80})']:
+                m = re.search(pat, last_row["content"], re.I)
+                if m:
+                    continuation_note = m.group(1).strip()[:100]
+                    break
+
         if not existing_l4:
-            decision_rows = conn.execute(
-                f"SELECT content FROM memories WHERE {' AND '.join(where)} AND category = 'decision' ORDER BY created_at DESC LIMIT 3",
-                params,
-            ).fetchall()
-            key_decisions = [r["content"][:100] for r in decision_rows]
             decision_text = ""
             if key_decisions:
                 decision_text = "；".join(d[:80] for d in key_decisions[:3] if d)
             parts = [f"[L4 会话] {agent_name} · {count}条记忆 · {cat_summary}"]
             if decision_text:
                 parts.append(f"关键决策：{decision_text}")
-
-            # Continuation note
-            last_row = conn.execute(
-                f"SELECT content FROM memories WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT 1",
-                params,
-            ).fetchone()
-            continuation_note = ""
-            if last_row:
-                text = last_row["content"]
-                for pat in [r'下一步[：:\s]*(.{5,80})', r'继续[：:\s]*(.{5,80})', r'next[：:\s]*(.{5,80})']:
-                    m = re.search(pat, text, re.I)
-                    if m:
-                        continuation_note = m.group(1).strip()[:100]
-                        break
             if continuation_note:
                 parts.append(f"后续：{continuation_note}")
 
@@ -163,10 +162,33 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
             )
             result["l4_created"] = True
 
-        # L6 auto-reflection (also check for duplicate)
+        # L6 auto-reflection with distinctive content
+        distinctive_words = []
+        try:
+            session_rows = conn.execute(
+                f"SELECT content FROM memories WHERE {' AND '.join(where)} AND LENGTH(TRIM(content)) > 10 LIMIT 30",
+                params,
+            ).fetchall()
+            session_text = " ".join(r["content"] for r in session_rows if r["content"])
+            if len(session_text) > 50:
+                from collections import Counter
+                words = re.findall(r'[一-鿿]{2,4}|[a-zA-Z]\w{2,}', session_text.lower())
+                if words:
+                    wf = Counter(w for w in words)
+                    distinctive_words = [w for w, _ in wf.most_common(8) if wf[w] >= 2]
+        except Exception:
+            pass
+
         l6_parts = [f"会话总结：本次会话记录了 {count} 条记忆"]
         if cat_summary:
             l6_parts.append(f"集中在 {cat_summary}")
+        if distinctive_words:
+            l6_parts.append(f"关键话题：{'、'.join(distinctive_words[:6])}")
+        if key_decisions:
+            dec_text = "；".join(d[:60] for d in key_decisions[:3] if d)
+            l6_parts.append(f"关键决策：{dec_text}")
+        if continuation_note:
+            l6_parts.append(f"后续关注：{continuation_note}")
         l6_content = "。".join(l6_parts) + "。"
         l6_ch = hashlib.sha256(l6_content.encode()).hexdigest()
 
