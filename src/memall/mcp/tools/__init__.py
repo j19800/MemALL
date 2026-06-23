@@ -16,6 +16,7 @@ from . import gateway
 from . import reflect
 from . import onboarding
 from . import index
+from . import distill
 
 # ── Capture ──
 registry.register(ToolDef(
@@ -556,4 +557,18 @@ registry.register(ToolDef(
     }},
     handler=discussion.handle_status,
     annotations={"readOnlyHint": True, "idempotentHint": True},
+))
+
+# ── Distill Pending ──
+registry.register(ToolDef(
+    name="memall_distill_pending",
+    description="列出待 LLM 补充叙述性摘要的 L9/L10 组。管道只生成关键词和样本，需要 AI 来写人话。",
+    input_schema={"type": "object", "properties": {
+        "action": {"type": "string", "enum": ["list", "summarize"], "default": "list", "description": "list=查看待处理组, summarize=写入摘要"},
+        "limit": {"type": "integer", "default": 10, "description": "最多返回多少组"},
+        "group_id": {"type": "integer", "description": "要摘要的 L9/L10 记忆 ID（action=summarize 时必填）"},
+        "summary": {"type": "string", "description": "人类可读的叙述性摘要内容（action=summarize 时必填）"},
+    }, "required": ["action"]},
+    handler=distill.handle,
+    annotations={"readOnlyHint": True, "idempotentHint": False},
 ))
