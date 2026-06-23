@@ -1957,8 +1957,10 @@ def _remote_retrieve(peer: Dict[str, Any], query: str, timeout: float = 5.0) -> 
     payload = json.dumps({"query": query, "top_n": 10}).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     peer_token = peer.get("token", "")
-    if peer_token:
-        headers["Authorization"] = f"Bearer {peer_token}"
+    if not peer_token:
+        logger.warning("Federation: skipping peer %s (no auth token configured)", peer.get("address", "?"))
+        return peer.get("name", "?"), []
+    headers["Authorization"] = f"Bearer {peer_token}"
     req = urllib.request.Request(
         url, data=payload,
         headers=headers,
@@ -2063,8 +2065,10 @@ async def _remote_retrieve_async(
     url = f"http://{peer['address']}:{peer['port']}/retrieve"
     headers = {"Content-Type": "application/json"}
     peer_token = peer.get("token", "")
-    if peer_token:
-        headers["Authorization"] = f"Bearer {peer_token}"
+    if not peer_token:
+        logger.warning("Federation: skipping async peer %s (no auth token configured)", peer.get("address", "?"))
+        return peer.get("device_name", peer.get("address", "?")), []
+    headers["Authorization"] = f"Bearer {peer_token}"
     payload = {"query": query, "top_n": 10}
     try:
         async with session.post(url, json=payload, headers=headers,
