@@ -4,6 +4,7 @@ All metrics are derived from live SQLite queries. The ``collect()`` function ret
 a lightweight dict suitable for both CLI output and injection formatting.
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -57,11 +58,35 @@ def collect() -> dict:
             "AND created_at <= datetime('now', '-7 days')"
         ).fetchone()[0]
 
-        # Pipeline freshness
+        # Pipeline freshness from pipeline_runs table
         last_pipeline = conn.execute(
-            "SELECT MAX(last_run_at) FROM pipeline_state "
-            "WHERE step_name = 'pipeline'"
+            "SELECT MAX(started_at) FROM pipeline_runs WHERE status = 'completed'"
         ).fetchone()[0]
+
+        # Pipeline success rate (last 10 runs)
+        recent_runs = conn.execute(
+            "SELECT status FROM pipeline_runs ORDER BY id DESC LIMIT 10"
+        ).fetchall()
+        total_recent = len(recent_runs)
+        completed_recent = sum(1 for r in recent_runs if r["status"] == "completed")
+        failed_recent = sum(1 for r in recent_runs if r["status"] == "failed")
+        pipeline_success_rate = round(completed_recent / max(1, total_recent) * 100, 1)
+
+        # Slowest step from last completed run
+        slowest_step_label = "?"
+        slowest_ms = 0
+        if total_recent > 0:
+            last_completed = conn.execute(
+                "SELECT steps FROM pipeline_runs WHERE status = 'completed' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if last_completed and last_completed["steps"]:
+                try:
+                    steps_list = json.loads(last_completed["steps"])
+                    slowest = max(steps_list, key=lambda s: s.get("elapsed_ms", 0) or 0)
+                    slowest_step_label = f"{slowest['step']}({slowest['elapsed_ms']}ms)"
+                    slowest_ms = slowest.get("elapsed_ms", 0)
+                except Exception:
+                    pass
 
         # DB size
         db_path = get_db_path()
@@ -163,6 +188,9 @@ def collect() -> dict:
             "db_size_mb": db_size_mb,
             "fts_ok": fts_ok,
             "pipeline_fresh": pipeline_fresh,
+            "pipeline_success_rate": pipeline_success_rate,
+            "pipeline_last_run": (last_pipeline or "")[:19],
+            "pipeline_slowest_step": slowest_step_label,
             "pending_migrations": pending_migrations,
             "pending_embeddings": pending_embeddings,
             "orphan_edges": orphans,

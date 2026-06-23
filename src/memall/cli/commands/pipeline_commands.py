@@ -151,6 +151,136 @@ def cmd_pipeline(args):
 
 
 # ──────────────────────────────────────────────
+# cmd_pipeline_status — Pipeline observability
+# ──────────────────────────────────────────────
+
+def cmd_pipeline_status(args):
+    """Show pipeline run history with per-step timing and quality gate results."""
+    conn = get_conn()
+    try:
+        runs = conn.execute(
+            "SELECT id, started_at, ended_at, status, total_elapsed_ms, error, steps "
+            "FROM pipeline_runs ORDER BY id DESC LIMIT 5"
+        ).fetchall()
+
+        if not runs:
+            print("No pipeline runs recorded yet.")
+            print("Run `memall pipeline` to start your first pipeline run.")
+            return
+
+        # Level distribution
+        level_rows = conn.execute(
+            "SELECT level, COUNT(*) as cnt FROM memories GROUP BY level ORDER BY cnt DESC"
+        ).fetchall()
+        level_dist = {r["level"]: r["cnt"] for r in level_rows}
+
+        print(f"Memory levels: ", end="")
+        for lv in ("P0","P1","P2","L1","L2","L3","L4","L5","L6","L7","L8","L9","L10"):
+            cnt = level_dist.get(lv, 0)
+            if cnt:
+                print(f"{lv}={cnt} ", end="")
+        print()
+
+        # Distillation chain summary
+        l6 = level_dist.get("L6", 0)
+        l9 = level_dist.get("L9", 0)
+        l10 = level_dist.get("L10", 0)
+        print(f"Distillation chain: {l6} L6 → {l9} L9 → {l10} L10")
+        if l6 > 0:
+            print(f"  L6→L9 ratio: {l9/max(1,l6):.2f} (target >1.0)")
+        print()
+
+        # ── Per-run detail ──
+        for idx, r in enumerate(runs):
+            rid = r["id"]
+            started = (r["started_at"] or "")[:19]
+            status = r["status"]
+            elapsed = r["total_elapsed_ms"]
+            error = r["error"] or ""
+            steps_raw = r["steps"] or "[]"
+
+            badge = {"running": "⏳", "completed": "✓", "failed": "✗"}.get(status, "?")
+            elapsed_str = f"{elapsed}ms" if elapsed else "?"
+            print(f"[{badge}] Run #{rid}  {started}  [{status}]  {elapsed_str}")
+            if error:
+                print(f"      Error: {error[:120]}")
+
+            # Parse steps
+            try:
+                steps = json.loads(steps_raw) if isinstance(steps_raw, str) else steps_raw
+            except (json.JSONDecodeError, TypeError):
+                steps = []
+
+            if steps:
+                # Find slowest
+                slowest = max(steps, key=lambda s: s.get("elapsed_ms", 0) or 0)
+                slow_name = slowest.get("step", "?")
+                slow_ms = slowest.get("elapsed_ms", 0)
+                # Count failures
+                failures = [s for s in steps if s.get("status") == "failed"]
+
+                header = f"      {len(steps)} steps"
+                if failures:
+                    header += f", {len(failures)} failed"
+                header += f", slowest: {slow_name}({slow_ms}ms)"
+                print(header)
+
+                # Show last 3 runs with detail
+                if idx < 2:
+                    for s in steps:
+                        s_name = s.get("step", "?")
+                        s_status = s.get("status", "?")
+                        s_ms = s.get("elapsed_ms", 0)
+                        s_result = s.get("result", "?")
+                        quality = s.get("quality", {})
+                        q_passed = quality.get("passed", True) if quality else True
+                        q_reason = quality.get("reason", "") if quality else ""
+
+                        status_char = {"ok": " ", "failed": "✗"}.get(s_status, "?")
+                        q_char = "" if q_passed else " ⚠"
+                        q_note = f" ({q_reason})" if q_reason else ""
+
+                        print(f"      {status_char} {s_name:16s} {s_ms:5d}ms  → {s_result}{q_char}{q_note}")
+                    print()
+
+        # ── Quality gate summary ──
+        all_steps = []
+        for r in runs:
+            try:
+                steps = json.loads(r["steps"]) if isinstance(r["steps"], str) else json.loads(r["steps"] or "[]")
+            except Exception:
+                steps = []
+            for s in steps:
+                q = s.get("quality")
+                if q:
+                    all_steps.append(s)
+
+        if all_steps:
+            # Group by step name
+            from collections import defaultdict
+            by_step: dict = defaultdict(list)
+            for s in all_steps:
+                by_step[s["step"]].append(s["quality"])
+
+            print("Quality gates (last 5 runs):")
+            for step_name, gates in sorted(by_step.items()):
+                passes = sum(1 for g in gates if g.get("passed"))
+                total = len(gates)
+                bar = "█" * passes + "░" * (total - passes)
+                last_reason = ""
+                for g in reversed(gates):
+                    if not g.get("passed"):
+                        last_reason = g.get("reason", "")
+                        break
+                note = f"  ⚠ {last_reason}" if last_reason else ""
+                print(f"  {step_name:16s} {bar} {passes}/{total}{note}")
+            print()
+
+    finally:
+        conn.close()
+
+
+# ──────────────────────────────────────────────
 # cmd_forget
 # ──────────────────────────────────────────────
 

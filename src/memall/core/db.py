@@ -211,6 +211,16 @@ CREATE TABLE IF NOT EXISTS pipeline_state (
     last_processed_id INTEGER DEFAULT 0,
     metadata TEXT NOT NULL DEFAULT '{}'
 );
+
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    status TEXT NOT NULL DEFAULT 'running',
+    total_elapsed_ms INTEGER,
+    error TEXT,
+    steps TEXT NOT NULL DEFAULT '[]'
+);
 """
 
 FTS5_TRIGGERS = """

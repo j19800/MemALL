@@ -10,7 +10,7 @@ from memall.cli.commands.base import (
     cmd_connect, cmd_traverse, cmd_timeline, cmd_update,
 )
 from memall.cli.commands.pipeline_commands import (
-    cmd_pipeline, cmd_forget, cmd_persona, cmd_cluster,
+    cmd_pipeline, cmd_pipeline_status, cmd_forget, cmd_persona, cmd_cluster,
     cmd_cluster_show, cmd_narrative, cmd_suggest, cmd_bridge,
     cmd_ask, cmd_adaptive, cmd_security, cmd_ops, cmd_dream,
 )
@@ -91,9 +91,12 @@ def app():
     p_time.add_argument("--days", type=int, help="Number of days back")
     p_time.set_defaults(func=cmd_timeline)
 
-    p_pl = sub.add_parser("pipeline", help="Run enrichment pipeline")
+    p_pl = sub.add_parser("pipeline", help="Run enrichment pipeline or view status")
     p_pl.add_argument("--dry-run", action="store_true")
     p_pl.set_defaults(func=cmd_pipeline)
+    p_pl_sub = p_pl.add_subparsers(dest="pipeline_action")
+    p_pl_status = p_pl_sub.add_parser("status", help="Show pipeline run history and quality gates")
+    p_pl_status.set_defaults(func=cmd_pipeline_status)
 
     p_dream = sub.add_parser("dream", help="Dynamic Dreaming — active contradiction detection")
     p_dream_sub = p_dream.add_subparsers(dest="dream_action")
