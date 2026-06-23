@@ -550,6 +550,16 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 fmt_parts.insert(1, "")
                 fmt_parts.insert(1, narrative_line)
 
+            # [DISTILL] pending groups
+            try:
+                from memall.mcp.tools.distill import handle as _distill_handle
+                _distill_result = json.loads(_distill_handle({"action": "list", "limit": 5}))
+                _pending = _distill_result.get("pending", [])
+                if _pending:
+                    fmt_parts.append(f"[DISTILL] {len(_pending)} 组待写摘要，调 memall_distill_pending 查看")
+            except Exception:
+                pass
+
             result["injection_formatted"] = chr(10).join(fmt_parts)
 
         return result
