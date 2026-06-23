@@ -124,6 +124,23 @@ def build_index(batch_size: int = BATCH_SIZE, force: bool = False) -> dict:
             "SELECT id, content, content_hash FROM memories WHERE LENGTH(TRIM(content)) > 10 ORDER BY id"
         ).fetchall()
         total = len(rows)
+        if total == 0:
+            return {"total": 0, "embedded": 0, "new": 0, "status": "no_data"}
+
+        # Auto-detect stale model: if vocab < 500, force rebuild
+        if not force:
+            from memall.graph.vector_model import load_model, has_model
+            if has_model():
+                model = load_model()
+                if model is not None:
+                    vec = model["vectorizer"]
+                    try:
+                        vocab_size = len(vec.get_feature_names_out())
+                    except Exception:
+                        vocab_size = 0
+                    if vocab_size < 500:
+                        logger.info("Embedding model stale (vocab=%d < 500), auto-forcing full rebuild", vocab_size)
+                        force = True
 
         existing = set()
         for r in conn.execute("SELECT memory_id, content_hash FROM memory_embeddings").fetchall():
