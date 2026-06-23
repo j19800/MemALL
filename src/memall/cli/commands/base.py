@@ -31,22 +31,58 @@ def cmd_capture(args):
 
 
 def cmd_search(args):
+    level_filter = getattr(args, "level", None)
     results = retrieve(
         args.query,
         owner=args.owner,
         agent_name=args.agent,
         category=args.category,
         project=args.project,
+        level=level_filter,
         limit=args.limit or 20,
     )
     if isinstance(results, list):
         for r in results:
-            print(f"[{r.id}] [{r.category}] {r.content[:120]}")
+            print(f"[{r.id}] [{r.level}/{r.category}] {r.content[:120]}")
             print(f"       owner={r.owner} agent={r.agent_name} occurred={r.occurred_at[:19]}")
     elif results:
         r = results
-        print(f"[{r.id}] [{r.category}] {r.content}")
+        print(f"[{r.id}] [{r.level}/{r.category}] {r.content}")
         print(f"       owner={r.owner} agent={r.agent_name} occurred={r.occurred_at[:19]}")
+
+
+def cmd_knowledge(args):
+    """Search only L9 distilled knowledge."""
+    results = retrieve(
+        args.query,
+        level="L9",
+        limit=args.limit or 20,
+    )
+    if not results:
+        print("No distilled knowledge found for this query.")
+        return
+    print(f"=== L9 蒸馏知识 ({len(results)}条) ===")
+    for r in results:
+        print(f"  [{r.id}] [{r.category}] {r.subject or '(无主题)'}")
+        print(f"      {r.content[:150]}")
+        print()
+
+
+def cmd_insights(args):
+    """Search only L10 cross-domain insights."""
+    results = retrieve(
+        args.query,
+        level="L10",
+        limit=args.limit or 10,
+    )
+    if not results:
+        print("No cross-domain insights found for this query.")
+        return
+    print(f"=== L10 跨领域洞察 ({len(results)}条) ===")
+    for r in results:
+        print(f"  [{r.id}] [{r.category}] {r.subject or '(无主题)'}")
+        print(f"      {r.content[:200]}")
+        print()
 
 
 def cmd_get(args):

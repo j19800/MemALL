@@ -8,6 +8,7 @@ from memall import __version__
 from memall.cli.commands.base import (
     cmd_init, cmd_capture, cmd_search, cmd_get,
     cmd_connect, cmd_traverse, cmd_timeline, cmd_update,
+    cmd_knowledge, cmd_insights,
 )
 from memall.cli.commands.pipeline_commands import (
     cmd_pipeline, cmd_pipeline_status, cmd_forget, cmd_persona, cmd_cluster,
@@ -60,8 +61,19 @@ def app():
     p_search.add_argument("--agent")
     p_search.add_argument("--category")
     p_search.add_argument("--project")
+    p_search.add_argument("--level", help="Filter by level (e.g. L9, L10, L6)")
     p_search.add_argument("--limit", type=int, default=20)
     p_search.set_defaults(func=cmd_search)
+
+    p_know = sub.add_parser("knowledge", help="Search L9 distilled knowledge")
+    p_know.add_argument("query", nargs="?", default=None, help="Search distilled knowledge")
+    p_know.add_argument("--limit", type=int, default=20)
+    p_know.set_defaults(func=cmd_knowledge)
+
+    p_ins = sub.add_parser("insights", help="Search L10 cross-domain insights")
+    p_ins.add_argument("query", nargs="?", default=None, help="Search cross-domain insights")
+    p_ins.add_argument("--limit", type=int, default=10)
+    p_ins.set_defaults(func=cmd_insights)
 
     p_get = sub.add_parser("get", help="Get memory by ID")
     p_get.add_argument("id", type=int)

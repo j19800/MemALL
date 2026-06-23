@@ -127,12 +127,20 @@ def _row_to_memory(row) -> Memory:
     )
 
 
+_REASONING_MARKERS = [
+    "因为", "所以", "根因", "原因是", "取决于", "比较", "权衡",
+    "方案", "选", "采用", "决定", "结论",
+    "数据", "从.*看", "分析", "调研", "实测",
+    "问题", "瓶颈", "不足", "改进",
+    "用户说", "你的意思是", "确认",
+]
+
 _QUALITY_DIMS = [
     "completeness",
     "clarity",
     "relevance",
     "specificity",
-    "persistence",
+    "reasoning",       # replaces persistence — measures "有理有据"
     "source_traceability",
     "context_stability",
     "sensitivity",
@@ -149,7 +157,11 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
     scores["clarity"] = 10 if text_len > 40 else max(0, 10 - sum(text.count(f) for f in filler) * 2)
     scores["relevance"] = 7
     scores["specificity"] = min(10, len(re.findall(r'\d{4}|v\d+\.\d+|[A-Z]{2,}\d*|#\d+', text)) * 2)
-    scores["persistence"] = 8 if data.level in ("P0", "P1") else 6
+
+    # "reasoning" — measures whether content contains evidence/analysis language
+    reasoning_hits = sum(1 for p in _REASONING_MARKERS if re.search(p, text, re.I))
+    scores["reasoning"] = min(10, max(0, reasoning_hits * 2))
+
     scores["source_traceability"] = 8 if data.agent_name and data.owner else 4
     scores["context_stability"] = 8 if "临时" not in text and "暂时" not in text else 3
     scores["sensitivity"] = 10 if not re.search(r'(password|token|secret|apikey|api_key|sk-)\s*[:=]', text, re.I) else 2
@@ -159,10 +171,27 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
 
     avg = sum(scores.values()) / len(scores) if scores else 0
     min_dim = min(scores.values()) if scores else 0
-    threshold_map = {"P0": 5, "P1": 6, "P2": 5}
+
+    # Level-specific thresholds
+    threshold_map = {
+        "P0": 5, "P1": 6, "P2": 5,
+        "L4": 6, "L5": 6,           # decisions + tasks need reasoning
+        "L6": 6,                     # reflections need substance
+        "L7": 5, "L9": 5, "L10": 5,
+    }
     required = threshold_map.get(data.level or "P2", 5)
-    passed = avg >= required and min_dim >= 3
-    gate = "accepted" if passed else ("review" if avg >= required - 1 else "rejected")
+
+    # Level-specific gate: L6 reflections MUST have reasoning >= 2
+    if data.level == "L6" and scores["reasoning"] < 2:
+        passed = False
+        gate = "rejected"
+    elif data.level in ("L4", "L5") and not data.subject:
+        passed = False
+        gate = "rejected"
+    else:
+        passed = avg >= required and min_dim >= 3
+        gate = "accepted" if passed else ("review" if avg >= required - 1 else "rejected")
+
     result = {"dimensions": scores, "avg": round(avg, 2), "min": min_dim, "gate": gate, "level": data.level}
     return result
 
@@ -208,6 +237,47 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
     h = content_hash(data.content)
 
     quality_result = _score_quality(data, h)
+    quality_gate = quality_result.get("gate", "accepted")
+
+    # Quality gate: reject/subject/empty content checks
+    #   "rejected" → warn and skip (too thin to be useful)
+    #   "review"   → warn but store (marginal, caller should improve)
+    if quality_gate == "rejected":
+        logger.warning(
+            "capture BLOCKED: quality gate rejected (avg=%.2f, min=%d, len=%d) agent=%s cat=%s: %.100s",
+            quality_result.get("avg", 0), quality_result.get("min", 0),
+            len(data.content or ""), data.agent_name, data.category, data.content or "",
+        )
+        raise ValueError(
+            f"记忆内容质量不足（平均分={quality_result.get('avg', 0):.1f}, "
+            f"最低维度={quality_result.get('min', 0)}）。"
+            f"请补充依据、上下文和数据后再存。"
+        )
+    if quality_gate == "review":
+        logger.warning(
+            "capture: quality gate review (avg=%.2f, min=%d) agent=%s cat=%s",
+            quality_result.get("avg", 0), quality_result.get("min", 0),
+            data.agent_name, data.category,
+        )
+
+    # Enforce: subject must be non-empty for L4+
+    if data.level in ("L4", "L5", "L6", "L7", "L9", "L10") and not data.subject:
+        logger.warning("capture: %s memory missing subject, content=%.60s", data.level, data.content or "")
+        data.subject = _make_subject(data.content, data.category, data.agent_name, data.owner)
+
+    # Auto-inject provenance if caller didn't provide it
+    if isinstance(data.metadata, dict):
+        if "source" not in data.metadata:
+            data.metadata["source"] = "capture_api"
+    else:
+        try:
+            existing_meta = json.loads(data.metadata or "{}")
+        except Exception:
+            existing_meta = {}
+        if "source" not in existing_meta:
+            existing_meta["source"] = "capture_api"
+        data.metadata = existing_meta
+
     quality_entry = {
         "value": quality_result,
         "_meta": {"version": 1, "written_at": now},
