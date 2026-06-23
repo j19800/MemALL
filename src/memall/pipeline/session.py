@@ -1,6 +1,3 @@
-import logging
-
-logger = logging.getLogger(__name__)
 """Session lifecycle management for MCP protocol.
 
 Provides session_start / session_end / session_summary for tracking
@@ -9,6 +6,10 @@ conversational sessions across Agents.
 Table: sessions(session_id TEXT PK, agent_name TEXT, started_at TEXT,
 ended_at TEXT, memory_count INTEGER, summary TEXT, status TEXT)
 """
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 import json
 import re

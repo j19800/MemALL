@@ -1,6 +1,4 @@
 """Federation MCP tools — query / write shared_memories, auto-inject, auto-extract.
-logger = logging.getLogger(__name__)
-
 
 Phase 8: MCP 对接 agent-hub.
 
