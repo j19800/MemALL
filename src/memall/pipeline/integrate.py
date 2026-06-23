@@ -1,12 +1,14 @@
 """L10 整合层 — 跨主题系统洞察。
 
 触发条件：
-  - 同一 agent_name 的 L9 蒸馏记忆中，跨 ≥2 个不同 category 的 L9 记忆
+  - 同一 agent_name 的 L9 蒸馏记忆中，跨 ≥2 个**真正不同**的 category
     且各 L9 记忆的 access_count 总和 ≥ 阈值。
   - 人工注入：通过 content 前缀 '[L10 ...]' 直接标记，管线不做二次推断。
 
 行为：
   - 将符合条件的跨领域 L9 内容合并为一条 L10 记忆。
+  - 自动生成有意义的 subject（包含 agent + 领域 + 时间）
+  - 语义去重：与最近 5 条 L10 做 Jaccard 相似度检查，阈值 0.7 以上跳过
   - 标记源 L9 记忆的 metadata.layer_source = 'integrated_into_L10'。
   - 建立 L10 → 各源 L9 的 'integrates' 边。
 """
@@ -22,10 +24,63 @@ from memall.core.db import get_conn
 _MIN_L9_COUNT = 2
 _MIN_L9_ACCESS_TOTAL = 5
 _L10_PREFIX_RE = re.compile(r'^\[(L10|L10\s.*?)\]', re.DOTALL)
+# Semantic dedup: skip if Jaccard similarity ≥ this threshold vs any recent L10
+_SIMILARITY_THRESHOLD = 0.7
 
 
 def _is_explicit_l10(content: str) -> bool:
     return bool(_L10_PREFIX_RE.match(content.strip()))
+
+
+def _jaccard(a: set, b: set) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _tokenize(text: str) -> set:
+    """Simple CJK-aware tokenization for dedup comparison."""
+    tokens = set()
+    for seg in re.findall(r'[一-鿿]+|[a-zA-Z]\w*|\d+', text):
+        tokens.add(seg.lower())
+    return tokens
+
+
+def _build_subject(agent: str, categories: list[str], source_count: int) -> str:
+    """Generate a descriptive subject line for the L10 memory."""
+    # Deduplicate and sort categories
+    seen = set()
+    cats = []
+    for c in categories:
+        c = c.strip()
+        if c and c not in seen:
+            seen.add(c)
+            cats.append(c)
+    cat_str = " + ".join(cats[:3])
+    if len(cats) > 3:
+        cat_str += f" +{len(cats)-3}"
+    return f"[L10] {agent} · {cat_str} · {source_count}条融合"
+
+
+def _recent_l10_similar(conn, merged_content: str, agent: str,
+                         threshold: float = _SIMILARITY_THRESHOLD) -> int | None:
+    """Check if near-duplicate L10 exists already.
+
+    Compares content tokens via Jaccard against the most recent 5 L10s
+    for this agent. Returns the existing memory ID if similar enough.
+    """
+    new_tokens = _tokenize(merged_content)
+    recent = conn.execute(
+        "SELECT id, content FROM memories WHERE level = 'L10' AND agent_name = ? "
+        "ORDER BY created_at DESC LIMIT 5",
+        (agent,),
+    ).fetchall()
+    for r in recent:
+        existing_tokens = _tokenize(r["content"])
+        sim = _jaccard(new_tokens, existing_tokens)
+        if sim >= threshold:
+            return r["id"]
+    return None
 
 
 def integrate_step(access_total_threshold: int = _MIN_L9_ACCESS_TOTAL,
@@ -50,8 +105,14 @@ def integrate_step(access_total_threshold: int = _MIN_L9_ACCESS_TOTAL,
 
         integrated = 0
         scanned_agents = 0
+        skipped_no_cross = 0
+        skipped_duplicate = 0
 
         for agent, mems in by_agent.items():
+            # Skip "unknown" agent — meaningless for cross-domain insights
+            if agent in ("unknown", "", "system"):
+                continue
+
             scanned_agents += 1
             by_cat: dict = defaultdict(list)
             for m in mems:
@@ -76,9 +137,12 @@ def integrate_step(access_total_threshold: int = _MIN_L9_ACCESS_TOTAL,
                 reverse=True,
             )
             if len(candidate_cats) < 2:
-                # Fallback: when all access_count==0, pick the two largest categories
+                # Fallback: pick the two largest categories
                 fallback = sorted(by_cat.keys(), key=lambda c: len(by_cat[c]), reverse=True)[:2]
                 if len(fallback) < 2:
+                    continue
+                # Verify they're genuinely different (not variant of same domain)
+                if len(set(fallback)) < 2:
                     continue
                 candidate_cats = fallback
 
@@ -94,26 +158,45 @@ def integrate_step(access_total_threshold: int = _MIN_L9_ACCESS_TOTAL,
 
             source_ids = [t["id"] for t in targets]
             texts = [t["content"] for t in targets if t["content"]]
+            source_categories = list({t["category"] for t in targets if t["category"]})
+
+            # ✅ Genuine cross-domain check: ensure at least 2 different base categories
+            if len(set(source_categories)) < 2:
+                skipped_no_cross += 1
+                continue
+
             summary_text = summarize_extractive(texts, top_n=5, max_chars=3500)
 
             cat_counts: dict[str, int] = {}
             for m_cat in (m["category"] for m in targets if m["category"]):
-                # If category is already composite, take the first component
                 primary = m_cat.split("、")[0] if "、" in m_cat else m_cat
                 cat_counts[primary] = cat_counts.get(primary, 0) + 1
             best_cat = max(cat_counts, key=cat_counts.get) if cat_counts else "general"
+
+            # ✅ Generate meaningful subject
+            l10_subject = _build_subject(agent, source_categories, len(source_ids))
+
             merged = (
                 f"[L10 整合] {agent} 跨领域系统洞察（{best_cat}）：\n"
                 f"来源：{len(source_ids)} 条 L9 蒸馏\n"
+                f"领域：{', '.join(source_categories)}\n"
                 f"{summary_text}"
             )[:4000]
 
             ch = hashlib.sha256(merged.encode()).hexdigest()
+
+            # ✅ Semantic dedup: check against recent L10s
+            dup_id = _recent_l10_similar(conn, merged, agent)
+            if dup_id is not None:
+                skipped_duplicate += 1
+                continue
+
             existing = conn.execute(
                 "SELECT id FROM memories WHERE content_hash = ?",
                 (ch,),
             ).fetchone()
             if existing:
+                skipped_duplicate += 1
                 continue
 
             now = datetime.now(timezone.utc).isoformat()
@@ -124,11 +207,11 @@ def integrate_step(access_total_threshold: int = _MIN_L9_ACCESS_TOTAL,
             l10_project = proj_row["project"] if proj_row else ""
             conn.execute(
                 "INSERT INTO memories "
-                "(content, content_hash, level, category, agent_name, project, metadata, occurred_at, created_at, updated_at) "
-                "VALUES (?, ?, 'L10', ?, ?, ?, ?, ?, ?, ?)",
+                "(content, content_hash, level, category, agent_name, project, subject, metadata, occurred_at, created_at, updated_at) "
+                "VALUES (?, ?, 'L10', ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    merged, ch, best_cat, agent, l10_project,
-                    json.dumps({"layer_source": {"value": "integrate_auto_v1", "_meta": {"version": 1, "written_at": now}}}, ensure_ascii=False),
+                    merged, ch, best_cat, agent, l10_project, l10_subject,
+                    json.dumps({"layer_source": {"value": "integrate_auto_v2", "_meta": {"version": 1, "written_at": now}}}, ensure_ascii=False),
                     now, now, now,
                 ),
             )
@@ -160,9 +243,16 @@ def integrate_step(access_total_threshold: int = _MIN_L9_ACCESS_TOTAL,
             integrated += 1
 
         conn.commit()
+        detail = f"integrated={integrated}, scanned={scanned_agents}"
+        if skipped_no_cross:
+            detail += f", skipped_no_cross_domain={skipped_no_cross}"
+        if skipped_duplicate:
+            detail += f", skipped_duplicate={skipped_duplicate}"
         return {
             "scanned_agents": scanned_agents,
             "integrated": integrated,
+            "skipped_no_cross_domain": skipped_no_cross,
+            "skipped_duplicate": skipped_duplicate,
         }
     finally:
         conn.close()
