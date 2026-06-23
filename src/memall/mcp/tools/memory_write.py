@@ -1,14 +1,22 @@
 import json
+from memall.agent_memory import infer_project
 from memall.core.thin_waist import smart_store, store_batch, update
 
 
 def handle_smart_store(arguments: dict) -> str:
+    project = arguments.get("project", "")
+    if not project:
+        project = infer_project(
+            agent_name=arguments.get("agent_name", ""),
+            category=arguments.get("category", "general"),
+            content=arguments.get("content", ""),
+        )
     result = smart_store(
         content=arguments["content"],
         owner=arguments.get("owner", ""),
         agent_name=arguments.get("agent_name", ""),
         subject=arguments.get("subject", ""),
-        project=arguments.get("project", ""),
+        project=project,
         category=arguments.get("category", "general"),
         level=arguments.get("level", "P2"),
         dedup_threshold=arguments.get("dedup_threshold", 0.85),

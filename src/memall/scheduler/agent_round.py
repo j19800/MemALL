@@ -71,11 +71,11 @@ def notify_pending_tasks(agent_name: str) -> list[dict]:
             conn.execute(
                 """INSERT INTO memories
                    (content, content_hash, level, owner, agent_name, subject,
-                    category, summary, occurred_at, created_at, updated_at,
+                    category, project, summary, occurred_at, created_at, updated_at,
                     supersedes, confidence, visibility, metadata, arc_status)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (content, h, "P2", agent_name, agent_name,
-                 f"待办: {t['subject']}", "task_pending", "",
+                 f"待办: {t['subject']}", "task_pending", "", "",
                  now.isoformat(), now.isoformat(), now.isoformat(),
                  None, 0.5, "private", str(rem_meta).replace("'", '"'), "open"),
             )
