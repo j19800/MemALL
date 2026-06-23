@@ -27,26 +27,21 @@ _CJK_CHARS_RE = re.compile(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]')
 
 
 def _cjk_aware_tokenizer(text: str):
-    """Tokenize text for TF-IDF with CJK character bigrams.
+    """Tokenize text for TF-IDF with jieba Chinese word segmentation.
 
-    Standard ``TfidfVectorizer`` uses ``token_pattern=r'(?u)\\b\\w+\\b'`` which
-    groups consecutive CJK characters into a single token (because ``\b``
-    does not separate them).  This makes Chinese text effectively
-    unsearchable via vector similarity.
-
-    This tokenizer splits CJK runs into character unigrams + bigrams so
-    that a query like ``南海归墟`` shares character-level signals AND
-    two-character phrase signals (``南海``, ``归墟``) with stored content.
+    Replaces the old unigram+bigram approach with proper word segmentation,
+    reducing vocabulary noise and improving semantic signal density.
     """
     tokens = []
-    for token in re.findall(r'(?u)\w+', text.lower()):
-        if _CJK_CHARS_RE.search(token):
-            chars = list(token)
-            tokens.extend(chars)  # unigrams
-            for i in range(len(chars) - 1):
-                tokens.append(chars[i] + chars[i + 1])  # bigrams
-        elif len(token) > 1 or token.isdigit():
-            tokens.append(token)
+    for segment in re.findall(r'[一-鿿㐀-䶿豈-﫿]+|[a-zA-Z][a-zA-Z0-9_]*|\d+', text.lower()):
+        if re.match(r'[\u4e00-\u9fff]', segment):
+            import jieba
+            for w in jieba.lcut(segment):
+                w = w.strip()
+                if w:
+                    tokens.append(w)
+        elif len(segment) > 1 or segment.isdigit():
+            tokens.append(segment)
     return tokens
 
 
