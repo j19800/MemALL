@@ -1,8 +1,5 @@
-import logging
 """
 Phase 11: Automatic Forgetting Mechanism
-logger = logging.getLogger(__name__)
-
 
 TTL expiration cleanup, low-value memory decay, preview/review,
 database statistics, and combined forget step.
@@ -21,6 +18,10 @@ Level-based TTL (forget_expired):
   P3    | 45
   P4    | 30
 """
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 import json
 from datetime import datetime, timezone, timedelta

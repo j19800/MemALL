@@ -1,7 +1,4 @@
-import logging
 """FAISS vector search provider — Phase 2.
-logger = logging.getLogger(__name__)
-
 
 Implements ``SearchProvider`` using Facebook AI Similarity Search (FAISS).
 Designed as an upgrade path when the knowledge base exceeds sqlite-vec's
@@ -11,6 +8,10 @@ Gracefully degrades when FAISS is not installed (returns error dicts
 instead of crashing), allowing the application to function with other
 providers.
 """
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 import json
 import os

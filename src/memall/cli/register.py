@@ -1,12 +1,12 @@
-import logging
-"""
-memall register --agent: manual agent registration for setup --all undetected agents.
-logger = logging.getLogger(__name__)
-
+"""memall register --agent: manual agent registration for setup --all undetected agents.
 
 Creates registration files in ~/.memall/agents/, supports MCP and HTTP agent types.
 Registered agents are visible to `memall doctor` for connection status checks.
 """
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 import json
 import sys

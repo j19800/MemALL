@@ -1,8 +1,5 @@
-import logging
 """
 Phase 12: AI Adaptive Subsystem (P2)
-logger = logging.getLogger(__name__)
-
 
 Four-in-one adaptive pipeline:
 - AdaptiveCleaner: adjusts cleaning strategy based on memory growth rate
@@ -10,6 +7,10 @@ Four-in-one adaptive pipeline:
 - AdaptiveDistiller: adjusts distillation frequency based on volume + velocity
 - adaptive_step: runs all three; adaptive_report: generates status summary
 """
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 import hashlib
 import re

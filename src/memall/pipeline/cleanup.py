@@ -1,11 +1,12 @@
-import logging
 """Metadata cleanup step.
-logger = logging.getLogger(__name__)
-
 
 Migrates bare metadata values to versioned format, prunes stale entries,
 and enforces expiry rules. Runs as part of the pipeline after enrich.
 """
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 import json
 from datetime import datetime, timezone, timedelta
