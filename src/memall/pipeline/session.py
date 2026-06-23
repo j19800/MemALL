@@ -11,6 +11,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+import hashlib
 import json
 import re
 import uuid
@@ -43,70 +44,149 @@ def _ensure_sessions_table(conn):
 
 
 def _mark_session_inline(conn, session_id: str) -> None:
-    """Inline session-end logic: marks session as ended, counts memories, creates L4 if > 3.
-
-    Uses the provided connection (same as caller) to avoid SQLite lock
-    from cross-connection writes that session_end() would trigger.
-    """
+    """Inline session-end logic: marks session as ended, counts memories, creates L4 if > 3."""
     row = conn.execute(
         "SELECT started_at, agent_name, status FROM sessions WHERE session_id = ?",
         (session_id,),
     ).fetchone()
     if not row or row["status"] == "ended":
         return
-    now = datetime.now(timezone.utc).isoformat()
-    started_at = row["started_at"]
-    agent_name = row["agent_name"]
+    _harvest_session(conn, session_id, row["started_at"], row["agent_name"], end_session=True)
 
-    # Count memories since session started
+
+def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
+                     end_session: bool = False) -> dict:
+    """Count a session's memories and generate L4/L6 if missing. Does NOT end session by default.
+
+    Args:
+        conn: DB connection (shared with caller).
+        session_id: The session to process.
+        started_at: Session start timestamp.
+        agent_name: Agent name for memory queries.
+        end_session: If True, also mark session as ended (legacy _mark_session_inline behavior).
+
+    Returns:
+        dict with keys ``memory_count``, ``l4_created``, ``l6_created``.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    result = {"memory_count": 0, "l4_created": False, "l6_created": False}
+
     where = ["created_at >= ?", "agent_name = ?"]
     params = [started_at, agent_name]
     count = conn.execute(
         f"SELECT COUNT(*) FROM memories WHERE {' AND '.join(where)}", params
     ).fetchone()[0]
+    result["memory_count"] = count
 
-    # Update session
     cats = conn.execute(
         f"SELECT category, COUNT(*) as cnt FROM memories WHERE {' AND '.join(where)} GROUP BY category ORDER BY cnt DESC LIMIT 3",
         params,
     ).fetchall()
     cat_summary = ", ".join([f"{r['category']}({r['cnt']})" for r in cats])
     summary = f"[{agent_name}] {count} memories in {cat_summary}"[:500]
-    conn.execute(
-        "UPDATE sessions SET ended_at = ?, memory_count = ?, summary = ?, status = 'ended' WHERE session_id = ?",
-        (now, count, summary, session_id),
-    )
 
-    # L4 session memory when count > 3 (inline insert, avoid capture() which opens new conn)
-    if count > 3:
-        decision_rows = conn.execute(
-            f"SELECT content FROM memories WHERE {' AND '.join(where)} AND category = 'decision' ORDER BY created_at DESC LIMIT 3",
-            params,
-        ).fetchall()
-        key_decisions = [r["content"][:100] for r in decision_rows]
-        decision_text = ""
-        if key_decisions:
-            decision_text = "；".join(d[:80] for d in key_decisions[:3] if d)
-        parts = [f"[L4 会话] {agent_name} · {count}条记忆 · {cat_summary}"]
-        if decision_text:
-            parts.append(f"关键决策：{decision_text}")
-        l4_content = "。".join(parts)
-        import hashlib
-        ch = hashlib.sha256(l4_content.encode()).hexdigest()
-        # Infer project from session memories (majority vote)
-        project_row = conn.execute(
-            f"SELECT project, COUNT(*) as cnt FROM memories WHERE {' AND '.join(where)} "
-            f"AND project IS NOT NULL AND project != '' GROUP BY project ORDER BY cnt DESC LIMIT 1",
-            params,
-        ).fetchone()
-        session_project = project_row["project"] if project_row else ""
+    # Infer project from session memories
+    project_row = conn.execute(
+        f"SELECT project, COUNT(*) as cnt FROM memories WHERE {' AND '.join(where)} "
+        f"AND project IS NOT NULL AND project != '' GROUP BY project ORDER BY cnt DESC LIMIT 1",
+        params,
+    ).fetchone()
+    session_project = project_row["project"] if project_row else ""
+
+    if end_session:
         conn.execute(
-            "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, project, summary, occurred_at, created_at, updated_at, confidence, visibility, metadata) "
-            "VALUES (?, ?, 'L4', 'system', ?, 'session', ?, ?, ?, ?, ?, ?, ?, ?)",
-            (l4_content[:2000], ch, agent_name, session_project, f"会话 {session_id} 摘要",
-             now, now, now, 0.5, "shared",
-             json.dumps({"session_id": session_id, "key_decisions": key_decisions})),
+            "UPDATE sessions SET ended_at = ?, memory_count = ?, summary = ?, status = 'ended' WHERE session_id = ?",
+            (now, count, summary, session_id),
         )
+    else:
+        conn.execute(
+            "UPDATE sessions SET memory_count = ?, summary = ? WHERE session_id = ?",
+            (count, summary, session_id),
+        )
+
+    # L4 session memory when count > 3 (generate only if not already existing)
+    if count > 3:
+        existing_l4 = conn.execute(
+            "SELECT id FROM memories WHERE level = 'L4' AND category = 'session' "
+            "AND json_extract(metadata, '$.session_id') = ? LIMIT 1",
+            (session_id,),
+        ).fetchone()
+
+        if not existing_l4:
+            decision_rows = conn.execute(
+                f"SELECT content FROM memories WHERE {' AND '.join(where)} AND category = 'decision' ORDER BY created_at DESC LIMIT 3",
+                params,
+            ).fetchall()
+            key_decisions = [r["content"][:100] for r in decision_rows]
+            decision_text = ""
+            if key_decisions:
+                decision_text = "；".join(d[:80] for d in key_decisions[:3] if d)
+            parts = [f"[L4 会话] {agent_name} · {count}条记忆 · {cat_summary}"]
+            if decision_text:
+                parts.append(f"关键决策：{decision_text}")
+
+            # Continuation note
+            last_row = conn.execute(
+                f"SELECT content FROM memories WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT 1",
+                params,
+            ).fetchone()
+            continuation_note = ""
+            if last_row:
+                text = last_row["content"]
+                for pat in [r'下一步[：:\s]*(.{5,80})', r'继续[：:\s]*(.{5,80})', r'next[：:\s]*(.{5,80})']:
+                    m = re.search(pat, text, re.I)
+                    if m:
+                        continuation_note = m.group(1).strip()[:100]
+                        break
+            if continuation_note:
+                parts.append(f"后续：{continuation_note}")
+
+            l4_content = "。".join(parts)
+            ch = hashlib.sha256(l4_content.encode()).hexdigest()
+
+            # Participants
+            participant_rows = conn.execute(
+                f"SELECT DISTINCT agent_name FROM memories WHERE {' AND '.join(where)} "
+                f"AND agent_name IS NOT NULL AND agent_name != ''",
+                params,
+            ).fetchall()
+            participants = [r["agent_name"] for r in participant_rows]
+
+            conn.execute(
+                "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, project, summary, occurred_at, created_at, updated_at, confidence, visibility, metadata) "
+                "VALUES (?, ?, 'L4', 'system', ?, 'session', ?, ?, ?, ?, ?, ?, ?, ?)",
+                (l4_content[:2000], ch, agent_name, session_project,
+                 f"会话 {session_id} 摘要", now, now, now, 0.5, "shared",
+                 json.dumps({"session_id": session_id, "key_decisions": key_decisions,
+                             "participants": participants, "continuation_note": continuation_note,
+                             "source": "pipeline_harvest"})),
+            )
+            result["l4_created"] = True
+
+        # L6 auto-reflection (also check for duplicate)
+        l6_parts = [f"会话总结：本次会话记录了 {count} 条记忆"]
+        if cat_summary:
+            l6_parts.append(f"集中在 {cat_summary}")
+        l6_content = "。".join(l6_parts) + "。"
+        l6_ch = hashlib.sha256(l6_content.encode()).hexdigest()
+
+        existing_l6 = conn.execute(
+            "SELECT id FROM memories WHERE content_hash = ?", (l6_ch,)
+        ).fetchone()
+        if not existing_l6:
+            conn.execute(
+                "INSERT OR IGNORE INTO memories "
+                "(content, content_hash, level, owner, agent_name, category, project, summary, "
+                "occurred_at, created_at, updated_at, confidence, visibility, metadata) "
+                "VALUES (?, ?, 'L6', 'system', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?, ?)",
+                (l6_content[:2000], l6_ch, agent_name, session_project,
+                 f"会话 {session_id} 自动反思", now, now, now, 0.6, "private",
+                 json.dumps({"session_id": session_id, "source": "pipeline_harvest"})),
+            )
+            result["l6_created"] = True
+
+    return result
+
 
 
 def _build_narrative_greeting(data: dict, agent_name: str) -> str:
@@ -918,6 +998,47 @@ def session_end(session_id: str, auto_extract: bool = False) -> dict:
             logger.warning("session.py: silent error", exc_info=True)
 
         return result
+    finally:
+        conn.close()
+
+
+# ── Pipeline harvest step ─────────────────────────────────────────────
+
+
+def harvest_step() -> dict:
+    """Pipeline step: scan active sessions, generate L4/L6 for sessions
+    that have memories but no output yet.
+
+    Does NOT end sessions — only generates missing L4/L6 output.
+    Human-friendly: if you return hours later, your session is still active.
+    """
+    conn = get_conn()
+    try:
+        _ensure_sessions_table(conn)
+        active = conn.execute(
+            "SELECT session_id, started_at, agent_name FROM sessions WHERE status = 'active'"
+        ).fetchall()
+        harvested = 0
+        l4_count = 0
+        l6_count = 0
+        for row in active:
+            sid = row["session_id"]
+            started_at = row["started_at"]
+            agent_name = row["agent_name"]
+            if not agent_name:
+                continue
+            result = _harvest_session(conn, sid, started_at, agent_name, end_session=False)
+            conn.commit()
+            if result["l4_created"] or result["l6_created"]:
+                harvested += 1
+                l4_count += 1 if result["l4_created"] else 0
+                l6_count += 1 if result["l6_created"] else 0
+        return {
+            "scanned": len(active),
+            "harvested": harvested,
+            "l4_created": l4_count,
+            "l6_created": l6_count,
+        }
     finally:
         conn.close()
 

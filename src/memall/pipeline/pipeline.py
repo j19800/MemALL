@@ -27,6 +27,7 @@ from .epoch import epoch_step
 from .convergence import convergence_step, resolve_pending_deliberations
 from .improve import improve_step
 from .distill_l7 import distill_l7_step
+from .session import harvest_step
 from memall.core.db import get_conn
 from memall.mcp.hooks import HookRegistry, HOOK_STOP
 
@@ -289,6 +290,7 @@ _PIPELINE_STEPS = [
     ("link",            link_step,             QUALITY_GATES.get("link")),
     ("decay",           decay_step,            None),
     ("backup",          backup_step,           None),
+    ("session",         harvest_step,          None),
     ("embed_index",     embed_index_step,      None),
     ("reflect",         reflect_step,          QUALITY_GATES.get("reflect")),
     ("distill_l7",      distill_l7_step,       None),
