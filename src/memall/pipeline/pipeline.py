@@ -92,6 +92,9 @@ def _check_quality_gate(step_name: str, entry: dict, gate: dict) -> dict:
     records_in = entry.get("records_in", 0)
     records_out = entry.get("records_out", 0)
     result = entry.get("result", 0)
+    # Normalize: some steps return dict instead of int
+    if isinstance(result, dict):
+        result = _coerce_int(result)
 
     if "min_input" in gate:
         checks["min_input"] = records_in >= gate["min_input"]

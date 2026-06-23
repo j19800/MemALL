@@ -15,7 +15,6 @@
 
 import hashlib
 import json
-from memall.core.nlp import summarize_extractive
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -157,7 +156,6 @@ def integrate_step(access_total_threshold: int = _MIN_L9_ACCESS_TOTAL,
                 continue
 
             source_ids = [t["id"] for t in targets]
-            texts = [t["content"] for t in targets if t["content"]]
             source_categories = list({t["category"] for t in targets if t["category"]})
 
             # ✅ Genuine cross-domain check: ensure at least 2 different base categories
@@ -165,7 +163,19 @@ def integrate_step(access_total_threshold: int = _MIN_L9_ACCESS_TOTAL,
                 skipped_no_cross += 1
                 continue
 
-            summary_text = summarize_extractive(texts, top_n=5, max_chars=3500)
+            # Show samples from each category (first 2 L9s per category, first 200 chars each)
+            sample_lines = []
+            seen_cats = set()
+            for t in targets:
+                cat = t["category"] or "general"
+                if cat not in seen_cats and len(sample_lines) < 6:
+                    seen_cats.add(cat)
+                    text = (t["content"] or "").strip()[:200]
+                    if text:
+                        sample_lines.append(f"[{cat}] {text}")
+                if len(sample_lines) >= 4:
+                    break
+            summary_text = "\n".join(sample_lines) if sample_lines else ""
 
             cat_counts: dict[str, int] = {}
             for m_cat in (m["category"] for m in targets if m["category"]):

@@ -5,7 +5,6 @@ import re
 from datetime import datetime, timezone
 from collections import Counter, defaultdict
 from memall.core.db import get_conn
-from memall.core.nlp import summarize_extractive
 logger = logging.getLogger(__name__)
 
 
@@ -29,13 +28,11 @@ def distill_step() -> dict:
         for key, mems in groups.items():
             if len(mems) < 3:
                 continue
-            texts = [m["summary"] or m["content"][:500] for m in mems[:10]]
-            merged = summarize_extractive(texts, top_n=5, max_chars=2000)
-
-            # Extract distinctive keywords from source memories
             mem_ids = [m["id"] for m in mems]
             source_ids = mem_ids[:10]
             ph = ",".join("?" * len(source_ids))
+
+            # Extract distinctive keywords from source memories
             source_content = conn.execute(
                 f"SELECT content FROM memories WHERE id IN ({ph})", source_ids
             ).fetchall()
@@ -49,12 +46,24 @@ def distill_step() -> dict:
                     if top_words:
                         distinctive_topics = "、".join(top_words)
 
-            header = f"[L9 蒸馏] {key[0]} 在 {key[1]} 领域的 {len(mems)} 条记忆"
-            if len(mems) != len(texts):
-                header += f"（样本{len(texts)}条）"
+            # Get latest 2 source memories as samples
+            samples = conn.execute(
+                f"SELECT content FROM memories WHERE id IN ({ph}) ORDER BY id DESC LIMIT 2",
+                source_ids
+            ).fetchall()
+            sample_texts = []
+            for s in samples:
+                line = (s["content"] or "").strip()[:200]
+                if line:
+                    sample_texts.append(line)
+
+            header = f"[L9 聚合] {key[0]} 在 {key[1]} 领域共 {len(mems)} 条"
             if distinctive_topics:
-                header += f"\n关键话题：{distinctive_topics}"
-            merged_content = f"{header}\n{merged}"
+                header += f"\n关键词：{distinctive_topics}"
+            if sample_texts:
+                header += "\n" + "\n".join(f"• {t}" for t in sample_texts[:2])
+
+            merged_content = header
             if distinctive_topics:
                 l9_subject = f"[L9] {key[0]} · {key[1]} · {distinctive_topics}"
             else:
