@@ -470,333 +470,58 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 except Exception:
                     logger.warning("session.py: silent error", exc_info=True)
 
-            # ── Formatted injection text (token-efficient, no emoji) ──
+                        # ── Formatted injection (4 sections, ~800 chars) ──
             fmt_parts = [
-                "[INSTRUCTION] 你必须在第一段回复中向用户概括以下内容，不能只说'收到了'。"
-                " 当用户问开放性问题（'最近如何'、'进展'、'我们到哪了'）时，先调用 timeline() 或 memall_ask(mode='pattern') 获取上下文再回应。",
+                "[CONTEXT] 会话上下文（首段先概括以下信息）：",
             ]
 
-            # [PROFILE] section from identity_traits
+            # [PROFILE]
             id_traits = injection.get("identity_traits", {})
             l1_list = id_traits.get("l1_identity", [])
             l7_list = id_traits.get("l7_preferences", [])
             psum = id_traits.get("persona_summary", {})
             if l1_list or l7_list or psum:
-                profile_lines = ["[PROFILE] 当前 Agent 画像"]
+                parts = ["[PROFILE]"]
                 if l1_list:
-                    l1_text = " · ".join(t["snippet"] for t in l1_list[:4] if t.get("snippet"))
-                    profile_lines.append(f"  L1身份: {l1_text}")
+                    parts.append("L1=" + "·".join(t["snippet"] for t in l1_list[:3] if t.get("snippet")))
                 if l7_list:
-                    l7_text = " · ".join(t["snippet"] for t in l7_list[:4] if t.get("snippet"))
-                    profile_lines.append(f"  L7偏好: {l7_text}")
+                    parts.append("L7=" + "·".join(t["snippet"] for t in l7_list[:3] if t.get("snippet")))
                 if psum.get("prototype_cn"):
-                    parts = [f"认知类型: {psum['prototype_cn']}（{psum.get('prototype_en','')}）"]
-                    cs = psum.get("certainty_score", 0)
-                    if cs:
-                        parts.append(f"自信指数 {cs*100:.0f}%")
-                    dr = psum.get("decision_ratio", 0)
-                    if dr:
-                        parts.append(f"决策密度 {dr*100:.0f}%")
-                    db = psum.get("domain_breadth", 0)
-                    if db:
-                        parts.append(f"知识广度 {db} 个领域")
-                    profile_lines.append("  " + " · ".join(parts))
-                fmt_parts.append("")
-                fmt_parts.extend(profile_lines)
+                    parts.append(f"类型:{psum['prototype_cn']}")
+                fmt_parts.append(" ".join(parts))
 
-                # [L7约束] — derive behavioral constraints from preferences
-                if l7_list:
-                    l7_constraints = []
-                    for t in l7_list[:5]:
-                        snip = (t.get("snippet") or "").lower()
-                        if not snip:
-                            continue
-                        # Map preference keywords to behavioral rules
-                        if any(kw in snip for kw in ["sqlite", "postgresql", "零依赖", "部署"]):
-                            l7_constraints.append("候选方案优先本地零依赖，避免引入外部服务")
-                        elif any(kw in snip for kw in ["简洁", "精简", "高效", "最小", "轻量"]):
-                            l7_constraints.append("方案应优先选择最简洁的实现路径")
-                        elif any(kw in snip for kw in ["python", "pandas", "numpy"]):
-                            l7_constraints.append("实现优先用 Python 生态，尽量减少新语言/工具引入")
-                        elif any(kw in snip for kw in ["不用", "避免", "不要", "排斥"]):
-                            l7_constraints.append("避免使用你表达过排斥的技术方案")
-                        elif any(kw in snip for kw in ["mcp", "protocol", "协议"]):
-                            l7_constraints.append("优先以 MCP 协议为标准接口")
-                    if l7_constraints:
-                        fmt_parts.append(f"[L7约束] 基于你的偏好，本次会话应遵循：")
-                        for c in l7_constraints:
-                            fmt_parts.append(f"  ⚠️ {c}")
-            if p0_count > 0:
-                fmt_parts.append(f"[ALERT] 有 {p0_count} 条 P0 紧急记忆未处理")
+            # [TODO]
             if l5_todos:
-                fmt_parts.append(f"[TODO] 活跃待办 ({len(l5_todos)}项)")
-                for t in l5_todos[:10]:
-                    fmt_parts.append(f"  - {t['subject'][:60]} {t['level_tag']}")
-            if l4_summaries:
-                fmt_parts.append("")
-                fmt_parts.append(f"[SUMMARY] 最近会话")
-                for s in l4_summaries:
-                    ds = (s["created_at"] or "")[:10]
-                    dec = s["key_decisions"]
-                    note = s["continuation_note"]
-                    line = f"  [{ds}] {s['summary'][:80]}"
-                    if dec:
-                        line += " | " + " | ".join(d[:30] for d in dec[:2])
-                    if note:
-                        line += " > " + note[:40]
-                    fmt_parts.append(line)
+                items = " | ".join(t["subject"][:40] for t in l5_todos[:5])
+                fmt_parts.append(f"[TODO] {items}")
 
-            # [TIMELINE] top 5 memories by temporal_weight
-            timeline_rows = conn.execute("""
-                SELECT id, level, category, subject, content, agent_name, created_at, metadata
-                FROM memories WHERE LENGTH(TRIM(content)) > 5
-                ORDER BY
-                  CASE WHEN json_extract(metadata, '$.temporal_weight') IS NOT NULL
-                    THEN json_extract(metadata, '$.temporal_weight') ELSE 0.0 END DESC,
-                  created_at DESC
-                LIMIT 5
-            """).fetchall()
-            if timeline_rows:
-                fmt_parts.append("")
-                fmt_parts.append(f"[TIMELINE] 最近 {len(timeline_rows)} 条记忆")
-                for t in timeline_rows:
-                    raw = t["created_at"] or ""
-                    ts = raw[5:10] + " " + raw[11:16] if len(raw) > 16 else raw[5:19]
-                    lvl = t["level"] or ""
-                    cat = (t["category"] or "")[:10]
-                    subj = (t["subject"] or t["content"] or "")[:60]
-                    agent = t["agent_name"] or ""
-                    line = f"  [{ts}] {lvl} {cat}"
-                    if agent:
-                        line += f" @{agent}"
-                    line += f" · {subj}"
-                    fmt_parts.append(line)
-
-            # [CONTINUITY] session continuity bridge
+            # [CONTINUITY]
             if agent_name:
                 try:
-                    # Reuse pre-queried data
                     h = narrative_data.get("hours_elapsed")
-                    new_count = narrative_data.get("new_memories", 0)
+                    nc = narrative_data.get("new_memories", 0)
                     if h is not None:
-                        # New epochs since previous session
-                        new_epochs = conn.execute(
-                            "SELECT COUNT(*) as c FROM epochs WHERE "
-                            "agent_name = ? AND started_at > ?",
-                            (agent_name, prev_session["ended_at"]),
-                        ).fetchone()["c"] if prev_session else 0
-                        # New L4 decisions since previous session
-                        new_decisions = conn.execute(
-                            "SELECT COUNT(*) as c FROM memories WHERE "
-                            "agent_name = ? AND level = 'L4' AND category = 'decision' AND created_at > ?",
-                            (agent_name, prev_session["ended_at"]),
-                        ).fetchone()["c"] if prev_session else 0
-                        # Latest narrative (weekly or phase)
-                        latest_narrative = conn.execute(
-                            "SELECT narrative_text, narrative_type FROM narratives "
-                            "WHERE agent_name = ? ORDER BY generated_at DESC LIMIT 1",
-                            (agent_name,),
-                        ).fetchone()
-                        continuity_parts = [""]
-                        time_str = f"距上次会话约 {h} 小时"
-                        if h > 48:
-                            time_str = f"距上次会话约 {h // 24} 天"
-                        cont = time_str
-                        if new_count > 0:
-                            cont += f"，期间新增 {new_count} 条记忆"
-                        if new_epochs > 0:
-                            cont += f"，进入 {new_epochs} 个新阶段"
-                        if new_decisions > 0:
-                            cont += f"，做出 {new_decisions} 个关键决策"
-                        if latest_narrative and latest_narrative["narrative_text"]:
-                            ntype = {"weekly": "周报", "monthly": "月报", "phase": "阶段"}.get(
-                                latest_narrative["narrative_type"], "叙事"
-                            )
-                            nsum = latest_narrative["narrative_text"][:100].replace("\n", " ")
-                            cont += f"\n  最新{ntype}: {nsum}"
-                        continuity_parts.append(f"[CONTINUITY] {cont}")
-                        fmt_parts.extend(continuity_parts)
+                        cont = f"[CONTINUITY] 距上次约{h if h<48 else h//24}{'h' if h<48 else 'd'}"
+                        if nc > 0:
+                            cont += f" +{nc}mem"
+                        if prev_session:
+                            nd = conn.execute(
+                                "SELECT COUNT(*) FROM memories WHERE agent_name=? AND level='L4' AND category='decision' AND created_at>?",
+                                (agent_name, prev_session["ended_at"]),
+                            ).fetchone()[0]
+                            if nd > 0:
+                                cont += f" {nd}dec"
+                        fmt_parts.append(cont)
                 except Exception:
-                    logger.warning("session.py: silent error", exc_info=True)
+                    pass
 
-            # [EPOCH] current active epoch
-            if agent_name:
-                epoch_row = conn.execute(
-                    "SELECT label, started_at FROM epochs "
-                    "WHERE agent_name = ? AND ended_at IS NULL "
-                    "ORDER BY started_at DESC LIMIT 1",
-                    (agent_name,),
-                ).fetchone()
-                if epoch_row and epoch_row["label"]:
-                    narrative_data["epoch_label"] = epoch_row["label"]
-                    fmt_parts.append("")
-                    fmt_parts.append(f"[EPOCH] 当前阶段: {epoch_row['label'][:60]} (始于 {epoch_row['started_at'][:10]})")
-
-            # [ARC STATUS] open decisions
-            if agent_name:
-                open_arcs = conn.execute(
-                    "SELECT id, subject, arc_status, created_at FROM memories "
-                    "WHERE level = 'L4' AND arc_status IS NOT NULL AND arc_status != 'closed' "
-                    "AND agent_name = ? ORDER BY created_at DESC LIMIT 5",
-                    (agent_name,),
-                ).fetchall()
-                if open_arcs:
-                    narrative_data["open_arcs_count"] = len(open_arcs)
-                    fmt_parts.append("")
-                    fmt_parts.append(f"[ARC STATUS] 未闭合决策 ({len(open_arcs)}条)")
-                    stale_cutoff = (datetime.now(timezone.utc) - timedelta(days=21)).isoformat()
-                    for a in open_arcs:
-                        badge = "进行中" if a["arc_status"] == "in_progress" else "无进展"
-                        if a["arc_status"] == "open" and (a["created_at"] or "") < stale_cutoff:
-                            badge = "已搁置(>21d)"
-                        fmt_parts.append(f"  · {a['subject'][:60]} [{badge}]")
-
-            # [DISCUSSION] active L5 discussions
-            from memall.pipeline.convergence import list_active_discussions
-            active_topics = list_active_discussions()
-            if active_topics:
-                fmt_parts.append("")
-                fmt_parts.append(f"[DISCUSSION] 活跃讨论 ({len(active_topics)}个话题)")
-                for t in active_topics:
-                    participants = t.get("participants") or []
-                    responded = t.get("responded_agents") or []
-                    response_count = t.get("response_count") or 0
-                    unconfirmed = [a for a in participants if a not in responded]
-                    if unconfirmed:
-                        badge = f"待回复: {' '.join(unconfirmed)}"
-                    else:
-                        badge = "全员已回复"
-                    title = t.get("subject", "(无标题)")[:50]
-                    fmt_parts.append(f"  · {title} [{response_count}/{len(participants)}] {badge}")
-
-            # [TASKS] active L5 tasks assigned to this agent (execution-side closure)
-            if agent_name:
-                try:
-                    from .task_lifecycle import list_active_tasks, list_blocked_tasks
-                    my_tasks = list_active_tasks(agent_name)
-                    if my_tasks:
-                        fmt_parts.append("")
-                        fmt_parts.append(f"[TASKS] ????? ({len(my_tasks)}?)")
-                        for t in my_tasks:
-                            ack = "???" if t.get("acknowledged_at") else "???"
-                            age = t.get("created_at", "")[:10]
-                            fmt_parts.append(f"  ? #{t['task_id']} {t['subject'][:50]} [{ack}] ({age})")
-                    blocked = list_blocked_tasks(agent_name)
-                    if blocked:
-                        fmt_parts.append(f"[TASKS] ??? ({len(blocked)}?, ?????)")
-                        for b in blocked:
-                            fmt_parts.append(f"  ? #{b['task_id']} {b['subject'][:50]} ? {b.get('blocked_reason', '')[:60]}")
-                except Exception:
-                    logger.warning("session.py: silent error", exc_info=True)
-
-            if l3_workflows:
-                fmt_parts.append("")
-                fmt_parts.append(f"[WORKFLOW] 相关流程")
-                for w in l3_workflows:
-                    txt = w["summary"] or w["subject"]
-                    fmt_parts.append(f"  1. {w['subject'][:50]} — {txt[:100]}")
-
-            # [CORRECTIONS] active correction rules (personal + global)
-            if agent_name:
-                try:
-                    from .improve import get_active_corrections
-                    corrections = get_active_corrections(agent_name)
-                    if corrections:
-                        fmt_parts.append("")
-                        fmt_parts.append(f"━━━ 修正规则 ({len(corrections)}条) ━━━")
-                        # STRONG rules first (mandatory — must follow)
-                        strong = [c for c in corrections if c.get("severity", "SUGGEST") == "STRONG"]
-                        for c in strong:
-                            badge = "全局" if c["category"] == "global" else "个人"
-                            fmt_parts.append(f"⚠️  [必须遵守]{badge} {c['rule_text'][:120]}")
-                        # SUGGEST rules (advisory)
-                        suggest = [c for c in corrections if c.get("severity", "SUGGEST") != "STRONG"]
-                        for c in suggest:
-                            badge = "全局" if c["category"] == "global" else "个人"
-                            fmt_parts.append(f"💡  [建议]{badge} {c['rule_text'][:120]}")
-                        # Verification prompt
-                        if strong:
-                            fmt_parts.append(f"   ⚠️ 上述 {len(strong)} 条为硬性修正规则，本次会话必须遵守。")
-                            fmt_parts.append(f"   session_end 时将验证是否已落实，请主动避坑。")
-                except Exception:
-                    logger.warning("session.py: silent error", exc_info=True)
-
-            # [CROSS-AGENT] other agents' perspectives on related topics (Direction 3)
-            try:
-                cross_lines = _build_cross_agent_section(conn, agent_name)
-                if cross_lines:
-                    fmt_parts.append("")
-                    fmt_parts.extend(cross_lines)
-            except Exception:
-                logger.warning("session.py: silent error", exc_info=True)
-
-            # [WEEKLY] weekly narrative surfacing
-            try:
-                weekly = conn.execute(
-                    "SELECT narrative_text, generated_at, agent_name FROM narratives "
-                    "WHERE narrative_type = 'weekly' "
-                    "ORDER BY generated_at DESC LIMIT 1"
-                ).fetchone()
-                if weekly and weekly["narrative_text"]:
-                    raw = weekly["narrative_text"]
-                    # Remove leading bracketed tags like [周报]
-                    clean = re.sub(r'^\[[^\]]*\]\s*', '', raw)
-                    # Take first 120 chars as the gist
-                    gist = clean[:120].rsplit('。', 1)[0] + '。' if '。' in clean[:120] else clean[:120]
-                    fmt_parts.append("")
-                    fmt_parts.append(f"[WEEKLY] 本周回顾: {gist}")
-                    narrative_data["has_weekly"] = True
-            except Exception:
-                logger.warning("session.py: silent error", exc_info=True)
-
-            #[HEALTH] memory health snapshot
-            try:
-                h = collect_health()
-                health_line = f"  · 健康 {h['score']}/100 | 图谱 {h['graph_coverage_pct']}% | 反思 {h['reflection_pct']}% | 数据库 {h['db_size_mb']}MB"
-                if h['issues']:
-                    top_issues = h['issues'][:2]
-                    health_line += "\n  · " + " | ".join(f"⚠ {i}" for i in top_issues)
-                fmt_parts.append("")
-                fmt_parts.append(f"[HEALTH] {health_line}")
-            except Exception:
-                pass
-
-            # [PULSE] memory pulse — gentle nudge for stale P0/P1 items
-            try:
-                stale_items = conn.execute(
-                    "SELECT id, subject, level FROM memories "
-                    "WHERE level IN ('P0', 'P1') "
-                    "AND COALESCE(json_extract(metadata, '$.done'), 0) = 0 "
-                    "AND COALESCE(json_extract(metadata, '$.status.value'), 'active') != 'archived' "
-                    "AND subject NOT LIKE '[%' "  # skip system-internal tagged subjects
-                    "AND subject != '' "
-                    "AND agent_name NOT LIKE 't_%' "  # skip test agents
-                    "AND datetime(created_at) < datetime('now', '-2 days') "
-                    "ORDER BY level ASC, created_at ASC LIMIT 3"
-                ).fetchall()
-                if stale_items:
-                    pulse_parts = []
-                    for s in stale_items:
-                        tag = {"P0": "紧急", "P1": "重要"}.get(s["level"], "")
-                        pulse_parts.append(f"{tag}「{s['subject'][:40]}」")
-                    fmt_parts.append("")
-                    fmt_parts.append(f"[PULSE] 顺便一提: {'，'.join(pulse_parts)} 已经搁置好几天了")
-                    narrative_data["has_pulse"] = True
-            except Exception:
-                logger.warning("session.py: silent error", exc_info=True)
-
-            # ── [NARRATIVE] human-readable greeting (built last so all data is populated) ──
+            # [NARRATIVE] greeting
             narrative_line = _build_narrative_greeting(narrative_data, agent_name)
             if narrative_line:
-                # Insert right after INSTRUCTION line (index 0)
-                # Skip any blank lines after it
-                insert_idx = 1
-                while insert_idx < len(fmt_parts) and fmt_parts[insert_idx].strip() == "":
-                    insert_idx += 1
-                fmt_parts.insert(insert_idx, "")
-                fmt_parts.insert(insert_idx, narrative_line)
+                fmt_parts.insert(1, "")
+                fmt_parts.insert(1, narrative_line)
 
-            result["injection_formatted"] = "\n".join(fmt_parts)
+            result["injection_formatted"] = chr(10).join(fmt_parts)
 
         return result
     finally:
