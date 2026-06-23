@@ -1,6 +1,7 @@
 import logging
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from collections import Counter, defaultdict
 from memall.core.db import get_conn
@@ -30,8 +31,31 @@ def distill_step() -> dict:
                 continue
             texts = [m["summary"] or m["content"][:500] for m in mems[:10]]
             merged = summarize_extractive(texts, top_n=5, max_chars=2000)
-            merged_content = f"[L9 蒸馏] {key[0]} 在 {key[1]} 领域的 {len(mems)} 条记忆摘要：\n{merged}"
+
+            # Extract distinctive keywords from source memories
             mem_ids = [m["id"] for m in mems]
+            source_ids = mem_ids[:10]
+            ph = ",".join("?" * len(source_ids))
+            source_content = conn.execute(
+                f"SELECT content FROM memories WHERE id IN ({ph})", source_ids
+            ).fetchall()
+            all_text = " ".join(r["content"] for r in source_content if r["content"])
+            distinctive_topics = ""
+            if len(all_text) > 50:
+                words = re.findall(r'[一-鿿]{2,4}|[a-zA-Z]\w{2,}', all_text.lower())
+                if words:
+                    wf = Counter(w for w in words)
+                    top_words = [w for w, _ in wf.most_common(6) if wf[w] >= 2][:5]
+                    if top_words:
+                        distinctive_topics = "、".join(top_words)
+
+            header = f"[L9 蒸馏] {key[0]} 在 {key[1]} 领域的 {len(mems)} 条记忆"
+            if len(mems) != len(texts):
+                header += f"（样本{len(texts)}条）"
+            if distinctive_topics:
+                header += f"\n关键话题：{distinctive_topics}"
+            merged_content = f"{header}\n{merged}"
+            l9_subject = f"[L9] {key[0]} · {key[1]} · {len(mems)}条"
 
             # Majority project from source memories
             source_ids = mem_ids[:10]
@@ -42,7 +66,7 @@ def distill_step() -> dict:
             ch = hashlib.sha256(merged_content.encode()).hexdigest()
             cur = conn.execute(
                 "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, summary, created_at, updated_at, occurred_at, subject, project, trust_level, access_count, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (merged_content, ch, "L9", "", key[0], key[1], f"{len(mems)}条记忆蒸馏摘要", now, now, now, "", l9_project, 0, 0, "{}"),
+                (merged_content, ch, "L9", "", key[0], key[1], f"{len(mems)}条记忆蒸馏摘要", now, now, now, l9_subject, l9_project, 0, 0, "{}"),
             )
             if cur.rowcount == 0:
                 # Duplicate hash → record already exists, skip
