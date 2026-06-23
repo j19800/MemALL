@@ -89,7 +89,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS mem_vec USING vec0(
-    embedding float[256]
+    embedding float[512]
 );
 
 CREATE INDEX IF NOT EXISTS idx_memories_owner ON memories(owner);
