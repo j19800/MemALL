@@ -56,11 +56,13 @@ def _coerce_int(val) -> int:
         return val
     if isinstance(val, dict):
         # Try common keys
-        for k in ("processed", "count", "created", "total", "new"):
+        for k in ("processed", "count", "created", "total", "new",
+                  "personal_created", "global_created", "integrated"):
             v = val.get(k, None)
             if isinstance(v, int):
                 return v
-        return 0
+        # Fallback: return the dict itself
+        return val
     return 0
 
 
@@ -147,7 +149,7 @@ def _run_step(step_name: str, step_fn, step_results: dict,
         if quality_gate:
             entry["quality"] = _check_quality_gate(step_name, entry, quality_gate)
 
-        step_results[step_name] = _coerce_int(result)
+        step_results[step_name] = result  # store original result (int or dict)
         logger.info("Pipeline step %s: %dms, result=%s", step_name, elapsed_ms, entry["result"])
         return entry
     except Exception as e:

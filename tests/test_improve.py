@@ -144,9 +144,10 @@ def test_injection_corrections():
             result = session_start(agent_name="test_agent", auto_inject=True)
 
         formatted = result.get("injection_formatted", "")
-        assert "[CORRECTIONS]" in formatted, \
-            f"[CORRECTIONS] not found in injection:\n{formatted[:500]}"
-        print("  PASS test_injection_corrections (injection contains [CORRECTIONS])")
+        # Injection was trimmed from 19 to 4 sections; CORRECTIONS is removed
+        assert isinstance(formatted, str) and "[CONTEXT]" in formatted, \
+            f"Injection missing [CONTEXT] section:\n{formatted[:300]}"
+        print("  PASS test_injection_corrections (injection format ok)")
     finally:
         cleanup_temp_db(db_path, patcher)
 
