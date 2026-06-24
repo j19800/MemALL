@@ -559,11 +559,39 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                     tips = " · ".join(r.get("category", "") for r in reflections[:3])
                 fmt_parts.append(f"[CORRECTIONS] {tips}")
 
-            # [WORKFLOW] L3 workflow skills — available tools/routines
+            
+            # [LESSONS] L7 learned patterns (from L6 reflection distill)
+            l7_lessons = injection.get("l7_lessons", [])
+            if l7_lessons:
+                lessons_tips = " · ".join(l["lesson"][:80] for l in l7_lessons[:3])
+                fmt_parts.append(f"[LESSONS] {lessons_tips}")
+
+# [WORKFLOW] L3 workflow skills — available tools/routines
             skills = injection.get("workflow_skills", [])
             if skills:
                 names = " · ".join(s["subject"] for s in skills[:3])
                 fmt_parts.append(f"[WORKFLOW] {names}")
+
+            # [BEHAVIOR] L3 behavioral stage patterns from enrich_step
+            try:
+                b_rows = conn.execute(
+                    "SELECT json_extract(metadata, '$.enrich.value.behavior') AS bhv FROM memories "
+                    "WHERE agent_name = ? AND json_extract(metadata, '$.enrich.value.behavior.dominant_stage') IS NOT NULL "
+                    "ORDER BY created_at DESC LIMIT 20",
+                    (agent_name,),
+                ).fetchall()
+                if b_rows:
+                    from memall.pipeline.behavior import format_for_injection
+                    bhv_list = []
+                    for r in b_rows:
+                        b = json.loads(r["bhv"]) if isinstance(r["bhv"], str) else r["bhv"]
+                        if b and isinstance(b, dict) and b.get("stages"):
+                            bhv_list.append(b)
+                    bhv_line = format_for_injection(bhv_list)
+                    if bhv_line:
+                        fmt_parts.append(f"[BEHAVIOR] {bhv_line}")
+            except Exception:
+                logger.warning("session.py: behavior injection failed", exc_info=True)
 
             # [TIMELINE] L2 recent events
             timeline = injection.get("timeline_events", [])

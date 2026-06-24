@@ -169,6 +169,30 @@ def auto_inject(agent_name: str) -> dict:
                 "learned_at": r["created_at"],
             })
 
+
+        # ══ 2.5. L7 Lessons (learned patterns extracted from L6 reflections) ══
+        l7_lessons = []
+        try:
+            rows = conn.execute(
+                "SELECT id, content, category, created_at FROM memories "
+                "WHERE agent_name = ? AND level = 'L7' "
+                "AND LENGTH(TRIM(content)) > 10 "
+                "ORDER BY created_at DESC LIMIT 5",
+                (agent_name,),
+            ).fetchall()
+            for r in rows:
+                lesson_text = (r["content"] or "")[:200]
+                if lesson_text.startswith('[L7'):
+                    lesson_text = lesson_text.split(']', 1)[-1].strip()
+                l7_lessons.append({
+                    "id": r["id"],
+                    "lesson": lesson_text,
+                    "category": r["category"],
+                    "learned_at": r["created_at"],
+                })
+        except Exception:
+            logger.warning("auto_inject l7_lessons failed", exc_info=True)
+
         # ── 3. L9 Distillations (knowledge summaries by category) ──
         distillations = []
         rows = conn.execute(
@@ -420,6 +444,7 @@ def auto_inject(agent_name: str) -> dict:
             "persona": persona,
             "evolution_trend": evolution,
             "recent_reflections": reflections[:5],
+            "l7_lessons": l7_lessons,
             "knowledge_summaries": distillations[:5],
             "pending_actions": suggestions_list[:5],
             "semantic_fragments": fragments[:5],

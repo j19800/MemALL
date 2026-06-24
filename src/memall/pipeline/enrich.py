@@ -2,6 +2,7 @@ import json
 import re
 from datetime import datetime, timezone
 from memall.core.db import get_conn
+from memall.pipeline.behavior import annotate_text
 
 _FROM_TO_TOPIC_RE = re.compile(
     r'from[：:]\s*(?P<from>[^\s]+)\s+to[：:]\s*(?P<to>[^\s]+)'
@@ -120,6 +121,11 @@ def enrich_step() -> int:
             mod_refs = _parse_module_refs(text)
             if mod_refs:
                 meta["module_refs"] = mod_refs
+
+            # Phase 1: behavioral stage annotation (observe→model→predict→deviate→correct)
+            behavior = annotate_text(text)
+            if behavior.stages:
+                meta["behavior"] = behavior.__dict__
 
             if meta:
                 existing = json.loads(row["metadata"] or "{}")

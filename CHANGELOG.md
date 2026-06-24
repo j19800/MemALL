@@ -6,6 +6,8 @@
 
 - **L3 scope field**: New `metadata.scope` field (values: `agent`/`family`/`shared`, default=`agent`) controls L3 workflow visibility across agents. Backward compatible — NULL defaults to `agent`. (`mcp/federation_tools.py`, `pipeline/session.py`)
 
+- **Phase 1: Behavioral stage annotation**: New `pipeline/behavior.py` module with regex-based OODA loop detection (observe→model→predict→deviate→correct). Integrated into `enrich_step()` — 222 memories annotated on first run. `session_start()` now includes `[BEHAVIOR]` section with stage distribution and common sequences. (`pipeline/behavior.py`, `pipeline/enrich.py`, `pipeline/session.py`)
+
 ### Changed
 
 - **L3 scope-aware queries**: `auto_inject()` workflow_skills and `session_start()` category matching now filter L3 by scope — agent-scoped workflows only visible to their creator, family/scoped visible to all agents. (`mcp/federation_tools.py`, `pipeline/session.py`)
