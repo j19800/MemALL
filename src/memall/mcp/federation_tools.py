@@ -390,6 +390,25 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject graph_relations failed", exc_info=True)
 
+        # ── 15. L11 Domain Knowledge (strategy / business / domain insights) ──
+        domain_knowledge = []
+        try:
+            rows = conn.execute(
+                "SELECT id, subject, content, summary, category, created_at FROM memories "
+                "WHERE level = 'L11' AND LENGTH(TRIM(content)) > 30 "
+                "ORDER BY created_at DESC LIMIT 5"
+            ).fetchall()
+            for r in rows:
+                domain_knowledge.append({
+                    "id": r["id"],
+                    "subject": r["subject"][:80],
+                    "summary": (r["summary"] or r["content"] or "")[:300],
+                    "category": r["category"],
+                    "at": r["created_at"],
+                })
+        except Exception:
+            logger.warning("auto_inject domain_knowledge failed", exc_info=True)
+
         return {
             "agent_name": agent_name,
             "persona": persona,
@@ -406,6 +425,7 @@ def auto_inject(agent_name: str) -> dict:
             "decision_arcs": decision_arcs,
             "panoramic_overview": panoramic_overview,
             "graph_relations": graph_relations,
+            "domain_knowledge": domain_knowledge,
             "injected_at": datetime.now(timezone.utc).isoformat(),
         }
     finally:

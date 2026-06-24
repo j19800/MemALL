@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timezone
 from collections import Counter, defaultdict
 from memall.core.db import get_conn
+from memall.pipeline.util import _smart_subject
 logger = logging.getLogger(__name__)
 
 
@@ -14,7 +15,7 @@ def distill_step() -> dict:
     conn.execute("PRAGMA foreign_keys=OFF")
     try:
         rows = conn.execute(
-            "SELECT id, content, category, agent_name, summary FROM memories WHERE category != '' AND category IS NOT NULL AND LENGTH(TRIM(content)) > 20 AND level NOT IN ('P0', 'P1', 'P2', 'P3', 'P4', 'L6', 'L9', 'L10') ORDER BY agent_name, category, created_at"
+            "SELECT id, content, category, agent_name, summary FROM memories WHERE category != '' AND category IS NOT NULL AND LENGTH(TRIM(content)) > 20 AND level NOT IN ('P0', 'P1', 'P2', 'P3', 'P4', 'L6', 'L9', 'L10', 'L11') ORDER BY agent_name, category, created_at"
         ).fetchall()
 
         groups = defaultdict(list)
@@ -64,10 +65,7 @@ def distill_step() -> dict:
                 header += "\n" + "\n".join(f"• {t}" for t in sample_texts[:2])
 
             merged_content = header
-            if distinctive_topics:
-                l9_subject = f"[L9] {key[0]} · {key[1]} · {distinctive_topics}"
-            else:
-                l9_subject = f"[L9] {key[0]} · {key[1]} · {len(mems)}条"
+            l9_subject = _smart_subject(merged_content)
 
             # Majority project from source memories
             source_ids = mem_ids[:10]
@@ -78,7 +76,7 @@ def distill_step() -> dict:
             ch = hashlib.sha256(merged_content.encode()).hexdigest()
             cur = conn.execute(
                 "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, summary, created_at, updated_at, occurred_at, subject, project, trust_level, access_count, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (merged_content, ch, "L9", "", key[0], key[1], f"{len(mems)}条记忆蒸馏摘要", now, now, now, l9_subject, l9_project, 0, 0, "{}"),
+                (merged_content, ch, "L9", "", key[0], key[1], l9_subject, now, now, now, l9_subject, l9_project, 0, 0, "{}"),
             )
             if cur.rowcount == 0:
                 # Duplicate hash → record already exists, skip

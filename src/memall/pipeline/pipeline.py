@@ -264,7 +264,7 @@ def check_level_discipline() -> dict:
 
         # 4. Check for unexpected level values
         expected = {"P0", "P1", "P2", "P3", "P4", "L1", "L2", "L3", "L4", "L5",
-                    "L6", "L7", "L8", "L9", "L10", "deleted", "info", "heartbeat", "archived"}
+                    "L6", "L7", "L8", "L9", "L10", "L11", "deleted", "info", "heartbeat", "archived"}
         unexpected = set(counts.keys()) - expected
         for lev in unexpected:
             msg = f"Unexpected level value '{lev}' ({counts[lev]} memories)"

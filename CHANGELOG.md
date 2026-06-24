@@ -1,5 +1,18 @@
 # Changelog
 
+## [v0.1.5] - 2026-06-25
+
+### Added
+
+- **L11 Domain Knowledge Layer**: New terminal layer (rank 95) for business/strategy/domain knowledge, distinct from L3 workflow templates. 89 existing L3 memories bulk-reclassified to L11. (`pipeline/classify.py`)
+- **L11 classify rules**: `_L11_WORDS` regex (weight 70) captures business, domain, strategy signals — automatically classifies new captures. (`pipeline/classify.py`)
+- **L11 in auto_inject + session injection**: `auto_inject()` now returns `domain_knowledge` (L11 memories). `session_start()` formats `[DOMAIN]` section in context injection. (`mcp/federation_tools.py`, `pipeline/session.py`)
+- **L11 infrastructure**: forget TTL (730d), thin_waist validation, search boost (0.3x), frontend color (#14b8a6), CLI --level choices, pipeline level checks, terminal exclusions in reflect/distill/identity. (11 files)
+
+### Changed
+
+- **L3 clarified purpose**: Layer 3 reserved for reusable multi-stage workflow templates (roles/stages/transitions). Existing non-workflow L3 content moved to L11. (`pipeline/classify.py`)
+
 ## [v0.1.4] - 2026-06-23
 
 ### Added

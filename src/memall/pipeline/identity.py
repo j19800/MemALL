@@ -70,9 +70,9 @@ def identity_step() -> dict:
                 agent_traits[agent]["memory_ids"].append(r["id"])
 
                 # Upgrade existing memory to L1 or L7 if not already terminal
-                if l1_matches and r["level"] not in ("L3", "L4", "L5", "L6", "L9", "L10"):
+                if l1_matches and r["level"] not in ("L3", "L4", "L5", "L6", "L9", "L10", "L11"):
                     conn.execute("UPDATE memories SET level = 'L1', updated_at = ? WHERE id = ?", (now, r["id"]))
-                elif l7_matches and not l1_matches and r["level"] not in ("L3", "L4", "L5", "L6", "L9", "L10"):
+                elif l7_matches and not l1_matches and r["level"] not in ("L3", "L4", "L5", "L6", "L9", "L10", "L11"):
                     conn.execute("UPDATE memories SET level = 'L7', updated_at = ? WHERE id = ?", (now, r["id"]))
 
         # Write aggregated traits to identities.profile_json

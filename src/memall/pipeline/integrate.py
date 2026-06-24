@@ -19,6 +19,7 @@ import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from memall.core.db import get_conn
+from memall.pipeline.util import _smart_subject
 
 _MIN_L9_COUNT = 2
 _MIN_L9_ACCESS_TOTAL = 5
@@ -58,7 +59,7 @@ def _build_subject(agent: str, categories: list[str], source_count: int) -> str:
     cat_str = " + ".join(cats[:3])
     if len(cats) > 3:
         cat_str += f" +{len(cats)-3}"
-    return f"[L10] {agent} · {cat_str} · {source_count}条融合"
+    return f"L10:{agent}跨领域洞察({cat_str})"
 
 
 def _recent_l10_similar(conn, merged_content: str, agent: str,
@@ -183,15 +184,15 @@ def integrate_step(access_total_threshold: int = _MIN_L9_ACCESS_TOTAL,
                 cat_counts[primary] = cat_counts.get(primary, 0) + 1
             best_cat = max(cat_counts, key=cat_counts.get) if cat_counts else "general"
 
-            # ✅ Generate meaningful subject
-            l10_subject = _build_subject(agent, source_categories, len(source_ids))
-
             merged = (
                 f"[L10 整合] {agent} 跨领域系统洞察（{best_cat}）：\n"
                 f"来源：{len(source_ids)} 条 L9 蒸馏\n"
                 f"领域：{', '.join(source_categories)}\n"
                 f"{summary_text}"
             )[:4000]
+
+            # ✅ Generate meaningful subject from content
+            l10_subject = _smart_subject(merged)
 
             ch = hashlib.sha256(merged.encode()).hexdigest()
 

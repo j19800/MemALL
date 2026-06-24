@@ -177,7 +177,7 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
         "P0": 5, "P1": 6, "P2": 5,
         "L4": 6, "L5": 6,           # decisions + tasks need reasoning
         "L6": 6,                     # reflections need substance
-        "L7": 5, "L9": 5, "L10": 5,
+        "L7": 5, "L9": 5, "L10": 5, "L11": 5,
     }
     required = threshold_map.get(data.level or "P2", 5)
 
@@ -261,7 +261,7 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
         )
 
     # Enforce: subject must be non-empty for L4+
-    if data.level in ("L4", "L5", "L6", "L7", "L9", "L10") and not data.subject:
+    if data.level in ("L4", "L5", "L6", "L7", "L9", "L10", "L11") and not data.subject:
         logger.warning("capture: %s memory missing subject, content=%.60s", data.level, data.content or "")
         data.subject = _make_subject(data.content, data.category, data.agent_name, data.owner)
 

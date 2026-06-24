@@ -18,6 +18,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from memall.core.db import get_conn
 from memall.core.health import collect as collect_health
+from memall.pipeline.util import _smart_subject
 
 
 def _ensure_sessions_table(conn):
@@ -155,7 +156,7 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
                 "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, project, subject, summary, occurred_at, created_at, updated_at, confidence, visibility, metadata) "
                 "VALUES (?, ?, 'L4', 'system', ?, 'session', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (l4_content[:2000], ch, agent_name, session_project,
-                 f"[L4] {agent_name} · {cat_summary[:30]}", f"会话 {session_id} 摘要", now, now, now, 0.5, "shared",
+                 _smart_subject(l4_content), _smart_subject(l4_content), now, now, now, 0.5, "shared",
                  json.dumps({"session_id": session_id, "key_decisions": key_decisions,
                              "participants": participants, "continuation_note": continuation_note,
                              "source": "pipeline_harvest"})),
@@ -197,19 +198,14 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
         ).fetchone()
         if not existing_l6:
             # Generate meaningful subject
-            l6_subject_parts = [f"[L6] {agent_name}"]
-            if distinctive_words:
-                l6_subject_parts.append(" ".join(distinctive_words[:4]))
-            else:
-                l6_subject_parts.append(f"{count}条记忆·{cat_summary[:20]}")
-            l6_subject = " · ".join(l6_subject_parts)[:80]
+            l6_subject = _smart_subject(l6_content)
             conn.execute(
                 "INSERT OR IGNORE INTO memories "
-                "(content, content_hash, level, owner, agent_name, category, project, summary, "
+                "(content, content_hash, level, owner, agent_name, category, project, subject, summary, "
                 "occurred_at, created_at, updated_at, confidence, visibility, metadata) "
-                "VALUES (?, ?, 'L6', 'system', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, 'L6', 'system', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (l6_content[:2000], l6_ch, agent_name, session_project,
-                 l6_subject, now, now, now, 0.6, "private",
+                 l6_subject, l6_subject, now, now, now, 0.6, "private",
                  json.dumps({"session_id": session_id, "source": "pipeline_harvest"})),
             )
             result["l6_created"] = True
@@ -549,6 +545,56 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
             if narrative_line:
                 fmt_parts.insert(1, "")
                 fmt_parts.insert(1, narrative_line)
+
+            # [CORRECTIONS] L6 reflections — lessons learned
+            reflections = injection.get("recent_reflections", [])
+            if reflections:
+                tips = " · ".join(r.get("summary", "")[:60] for r in reflections[:3] if r.get("summary"))
+                if not tips:
+                    tips = " · ".join(r.get("category", "") for r in reflections[:3])
+                fmt_parts.append(f"[CORRECTIONS] {tips}")
+
+            # [WORKFLOW] L3 workflow skills — available tools/routines
+            skills = injection.get("workflow_skills", [])
+            if skills:
+                names = " · ".join(s["subject"] for s in skills[:3])
+                fmt_parts.append(f"[WORKFLOW] {names}")
+
+            # [TIMELINE] L2 recent events
+            timeline = injection.get("timeline_events", [])
+            if timeline:
+                events = " · ".join(t["subject"] for t in timeline[:3] if t.get("subject"))
+                fmt_parts.append(f"[TIMELINE] {events}")
+
+            # [DECISIONS] L4 decision arcs
+            darcs = injection.get("decision_arcs", {})
+            open_dec = darcs.get("open", [])
+            in_prog = darcs.get("in_progress", [])
+            if open_dec or in_prog:
+                parts = ["[DECISIONS]"]
+                if open_dec:
+                    parts.append(f"待决({len(open_dec)})")
+                if in_prog:
+                    parts.append(f"进行中({len(in_prog)})")
+                fmt_parts.append(" ".join(parts))
+
+            # [OVERVIEW] L10 terminal-level panoramic
+            overview = injection.get("panoramic_overview", [])
+            if overview:
+                tops = " · ".join(o["subject"] for o in overview[:2] if o.get("subject"))
+                fmt_parts.append(f"[OVERVIEW] {tops}")
+
+            # [DOMAIN] L11 domain strategy knowledge
+            domain = injection.get("domain_knowledge", [])
+            if domain:
+                tops = " · ".join(d["subject"] for d in domain[:2] if d.get("subject"))
+                fmt_parts.append(f"[DOMAIN] {tops}")
+
+            # [GRAPH] L8 graph relations — knowledge graph connections
+            graph = injection.get("graph_relations", [])
+            if graph:
+                nodes = " · ".join(g["subject"] for g in graph[:3] if g.get("subject"))
+                fmt_parts.append(f"[GRAPH] {nodes}")
 
             # [DISTILL] pending groups
             try:

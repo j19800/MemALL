@@ -18,6 +18,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 
 from memall.core.db import get_conn
+from memall.pipeline.util import _smart_subject
 
 logger = logging.getLogger(__name__)
 
@@ -470,8 +471,8 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
         else:
             assigned_to = item.get("assigned_to", "")
             desc = item.get("description", "")
-        task_subject = f"[??] {title} - {desc}"[:200]
-        task_content = f"[??] ??#{disc['id']} ??#{l4_id}\n{desc}"[:2000]
+        task_subject = f"[任务] {title} — {_smart_subject(desc)}"[:200]
+        task_content = f"[任务] {title} | {desc}"[:2000]
         task_hash = hashlib.sha256(task_content.encode("utf-8")).hexdigest()
         task_meta = json.dumps({
             "status": "active",

@@ -139,15 +139,24 @@ def test_injection_corrections():
         from memall.pipeline.improve import improve_step
         improve_step(agent_name="test_agent")
 
-        # Mock auto_inject to return empty dict (avoids federation_tools logger bug)
-        with patch("memall.mcp.federation_tools.auto_inject", return_value={}):
+        # Mock auto_inject to return dict with recent_reflections so we can
+        # verify the [CORRECTIONS] section is rendered in formatted injection
+        mock_inject = {
+            "identity_traits": {},
+            "recent_reflections": [
+                {"summary": "涉及完成任务时，应标记 done 而不是改 level", "category": "rule"},
+                {"summary": "完成标记要记住：不能改 level", "category": "rule"},
+            ],
+        }
+        with patch("memall.mcp.federation_tools.auto_inject", return_value=mock_inject):
             result = session_start(agent_name="test_agent", auto_inject=True)
 
         formatted = result.get("injection_formatted", "")
-        # Injection was trimmed from 19 to 4 sections; CORRECTIONS is removed
         assert isinstance(formatted, str) and "[CONTEXT]" in formatted, \
             f"Injection missing [CONTEXT] section:\n{formatted[:300]}"
-        print("  PASS test_injection_corrections (injection format ok)")
+        assert "[CORRECTIONS]" in formatted, \
+            f"Injection missing [CORRECTIONS] section (was restored):\n{formatted[:500]}"
+        print("  PASS test_injection_corrections (injection format ok, [CORRECTIONS] present)")
     finally:
         cleanup_temp_db(db_path, patcher)
 

@@ -52,7 +52,7 @@ def app():
     p_cap.add_argument("--subject", help="Subject")
     p_cap.add_argument("--project", help="Project")
     p_cap.add_argument("--category", help="Category")
-    p_cap.add_argument("--level", choices=["P0", "P1", "P2", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9", "L10"], default="P2")
+    p_cap.add_argument("--level", choices=["P0", "P1", "P2", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9", "L10", "L11"], default="P2")
     p_cap.set_defaults(func=cmd_capture)
 
     p_search = sub.add_parser("search", help="Search memories")
