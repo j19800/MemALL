@@ -131,6 +131,11 @@ def fed_conflicts(limit: int = 20) -> dict:
     }
 
 
+# ── Module-level auto_inject cache ──
+_inject_cache: dict[str, dict] = {}
+_INJECT_CACHE_TTL = 300  # seconds
+
+
 def auto_inject(agent_name: str) -> dict:
     """Auto-inject Agent Profile + evolutionary context for session_start.
 
@@ -138,15 +143,12 @@ def auto_inject(agent_name: str) -> dict:
     learned (reflections), what it knows (distillations), what it should
     do (suggestions), and how it has been changing (evolution trend).
     This closes the self-evolution feedback loop — see OODA cycle.
-
-    Queries the local DB for:
-      - Persona profile (L1 cognitive + L2 topology + L3 behavior)
-      - Recent L6 reflections (corrections, lessons learned)
-      - Recent L9 distillations (knowledge summaries by category)
-      - Pending suggestions (actionable improvements)
-      - Persona evolution trend over time
-      - Recent semantic fragments (top 5 by TF-IDF relevance)
     """
+    now = datetime.now(timezone.utc)
+    cached = _inject_cache.get(agent_name)
+    if cached and (now - cached["cached_at"]).total_seconds() < _INJECT_CACHE_TTL:
+        return cached["data"]
+
     conn = get_conn()
     try:
         # ── 1. Agent Profile ──
@@ -439,7 +441,81 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject domain_knowledge failed", exc_info=True)
 
-        return {
+        # ── 16. L4 recent summaries (global, for session_start) ──
+        l4_recent_global = []
+        try:
+            rows = conn.execute(
+                "SELECT id, content, summary, subject, metadata, created_at FROM memories "
+                "WHERE level = 'L4' AND LENGTH(TRIM(content)) > 5 "
+                "ORDER BY created_at DESC LIMIT 3"
+            ).fetchall()
+            for r in rows:
+                meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else r["metadata"]
+                l4_recent_global.append({
+                    "id": r["id"],
+                    "subject": r["subject"],
+                    "summary": r["summary"] or r["content"][:200],
+                    "participants": (meta or {}).get("participants", []),
+                    "key_decisions": ((meta or {}).get("key_decisions") or [])[:3],
+                    "continuation_note": (meta or {}).get("continuation_note", ""),
+                    "created_at": r["created_at"],
+                })
+        except Exception:
+            logger.warning("auto_inject l4_recent failed", exc_info=True)
+
+        # ── 17. L5 active todos (global, for session_start) ──
+        l5_active_global = []
+        try:
+            rows = conn.execute(
+                "SELECT id, content, summary, subject, metadata, level, created_at FROM memories "
+                "WHERE level = 'L5' AND LENGTH(TRIM(content)) > 5 "
+                "ORDER BY created_at DESC LIMIT 20"
+            ).fetchall()
+            seen_subs = set()
+            for r in rows:
+                meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else r["metadata"]
+                status = (meta.get("status") or "active") if isinstance(meta, dict) else "active"
+                if status != "active":
+                    continue
+                subj_key = (r["subject"] or "")[:40]
+                if subj_key in seen_subs:
+                    continue
+                seen_subs.add(subj_key)
+                l5_active_global.append({
+                    "id": r["id"],
+                    "subject": r["subject"],
+                    "summary": r["summary"] or r["content"][:200],
+                    "assignee": (meta or {}).get("assignee", ""),
+                    "depends_on": (meta or {}).get("depends_on", []),
+                    "level_tag": {"P0": "(P0)", "P1": "(P1)", "P2": "(P2)"}.get(r["level"] or "", ""),
+                    "created_at": r["created_at"],
+                })
+        except Exception:
+            logger.warning("auto_inject l5_active failed", exc_info=True)
+
+        # ── 18. BEHAVIOR patterns (agent-specific, for session_start) ──
+        behavior_patterns = []
+        try:
+            rows = conn.execute(
+                "SELECT json_extract(metadata, '$.enrich.value.behavior') AS bhv FROM memories "
+                "WHERE agent_name = ? AND json_extract(metadata, '$.enrich.value.behavior.dominant_stage') IS NOT NULL "
+                "ORDER BY created_at DESC LIMIT 20",
+                (agent_name,),
+            ).fetchall()
+            if rows:
+                from memall.pipeline.behavior import format_for_injection
+                bhv_list = []
+                for r in rows:
+                    b = json.loads(r["bhv"]) if isinstance(r["bhv"], str) else r["bhv"]
+                    if b and isinstance(b, dict) and b.get("stages"):
+                        bhv_list.append(b)
+                bhv_text = format_for_injection(bhv_list)
+                if bhv_text:
+                    behavior_patterns.append(bhv_text)
+        except Exception:
+            logger.warning("auto_inject behavior_patterns failed", exc_info=True)
+
+        result = {
             "agent_name": agent_name,
             "persona": persona,
             "evolution_trend": evolution,
@@ -457,8 +533,13 @@ def auto_inject(agent_name: str) -> dict:
             "panoramic_overview": panoramic_overview,
             "graph_relations": graph_relations,
             "domain_knowledge": domain_knowledge,
+            "l4_recent_global": l4_recent_global,
+            "l5_active_global": l5_active_global,
+            "behavior_patterns": behavior_patterns,
             "injected_at": datetime.now(timezone.utc).isoformat(),
         }
+        _inject_cache[agent_name] = {"cached_at": datetime.now(timezone.utc), "data": result}
+        return result
     finally:
         conn.close()
 

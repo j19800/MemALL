@@ -1,3 +1,9 @@
+## [v0.1.7] - 2026-06-25
+
+### Changed
+
+- **Lightweight session_start**: Added TTL cache (300s) to `auto_inject()` — after first call per agent, all subsequent calls return cached data with 0 SQL queries. Moved L4 summaries, L5 todos, and BEHAVIOR annotations into the cache. session_start SQL reduced from ~23 queries to ~3 (stale check + session create + cache miss). (`mcp/federation_tools.py`, `pipeline/session.py`)
+
 ## [v0.1.6] - 2026-06-25
 
 ### Added

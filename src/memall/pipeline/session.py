@@ -365,63 +365,9 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
             injection = _auto_inject(agent_name)
             result["injection"] = injection
 
-            # L4 cross-session summaries: latest 3 (shared across agents)
-            recent_l4 = conn.execute(
-                "SELECT id, content, summary, subject, metadata, created_at FROM memories "
-                "WHERE level = 'L4' AND LENGTH(TRIM(content)) > 5 "
-                "ORDER BY created_at DESC LIMIT 3",
-            ).fetchall()
-            l4_summaries = []
-            for r in recent_l4:
-                meta = {}
-                try:
-                    meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else r["metadata"]
-                except Exception:
-                    logger.warning("session.py: silent error", exc_info=True)
-                l4_summaries.append({
-                    "id": r["id"],
-                    "subject": r["subject"],
-                    "summary": r["summary"] or r["content"][:200],
-                    "participants": meta.get("participants", []),
-                    "key_decisions": (meta.get("key_decisions") or [])[:3],
-                    "continuation_note": meta.get("continuation_note", ""),
-                    "created_at": r["created_at"],
-                })
-            result["l4_recent"] = l4_summaries
+            result["l4_recent"] = injection.get("l4_recent_global", [])
 
-            # L5 active todos (shared across agents)
-            active_l5 = conn.execute(
-                "SELECT id, content, summary, subject, metadata, level, created_at FROM memories "
-                "WHERE level = 'L5' AND LENGTH(TRIM(content)) > 5 "
-                "ORDER BY created_at DESC LIMIT 20",
-            ).fetchall()
-            l5_todos = []
-            seen_subjects = set()
-            for r in active_l5:
-                meta = {}
-                try:
-                    meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else r["metadata"]
-                except Exception:
-                    logger.warning("session.py: silent error", exc_info=True)
-                status = (meta.get("status") or "active") if isinstance(meta, dict) else "active"
-                if status != "active":
-                    continue
-                if not isinstance(meta, dict):
-                    meta = {}
-                # Dedup by subject[:40] to avoid duplicate L5 entries
-                subject_key = (r["subject"] or "")[:40]
-                if subject_key in seen_subjects:
-                    continue
-                seen_subjects.add(subject_key)
-                l5_todos.append({
-                    "id": r["id"],
-                    "subject": r["subject"],
-                    "summary": r["summary"] or r["content"][:200],
-                    "assignee": meta.get("assignee", ""),
-                    "depends_on": meta.get("depends_on", []),
-                    "level_tag": {"P0": "(P0)", "P1": "(P1)", "P2": "(P2)"}.get(r["level"] if r["level"] else "", ""),
-                    "created_at": r["created_at"],
-                })
+            l5_todos = injection.get("l5_active_global", [])
             result["l5_active"] = l5_todos
 
             # L3 workflow matching by category (infer from last memory)
@@ -506,6 +452,7 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
             ]
 
             # [PROFILE]
+            l5_todos = injection.get("pending_tasks", [])[:5]
             id_traits = injection.get("identity_traits", {})
             l1_list = id_traits.get("l1_identity", [])
             l7_list = id_traits.get("l7_preferences", [])
@@ -572,26 +519,10 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 names = " · ".join(s["subject"] for s in skills[:3])
                 fmt_parts.append(f"[WORKFLOW] {names}")
 
-            # [BEHAVIOR] L3 behavioral stage patterns from enrich_step
-            try:
-                b_rows = conn.execute(
-                    "SELECT json_extract(metadata, '$.enrich.value.behavior') AS bhv FROM memories "
-                    "WHERE agent_name = ? AND json_extract(metadata, '$.enrich.value.behavior.dominant_stage') IS NOT NULL "
-                    "ORDER BY created_at DESC LIMIT 20",
-                    (agent_name,),
-                ).fetchall()
-                if b_rows:
-                    from memall.pipeline.behavior import format_for_injection
-                    bhv_list = []
-                    for r in b_rows:
-                        b = json.loads(r["bhv"]) if isinstance(r["bhv"], str) else r["bhv"]
-                        if b and isinstance(b, dict) and b.get("stages"):
-                            bhv_list.append(b)
-                    bhv_line = format_for_injection(bhv_list)
-                    if bhv_line:
-                        fmt_parts.append(f"[BEHAVIOR] {bhv_line}")
-            except Exception:
-                logger.warning("session.py: behavior injection failed", exc_info=True)
+            # [BEHAVIOR] L3 behavioral stage patterns (from auto_inject cache)
+            bhv_lines = injection.get("behavior_patterns", [])
+            if bhv_lines:
+                fmt_parts.append(f"[BEHAVIOR] {bhv_lines[0]}")
 
             # [TIMELINE] L2 recent events
             timeline = injection.get("timeline_events", [])
