@@ -435,8 +435,13 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 if last_cat and last_cat["category"]:
                     l3_rows = conn.execute(
                         "SELECT id, subject, summary, content FROM memories "
-                        "WHERE level = 'L3' AND category = ? ORDER BY created_at DESC LIMIT 2",
-                        (last_cat["category"],),
+                        "WHERE level = 'L3' AND category = ? "
+                        "AND ("
+                        "  json_extract(metadata, '$.scope') IN ('family', 'shared')"
+                        "  OR (COALESCE(json_extract(metadata, '$.scope'), 'agent') = 'agent' AND agent_name = ?)"
+                        ") "
+                        "ORDER BY created_at DESC LIMIT 2",
+                        (last_cat["category"], agent_name),
                     ).fetchall()
                     for w in l3_rows:
                         l3_workflows.append({

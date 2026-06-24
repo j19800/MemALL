@@ -285,10 +285,16 @@ def auto_inject(agent_name: str) -> dict:
         # ── 10. L3 Workflow Skills (usable by any agent) ──
         workflow_skills = []
         try:
+            # L3 scope: agent=own agent only, family/shared=all agents, NULL=agent (backward compat)
             rows = conn.execute(
                 "SELECT id, subject, content, category, metadata FROM memories "
                 "WHERE level = 'L3' AND LENGTH(TRIM(content)) > 50 "
-                "ORDER BY confidence DESC, created_at DESC LIMIT 10"
+                "AND ("
+                "  json_extract(metadata, '$.scope') IN ('family', 'shared')"
+                "  OR (COALESCE(json_extract(metadata, '$.scope'), 'agent') = 'agent' AND agent_name = ?)"
+                ") "
+                "ORDER BY confidence DESC, created_at DESC LIMIT 10",
+                (agent_name,),
             ).fetchall()
             for r in rows:
                 meta = {}

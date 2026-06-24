@@ -1,4 +1,22 @@
-# Changelog
+## [v0.1.6] - 2026-06-25
+
+### Added
+
+- **Phase 0: Composite index idx_level_agent**: New index `idx_memories_level_agent ON memories(level, agent_name)` accelerates all level+agent queries in session_start (used by 28-40 SQL queries). Zero data dependency, immediate effect. (`core/db.py`)
+
+- **L3 scope field**: New `metadata.scope` field (values: `agent`/`family`/`shared`, default=`agent`) controls L3 workflow visibility across agents. Backward compatible — NULL defaults to `agent`. (`mcp/federation_tools.py`, `pipeline/session.py`)
+
+### Changed
+
+- **L3 scope-aware queries**: `auto_inject()` workflow_skills and `session_start()` category matching now filter L3 by scope — agent-scoped workflows only visible to their creator, family/scoped visible to all agents. (`mcp/federation_tools.py`, `pipeline/session.py`)
+
+- **Existing L3 memories scoped**: Discussion participation workflow (#10395) → `scope=family` (跨agent通用), codex research (#10396) → `scope=agent` (私有调研报告). (`core/thin_waist.py`)
+
+### Fixed
+
+- **confirm_discussion auto-converge**: Function was inserting a P2 response but not converging the discussion — docstring said "immediately converges" but code returned "responded". Now properly calls `converge_discussion()`. (`pipeline/convergence.py`)
+
+- **converge_discussion supersedes=None (3 more)**: L4 decision and L5 task INSERTs still had `None` for `supersedes` column — missed in the v0.1.5 fix. L5 task INSERT also missing `project` value (latent bug masked by L4 supersedes error). (`pipeline/convergence.py`)
 
 ## [v0.1.5] - 2026-06-25
 

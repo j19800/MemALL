@@ -350,12 +350,17 @@ def confirm_discussion(
 
         conn.commit()
 
-        return {
-            "status": "responded",
-            "discussion_id": discussion_id,
-            "response_id": resp_id,
-            "note": "回应已记录，等待其他参与者或调 memall_discussion_status 查看",
-        }
+        # ── Auto-converge: one confirm is enough for simplified flow ──
+        responses = conn.execute(
+            "SELECT * FROM memories WHERE id IN ("
+            "  SELECT target_id FROM edges WHERE source_id = ? AND relation_type = 'cites'"
+            ") AND level = 'P2' ORDER BY created_at ASC",
+            (discussion_id,),
+        ).fetchall()
+        result = converge_discussion(conn, disc, [dict(r) for r in responses], f"Confirmed by {agent_name}")
+        result["response_id"] = resp_id
+        return result
+
     finally:
         conn.close()
 
@@ -443,7 +448,7 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (l4_content, l4_hash, "L4", "system", "system",
          f"[??] {title}", "decision", "", now, now, now,
-         None, 0.7, "private", l4_meta, "open"),
+         "[]", 0.7, "private", l4_meta, "open"),
     )
     l4_id = cur.lastrowid
 
@@ -486,8 +491,8 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
                 supersedes, confidence, visibility, metadata, arc_status)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (task_content, task_hash, "L5", assigned_to, assigned_to,
-             task_subject, "task", "", now, now, now,
-             None, 0.6, "private", task_meta, "open"),
+             task_subject, "task", disc.get("project", ""), "", now, now, now,
+             "[]", 0.6, "private", task_meta, "open"),
         )
         tid = cur.lastrowid
         task_ids.append(tid)
@@ -514,6 +519,7 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
         logger.warning("convergence.py: silent error", exc_info=True)
 
     return {
+        "status": "converged",
         "discussion_id": disc["id"],
         "decision_id": l4_id,
         "task_ids": task_ids,
