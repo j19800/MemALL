@@ -113,7 +113,7 @@ def create_discussion(
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (content, h, "L5", creator, creator, subject,
              "discussion", "", "", now, now, now,
-             None, 0.5, "private", meta, "open"),
+             "[]", 0.5, "private", meta, "open"),
         )
         memory_id = cur.lastrowid
         conn.commit()
@@ -335,10 +335,10 @@ def confirm_discussion(
                (content, content_hash, level, owner, agent_name, subject,
                 category, project, summary, occurred_at, created_at, updated_at,
                 supersedes, confidence, visibility, metadata, arc_status)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (content, h, "P2", agent_name, agent_name, subject,
              "discussion_response", "", "", now, now, now,
-             None, 0.6, "private", rmeta, "open"),
+             "[]", 0.6, "private", rmeta, "open"),
         )
         resp_id = cur.lastrowid
 
@@ -484,7 +484,7 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
                (content, content_hash, level, owner, agent_name, subject,
                 category, project, summary, occurred_at, created_at, updated_at,
                 supersedes, confidence, visibility, metadata, arc_status)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (task_content, task_hash, "L5", assigned_to, assigned_to,
              task_subject, "task", "", now, now, now,
              None, 0.6, "private", task_meta, "open"),

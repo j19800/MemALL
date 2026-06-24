@@ -22,7 +22,7 @@ class Memory:
     occurred_at: str = ""
     created_at: str = ""
     updated_at: str = ""
-    supersedes: Optional[int] = None
+    supersedes: str = "[]"
     confidence: float = 0.5
     visibility: str = "private"
     access_count: int = 0
@@ -40,7 +40,7 @@ class MemoryInput:
     category: str = "general"
     summary: str = ""
     occurred_at: str = ""
-    supersedes: Optional[int] = None
+    supersedes: str = "[]"
     confidence: float = 0.5
     visibility: str = "private"
     metadata: str = "{}"
