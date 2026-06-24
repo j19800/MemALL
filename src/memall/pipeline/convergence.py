@@ -128,11 +128,15 @@ def create_discussion(
             logger.warning("convergence.py: silent error", exc_info=True)
 
         return {
+            "discussion_id": memory_id,
             "memory_id": memory_id,
             "subject": subject,
             "title": title,
+            "background": background,
             "status": "active",
             "action_items": action_items or [],
+            "open_questions": open_questions or [],
+            "recommendation": recommendation,
         }
     finally:
         conn.close()
@@ -343,16 +347,13 @@ def confirm_discussion(
             (discussion_id, resp_id, "cites", now),
         )
 
-        # ── Immediately converge ──
-        result = _converge_single(conn, disc)
         conn.commit()
 
         return {
-            "status": "converged",
+            "status": "responded",
             "discussion_id": discussion_id,
             "response_id": resp_id,
-            "decision_id": result.get("decision_id"),
-            "task_ids": result.get("task_ids", []),
+            "note": "回应已记录，等待其他参与者或调 memall_discussion_status 查看",
         }
     finally:
         conn.close()
