@@ -1,3 +1,9 @@
+## [v0.1.8] - 2026-06-25
+
+### Fixed
+
+- **classify_step LIMIT 500 无声丢失**: SQL 查询缺少 ORDER BY，每次仅重复扫描旧 500 条，830 条非 terminal 记忆（含 48 条有 edges 候选）从未处理。改为游标分页 — `pipeline_cursors` 表追踪 `last_classify_id`，每次跑 500 条，渐进覆盖全部 1330 条，跑完自动重置循环。L8 边缘检测（module_refs + edges 表）现在能覆盖全部记忆。 (`pipeline/classify.py`)
+
 ## [v0.1.7] - 2026-06-25
 
 ### Changed

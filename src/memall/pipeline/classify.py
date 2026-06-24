@@ -119,10 +119,42 @@ def _detect_layers(
 def classify_step() -> dict:
     conn = get_conn()
     try:
-        rows = conn.execute(
-            "SELECT id, content, category, summary, level, metadata "
-            "FROM memories WHERE level IN ('P0', 'P1', 'P2', 'P3', 'P4', 'L1', 'L2', 'L3', 'L4', 'L5') LIMIT 500"
-        ).fetchall()
+        # Cursor-based pagination: each run processes 500, tracks progress
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS pipeline_cursors "
+            "(step TEXT PRIMARY KEY, cursor_id INTEGER, updated_at TEXT)"
+        )
+        cursor_row = conn.execute(
+            "SELECT cursor_id FROM pipeline_cursors WHERE step='classify'"
+        ).fetchone()
+        cursor = cursor_row["cursor_id"] if cursor_row else None
+
+        if cursor:
+            rows = conn.execute(
+                "SELECT id, content, category, summary, level, metadata "
+                "FROM memories WHERE level IN ('P0', 'P1', 'P2', 'P3', 'P4', 'L1', 'L2', 'L3', 'L4', 'L5') "
+                "AND id < ? ORDER BY id DESC LIMIT 500",
+                (cursor,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, content, category, summary, level, metadata "
+                "FROM memories WHERE level IN ('P0', 'P1', 'P2', 'P3', 'P4', 'L1', 'L2', 'L3', 'L4', 'L5') "
+                "ORDER BY id DESC LIMIT 500"
+            ).fetchall()
+
+        if rows:
+            # Advance cursor: next run starts below the min id in this batch
+            min_id = min(r["id"] for r in rows)
+            now = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                "INSERT INTO pipeline_cursors (step, cursor_id, updated_at) VALUES ('classify', ?, ?) "
+                "ON CONFLICT(step) DO UPDATE SET cursor_id=excluded.cursor_id, updated_at=excluded.updated_at",
+                (min_id, now),
+            )
+        else:
+            # No more unprocessed rows — reset cursor for next cycle
+            conn.execute("DELETE FROM pipeline_cursors WHERE step='classify'")
         counts: dict = {}
         layer_counts: dict = {}
 
