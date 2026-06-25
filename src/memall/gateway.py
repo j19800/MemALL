@@ -45,6 +45,7 @@ _NAV_HTML = '<div style="margin-bottom:16px">' \
     '<a href="/discussions" style="color:#555;text-decoration:none;margin-right:16px">讨论</a>' \
     '<a href="/graph" style="color:#555;text-decoration:none;margin-right:16px">图谱</a>' \
     '<a href="/artifact" style="color:#555;text-decoration:none;margin-right:16px">工单</a>' \
+    '<a href="/features" style="color:#555;text-decoration:none;margin-right:16px">功能</a>' \
     '</div>'
 
 
@@ -233,7 +234,7 @@ class MemAllGateway:
     async def _auth_middleware(self, request: web.Request,
                                handler: Any) -> web.Response:
         """Require a valid Bearer token on all endpoints except /health, /pair and OPTIONS."""
-        if request.method == "OPTIONS" or request.path in ("/health", "/pair", "/dashboard", "/graph", "/artifact"):
+        if request.method == "OPTIONS" or request.path in ("/health", "/pair", "/dashboard", "/graph", "/artifact", "/features"):
             return await handler(request)
         if request.path.startswith("/api/"):
             return await handler(request)
@@ -260,6 +261,7 @@ class MemAllGateway:
         app.router.add_get("/discussions", self._handle_discussions)
         app.router.add_get("/graph", self._handle_graph)
         app.router.add_get("/artifact", self._handle_artifact)
+        app.router.add_get("/features", self._handle_features)
         app.router.add_get("/api/graph", self._handle_api_graph)
         app.router.add_get("/api/discussions", self._handle_api_discussions)
         app.router.add_get("/api/discussions/{topic_id}", self._handle_api_discussion_detail)
@@ -637,6 +639,257 @@ class MemAllGateway:
 
 <p><strong>结论：</strong>Phase 1 已实施（capture + distill + integrate），Phase 2（遗留清理）可选延期。Q1（level vs category 标识）已解决：优先 level prefix，fallback category prefix。Q2 无冲突。Q3：L8 不受影响。</p>
 
+</div>
+
+</body></html>"""
+        return web.Response(text=html, content_type="text/html")
+
+    async def _handle_features(self, request: web.Request) -> web.Response:
+        style = self._HTML_STYLE + """
+        .section { margin:20px 0; padding:16px; background:#fff; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,.1); }
+        .section h2 { margin:0 0 12px 0; font-size:17px; color:#333; border-bottom:2px solid #eee; padding-bottom:8px; }
+        .section h3 { margin:12px 0 6px 0; font-size:14px; color:#555; }
+        .section h4 { margin:8px 0 4px 0; font-size:13px; color:#666; }
+        table { width:100%; border-collapse:collapse; margin:8px 0; font-size:13px; }
+        th { background:#f5f5f5; padding:6px; text-align:left; border-bottom:1px solid #ddd; font-weight:600; }
+        td { padding:5px 6px; border-bottom:1px solid #eee; }
+        .tag { display:inline-block; padding:1px 6px; border-radius:3px; font-size:10px; margin:1px; background:#e8e8e8; }
+        .tag.c { background:#e3f2fd; }
+        .tag.mcp { background:#fce4ec; }
+        .tag.api { background:#e8f5e9; }
+        .tag.pipe { background:#fff3e0; }
+        .tag.arch { background:#f3e5f5; }
+        .code { font-family:monospace; font-size:12px; background:#f5f5f5; padding:1px 4px; border-radius:2px; }
+        .layer-row { display:flex; gap:4px; flex-wrap:wrap; margin:8px 0; }
+        .layer-item { padding:2px 10px; border-radius:12px; font-size:12px; background:#f5f5f5; border:1px solid #ddd; }
+        .layer-item.l0 { background:#e8e8e8; }
+        .layer-item.l1 { background:#e3f2fd; border-color:#90caf9; }
+        .layer-item.l2 { background:#fff3e0; border-color:#ffcc80; }
+        .layer-item.l3 { background:#fce4ec; border-color:#f48fb1; }
+        .layer-item.l4 { background:#f3e5f5; border-color:#ce93d8; }
+        .layer-item.t { background:#c8e6c9; border-color:#81c784; }
+        .two-col { display:flex; gap:16px; flex-wrap:wrap; }
+        .col { flex:1; min-width:280px; }"""
+
+        html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>MemALL · 功能清单</title>{style}
+</head><body>
+{_NAV_HTML}
+
+<h1>MemALL 功能报告</h1>
+<p style="color:#888;font-size:14px">v0.1.2 · Python + SQLite + aiohttp · 端口 9919(Gateway) / 9876(MCP)</p>
+
+<div class="section">
+<h2>一、记忆层级体系</h2>
+<div class="layer-row">
+<span class="layer-item l0">P0 原始</span>
+<span class="layer-item l0">P1 原始</span>
+<span class="layer-item l0">P2 原始</span>
+<span class="layer-item l0">P3 原始</span>
+<span class="layer-item l0">P4 原始</span>
+<span class="layer-item l1">L1 身份</span>
+<span class="layer-item l1">L2 时间</span>
+<span class="layer-item l1">L3 流程</span>
+<span class="layer-item l2">L4 会话</span>
+<span class="layer-item l2">L5 计划</span>
+<span class="layer-item l3">L6 反思</span>
+<span class="layer-item l3">L7 教训</span>
+<span class="layer-item l3">L8 关系</span>
+<span class="layer-item l4">L9 蒸馏</span>
+<span class="layer-item l4">L10 整合</span>
+<span class="layer-item l4">L11 商业</span>
+<span class="layer-item t">终端不可变</span>
+</div>
+<p>每个层级有独立的关键词规则、置信度评分、升级策略（只升级不降级）。L6/L8/L9/L10/L11 为终端层，一旦到达不可变更。</p>
+</div>
+
+<div class="section">
+<h2>二、核心 API（thin_waist.py）</h2>
+<table>
+<tr><th>函数</th><th>功能</th><th>特点</th></tr>
+<tr><td class="code">capture()</td><td>存入记忆</td><td>8维质量评分 + 内容去重 + 可见性校验 + agent身份校验</td></tr>
+<tr><td class="code">retrieve()</td><td>搜索/查询</td><td>按 ID/keyword/agent/level/category/project 过滤</td></tr>
+<tr><td class="code">update()</td><td>更新字段</td><td>白名单控制 + agent_name 规范化</td></tr>
+<tr><td class="code">smart_store()</td><td>自动去重</td><td>语义相似度阈值 0.85</td></tr>
+<tr><td class="code">store_batch()</td><td>批量存储</td><td>事务内完成</td></tr>
+<tr><td class="code">connect()</td><td>创建关系</td><td>8+ 关系类型</td></tr>
+<tr><td class="code">traverse()</td><td>图谱遍历</td><td>最多 5 跳 BFS</td></tr>
+<tr><td class="code">vector_search()</td><td>向量搜索</td><td>TF-IDF+SVD 嵌入</td></tr>
+<tr><td class="code">hybrid_search()</td><td>混合搜索</td><td>FTS5 + vec0 双通道 + RRF</td></tr>
+<tr><td class="code">timeline()</td><td>时间线查询</td><td>小时/日/周聚合</td></tr>
+<tr><td class="code">normalize_agent_name()</td><td>名称规范化</td><td>strip+lower+regex+黑名单</td></tr>
+</table>
+</div>
+
+<div class="section">
+<h2>三、HTTP 网关（:9919）</h2>
+<div class="two-col">
+<div class="col">
+<h3>HTML 页面（10 个）</h3>
+<table>
+<tr><td class="code">/health</td><td>服务器健康</td></tr>
+<tr><td class="code">/recent</td><td>最近记忆</td></tr>
+<tr><td class="code">/todos</td><td>任务管理</td></tr>
+<tr><td class="code">/timeline</td><td>Epoch 时间线</td></tr>
+<tr><td class="code">/identity/{{name}}</td><td>Agent 档案</td></tr>
+<tr><td class="code">/dashboard</td><td>综合仪表盘</td></tr>
+<tr><td class="code">/discussions</td><td>讨论列表</td></tr>
+<tr><td class="code">/graph</td><td>图谱可视化</td></tr>
+<tr><td class="code">/artifact</td><td>成果工单</td></tr>
+<tr><td class="code">/features</td><td>功能报告</td></tr>
+</table>
+</div>
+<div class="col">
+<h3>REST API（10+ 个）</h3>
+<table>
+<tr><td class="code">/api/slices</td><td>时间切片</td></tr>
+<tr><td class="code">/api/epochs</td><td>周期数据</td></tr>
+<tr><td class="code">/api/arcs</td><td>决策弧</td></tr>
+<tr><td class="code">/api/graph</td><td>图谱 JSON</td></tr>
+<tr><td class="code">/api/discussions</td><td>讨论数据</td></tr>
+<tr><td class="code">/capture</td><td>POST 存记忆</td></tr>
+<tr><td class="code">/retrieve</td><td>POST 搜索</td></tr>
+<tr><td class="code">/traverse</td><td>POST 遍历</td></tr>
+<tr><td class="code">/profile</td><td>POST 画像</td></tr>
+<tr><td class="code">/pair</td><td>POST 配对</td></tr>
+</table>
+</div>
+</div>
+</div>
+
+<div class="section">
+<h2>四、MCP 工具（44+ 个，:9876）</h2>
+<div class="two-col">
+<div class="col">
+<h3>CRUD <span class="tag c">6</span></h3>
+<p>capture, retrieve, connect, traverse, timeline, update</p>
+<h3>智能存储 <span class="tag c">2</span></h3>
+<p>smart_store, store_batch</p>
+<h3>搜索 <span class="tag c">2</span></h3>
+<p>vector_search, hybrid_search</p>
+<h3>画像/问答 <span class="tag c">4</span></h3>
+<p>persona, persona_profile, memall_ask, identity</p>
+<h3>会话 <span class="tag c">3</span></h3>
+<p>session_start, session_end, session_summary</p>
+<h3>知识图谱 <span class="tag c">2</span></h3>
+<p>memall_traverse, memall_graph</p>
+</div>
+<div class="col">
+<h3>联邦 <span class="tag api">5</span></h3>
+<p>fed_query, fed_publish, fed_conflicts, fed_inject, fed_extract</p>
+<h3>生命周期 <span class="tag pipe">5</span></h3>
+<p>forget, adaptive, security, ops, db</p>
+<h3>讨论 <span class="tag arch">3</span></h3>
+<p>discussion_create, discussion_respond, discussion_status</p>
+<h3>反思/溯源 <span class="tag arch">2</span></h3>
+<p>reflect_interact, memall_trace</p>
+<h3>管道/蒸馏 <span class="tag pipe">3</span></h3>
+<p>run_pipeline, distill_pending, index_rebuild</p>
+<h3>其他 <span class="tag">3</span></h3>
+<p>gateway, hub_connect, hub_sync, onboarding</p>
+</div>
+</div>
+</div>
+
+<div class="section">
+<h2>五、数据处理管道</h2>
+<div class="two-col">
+<div class="col">
+<h3>核心 20 步（顺序执行）</h3>
+<table>
+<tr><td>1. enrich</td><td>语义增强</td></tr>
+<tr><td>2. cleanup</td><td>数据清理</td></tr>
+<tr><td>3. classify</td><td>自动分类</td></tr>
+<tr><td>4. time_slice</td><td>预聚合</td></tr>
+<tr><td>5. arc_status</td><td>决策弧</td></tr>
+<tr><td>6. echo</td><td>价值评分</td></tr>
+<tr><td>7. epoch</td><td>周期检测</td></tr>
+<tr><td>8. convergence</td><td>讨论收敛</td></tr>
+<tr><td>9. link</td><td>关联</td></tr>
+<tr><td>10. decay</td><td>衰减</td></tr>
+<tr><td>11. backup</td><td>备份</td></tr>
+<tr><td>12. session</td><td>会话采集</td></tr>
+<tr><td>13. embed_index</td><td>索引</td></tr>
+<tr><td>14. reflect</td><td>反思</td></tr>
+<tr><td>15. distill_l7</td><td>L7 提取</td></tr>
+<tr><td>16. distill</td><td>L9 蒸馏</td></tr>
+<tr><td>17. integrate</td><td>L10 整合</td></tr>
+<tr><td>18. improve</td><td>自我改进</td></tr>
+<tr><td>19. observation</td><td>观察</td></tr>
+<tr><td>20. identity</td><td>身份更新</td></tr>
+</table>
+</div>
+<div class="col">
+<h3>可选 5 步</h3>
+<table>
+<tr><td>persona</td><td>Agent 认知画像</td></tr>
+<tr><td>narrative</td><td>叙事生成</td></tr>
+<tr><td>cluster</td><td>K-means 聚类</td></tr>
+<tr><td>suggest</td><td>建议提取</td></tr>
+<tr><td>bridge</td><td>桥接分析</td></tr>
+</table>
+
+<h3 style="margin-top:16px">后台调度器</h3>
+<table>
+<tr><td>pipeline</td><td>每 6 小时</td></tr>
+<tr><td>doctor</td><td>每 1 小时</td></tr>
+<tr><td>forget</td><td>每 24 小时</td></tr>
+<tr><td>security</td><td>每 24 小时</td></tr>
+<tr><td>heartbeat</td><td>每 5 分钟</td></tr>
+</table>
+</div>
+</div>
+</div>
+
+<div class="section">
+<h2>六、搜索能力</h2>
+<table>
+<tr><th>方式</th><th>引擎</th><th>维度</th></tr>
+<tr><td>FTS5 全文搜索</td><td>SQLite FTS5</td><td>CJK 分词 + 命中高亮</td></tr>
+<tr><td>向量搜索</td><td>vec0 (sqlite-vec)</td><td>BGE 512 维 + TF-IDF+SVD</td></tr>
+<tr><td>混合搜索</td><td>RRF 融合</td><td>FTS5 + vec0 双通道</td></tr>
+<tr><td>交叉编码重排</td><td>BGE-reranker-v2-m3</td><td>选择性加载（约 1.8GB）</td></tr>
+<tr><td>FAISS 插件</td><td>可选 Provider</td><td>大规模部署</td></tr>
+</table>
+</div>
+
+<div class="section">
+<h2>七、联邦与安全</h2>
+<div class="two-col">
+<div class="col">
+<h3>联邦能力</h3>
+<table>
+<tr><td>跨 Agent 共享</td><td>shared_memories 表</td></tr>
+<tr><td>家庭圈</td><td>管理员/成员，邀请制</td></tr>
+<tr><td>冲突检测</td><td>关键词 + 语义双重</td></tr>
+<tr><td>自动解决</td><td>投票制（置信度+时间+权重）</td></tr>
+<tr><td>Agent Hub</td><td>:12431 双向同步</td></tr>
+<tr><td>LAN 发现</td><td>UDP 广播配对</td></tr>
+</table>
+</div>
+<div class="col">
+<h3>安全能力</h3>
+<table>
+<tr><td>敏感扫描</td><td>API Key/邮箱/IP/手机/身份证</td></tr>
+<tr><td>三级权限</td><td>public / trusted / private</td></tr>
+<tr><td>写入校验</td><td>agent 必须在 identities 表中注册</td></tr>
+<tr><td>综合评分</td><td>扫描 + 权限 + 联邦 打分</td></tr>
+</table>
+</div>
+</div>
+</div>
+
+<div class="section">
+<h2>八、集成 & 其他</h2>
+<table>
+<tr><td>Lark/飞书 IM</td><td>多 bot 消息收发，讨论通知卡片</td></tr>
+<tr><td>文件桥接</td><td>inbox/outbox 目录监听，文件 ↔ 记忆双向同步</td></tr>
+<tr><td>导出</td><td>Markdown / JSONL / CSV / HTML</td></tr>
+<tr><td>新手引导</td><td>5 步交互式向导</td></tr>
+<tr><td>测试</td><td>35 个活跃测试文件，85+ 用例</td></tr>
+<tr><td>DB 迁移</td><td>20 个正式迁移（001-019）</td></tr>
+<tr><td>插件</td><td>白名单加载，热重载</td></tr>
+</table>
 </div>
 
 </body></html>"""
