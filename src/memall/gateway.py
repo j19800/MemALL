@@ -44,6 +44,7 @@ _NAV_HTML = '<div style="margin-bottom:16px">' \
     '<a href="/todos" style="color:#555;text-decoration:none;margin-right:16px">待办</a>' \
     '<a href="/discussions" style="color:#555;text-decoration:none;margin-right:16px">讨论</a>' \
     '<a href="/graph" style="color:#555;text-decoration:none;margin-right:16px">图谱</a>' \
+    '<a href="/artifact" style="color:#555;text-decoration:none;margin-right:16px">工单</a>' \
     '</div>'
 
 
@@ -232,7 +233,7 @@ class MemAllGateway:
     async def _auth_middleware(self, request: web.Request,
                                handler: Any) -> web.Response:
         """Require a valid Bearer token on all endpoints except /health, /pair and OPTIONS."""
-        if request.method == "OPTIONS" or request.path in ("/health", "/pair", "/dashboard", "/graph"):
+        if request.method == "OPTIONS" or request.path in ("/health", "/pair", "/dashboard", "/graph", "/artifact"):
             return await handler(request)
         if request.path.startswith("/api/"):
             return await handler(request)
@@ -258,6 +259,7 @@ class MemAllGateway:
         app.router.add_get("/api/timeline/epochs", self._handle_api_timeline_epochs)
         app.router.add_get("/discussions", self._handle_discussions)
         app.router.add_get("/graph", self._handle_graph)
+        app.router.add_get("/artifact", self._handle_artifact)
         app.router.add_get("/api/graph", self._handle_api_graph)
         app.router.add_get("/api/discussions", self._handle_api_discussions)
         app.router.add_get("/api/discussions/{topic_id}", self._handle_api_discussion_detail)
@@ -552,6 +554,92 @@ class MemAllGateway:
             f'<!DOCTYPE html>\n<html><head><meta charset="utf-8"><title>MemALL · 图谱</title>{self._HTML_STYLE}'
             f'</head><body>{_NAV_HTML}<h1>知识图谱</h1>{stats_card}{types_card}{hubs_card}{extra}</body></html>'
         )
+        return web.Response(text=html, content_type="text/html")
+
+    async def _handle_artifact(self, request: web.Request) -> web.Response:
+        """展示本 session 任务成果总览页面。"""
+        style = self._HTML_STYLE + """
+        .commit { background:#e8f5e9; border-left:3px solid #4caf50; padding:12px; margin:8px 0; border-radius:0 8px 8px 0; }
+        .commit .hash { font-family:monospace; color:#2e7d32; font-size:13px; }
+        .disc-item { background:#fff3e0; border-left:3px solid #ff9800; padding:12px; margin:8px 0; border-radius:0 8px 8px 0; }
+        .agent-tag { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; margin:2px; }
+        .agent-tag.ok { background:#c8e6c9; }
+        .agent-tag.pending { background:#fff9c4; }
+        .section { margin:20px 0; padding:16px; background:#fff; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,.1); }
+        .section h2 { margin:0 0 12px 0; font-size:17px; color:#333; border-bottom:1px solid #eee; padding-bottom:8px; }
+        ul { margin:4px 0; padding-left:20px; }
+        li { margin:4px 0; line-height:1.5; }
+        .stat-row { display:flex; gap:12px; flex-wrap:wrap; margin:12px 0; }
+        .stat-card { flex:1; min-width:100px; background:#f5f5f5; border-radius:8px; padding:12px; text-align:center; }
+        .stat-card .num { font-size:24px; font-weight:bold; color:#333; }
+        .stat-card .label { font-size:12px; color:#888; }"""
+
+        html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>MemALL · 工单</title>{style}
+</head><body>
+{_NAV_HTML}
+
+<h1>本 Session 成果清单</h1>
+<p style="color:#888;font-size:14px">更新至 2026-06-25 · 2 个推送 · 1 个讨论收敛</p>
+
+<div class="stat-row">
+  <div class="stat-card"><div class="num">2</div><div class="label">推送</div></div>
+  <div class="stat-card"><div class="num">1</div><div class="label">讨论收敛</div></div>
+  <div class="stat-card"><div class="num">4</div><div class="label">参与 Agent</div></div>
+  <div class="stat-card"><div class="num">40</div><div class="label">数据清理</div></div>
+</div>
+
+<div class="section">
+<h2> Commits</h2>
+
+<div class="commit">
+<div class="hash">4eb0d0e</div>
+<strong>agent_name 规范化管理</strong>
+<span class="tag">#8476</span>
+<ul>
+<li><code>normalize_agent_name()</code> 从 capture() 提取为独立函数</li>
+<li>convergence.py 4 处 INSERT 路径加校验</li>
+<li>gateway.py _import_identity / _import_memories 加校验</li>
+<li>数据清理：40 条空 agent_name → "system"</li>
+<li>修改文件：thin_waist.py, convergence.py, gateway.py</li>
+</ul>
+</div>
+
+<div class="commit">
+<div class="hash">c14c980</div>
+<strong>Phase 1: 层级命名规范统一</strong>
+<span class="tag">#10780</span>
+<ul>
+<li>新增 <code>_LEVEL_SUBJECT_PREFIX</code> 映射表 (level → [Lx 标签])</li>
+<li>_make_subject() 签名增加 level 参数，优先使用 level prefix</li>
+<li>L9 蒸馏词条追加 [L9 蒸馏] 前缀</li>
+<li>L10 整合从 "L10:agent跨领域洞察()" → "[L10 整合] agent 跨领域洞察()"</li>
+<li>旧数据不动，85 tests pass（无新增失败）</li>
+</ul>
+</div>
+
+</div>
+
+<div class="section">
+<h2> 讨论 #10780 — 层级命名规范统一</h2>
+
+<div class="disc-item">
+<strong>方案决策：方案 C（渐进统一）</strong> — 4 位 Agent 全数通过
+</div>
+
+<table style="width:100%;border-collapse:collapse;margin:12px 0">
+<tr style="background:#f5f5f5"><th style="padding:6px;text-align:left;border-bottom:1px solid #ddd">Agent</th><th style="padding:6px;text-align:left;border-bottom:1px solid #ddd">评估项</th><th style="padding:6px;text-align:left;border-bottom:1px solid #ddd">结果</th></tr>
+<tr><td style="padding:6px"><span class="agent-tag ok">opencode</span></td><td style="padding:6px">全层级 DB 抽样 + distill/integrate 兼容性</td><td style="padding:6px;color:#2e7d32">方案 C，无阻塞</td></tr>
+<tr><td style="padding:6px"><span class="agent-tag ok">claude</span></td><td style="padding:6px">capture._make_subject() 改动量评估</td><td style="padding:6px;color:#2e7d32">方案 C，20 行</td></tr>
+<tr><td style="padding:6px"><span class="agent-tag ok">codex</span></td><td style="padding:6px">gateway/session_start subject 依赖</td><td style="padding:6px;color:#2e7d32">方案 C，无解析依赖</td></tr>
+<tr><td style="padding:6px"><span class="agent-tag ok">workbuddy</span></td><td style="padding:6px">内容前缀与 classify 正则兼容性</td><td style="padding:6px;color:#2e7d32">方案 C，_LAYER_PREFIX_RE 无冲突</td></tr>
+</table>
+
+<p><strong>结论：</strong>Phase 1 已实施（capture + distill + integrate），Phase 2（遗留清理）可选延期。Q1（level vs category 标识）已解决：优先 level prefix，fallback category prefix。Q2 无冲突。Q3：L8 不受影响。</p>
+
+</div>
+
+</body></html>"""
         return web.Response(text=html, content_type="text/html")
 
     async def _handle_api_graph(self, request: web.Request) -> web.Response:
