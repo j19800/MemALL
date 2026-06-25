@@ -2,6 +2,8 @@
 
 ### Changed
 
+- **Phase 3: 废弃 _L8_WORDS 关键词正则**: `_L8_WORDS` 正则替换为废弃注释，`_LAYER_RULE_LIST` 移除 L8 条目（不再通过关键词匹配标记 L8）。L8 升级仅保留 edges 检测路径（edges 表 JOIN + module_refs）。L8 加入 `_TERMINAL_LAYERS`——一旦通过边提升到 L8即不可变。`_LAYER_RANK` 保留 L8 用于排名兼容。95 tests pass。 (`pipeline/classify.py`)
+
 - **Phase 2: Gateway 图谱页面 `/graph` + JSON API `/api/graph`**: 新增 gateway 图谱可视化页面——整体统计（记忆数、关系数、图密度）、关系类型分布表（14 种类型带占比）、活跃节点 TOP 20（可点击跳转节点详情）、节点详情页（`?node_id=N` 显示该节点的 50 条最近边）。`/api/graph` 返回 JSON 格式的 totals/types/hubs。95 tests pass。 (`gateway.py`)
 
 - **Phase 1: [GRAPH] 段从 L8 关键词查询改为 edges 实时聚合**: `auto_inject` 中 4 条 edges 查询替换了旧 L8 memories 查询——时间窗口计数(24h/7d/total)、类型分布(GROUP BY)、最近 5 条边(ID 无 JOIN)、活跃节点 TOP5 含 subject。`session_start` 中 `[GRAPH]` 从单行 subjects 升级为 4 行结构化输出。95 tests pass。 (`mcp/federation_tools.py`, `pipeline/session.py`)

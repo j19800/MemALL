@@ -33,7 +33,7 @@ _L4_WORDS = r'(?:^|[\s，。！？、\n，])(?:本次|此次|当前|这个会话
 _L5_WORDS = r'(?:^|[\s，。！？、\n，])(?:计划|planned|schedule|roadmap|目标|goal|objective|OKR|milestone|待办|todo|task|任务|next step|Phase\s+\d|阶段|迭代|sprint|预计|ETA|截止日期)'
 _L6_WORDS = r'(?:^|[\s，。！？、\n，])(?:不对|修正|更正|纠正|错了|错误|应该\n是|实际上|教训|反思|review|retrospective|发现了问题|踩坑|偏了|不应该|做了多余|遗漏了|有效|正确|验证通过|比预期好|学到了|成长|进步|worked|validated|confirmed|learnt|improved)'
 _L7_WORDS = r'(?:^|[\s，。！？、\n，])(?:我的偏好|我偏好|我喜欢|我倾向于|偏好|prefer(?:s|red|ring)?|preference|倾向|习惯上|倾向于|更喜欢|喜欢用|更方便|更高效|使用场景|主要用|习惯用)'
-_L8_WORDS = r'(?:^|[\s，。！？、\n，])(?:关系|关联|connect|link|cites|extends|contradicts|refines|依赖|影响|类似|图|edges?|nodes?|graph|network|supersedes?|derived|traverse|父子|parent|child)'
+# _L8_WORDS — deprecated in Phase 3 (edges-projected, not keyword-classified)
 _L11_WORDS = r'(?:^|[\s，。！？、\n，])(?:商业|business(?:es)?|market|变现|盈利|创业|产品定位|domain|行业|领域(?:战略)?|趋势|竞品|定价|收入|增长|growth|机会|蓝海|红海|差异化|壁垒|moat|护城河|网络效应|平台效应|策略|strategy|value.prop|价值主张|投资|投资回报|商业模式|用户画像|场景|用例|use.case|转型|数字化|AI.+落地|单人即公司|一人公司|micro.saaS|community.led|product.led)'
 _L10_WORDS = r'(?:^|[\s，。！？、\n，])(?:整合|integrate|整体|系统性|systemic|集成|unified|comprehensive|全景|全局|概括|最终|终局|愿景|top.level|跨.领域|跨.主题|high.level)'
 
@@ -45,7 +45,7 @@ _LAYER_RULE_LIST = [
     ("L2", _LAYER_PREFIX_RE, _L2_WORDS, 75),
     ("L11", _LAYER_PREFIX_RE, _L11_WORDS, 70),
     ("L7", _LAYER_PREFIX_RE, _L7_WORDS, 65),
-    ("L8", _LAYER_PREFIX_RE, _L8_WORDS, 55),
+    # L8 removed in Phase 3 — now edges-projected, not keyword-classified
     ("L3", _LAYER_PREFIX_RE, _L3_WORDS, 50),
     ("L5", _LAYER_PREFIX_RE, _L5_WORDS, 48),
     ("L4", _LAYER_PREFIX_RE, _L4_WORDS, 45),
@@ -54,7 +54,7 @@ _LAYER_RULE_LIST = [
 _LAYER_SCORE_THRESHOLD = 2
 
 # Layer ranking for "only upgrade, never downgrade"
-# Higher number = higher rank. Terminal layers (L6/L9/L10) are immutable.
+# Higher number = higher rank. Terminal layers (L6/L8/L9/L10/L11) are immutable.
 _LAYER_RANK = {
     "L10": 100, "L11": 95, "L9": 90, "L6": 80,
     "P0": 70, "P1": 60,
@@ -62,7 +62,7 @@ _LAYER_RANK = {
     "L4": 45, "L3": 40, "L2": 35, "L1": 30,
     "P2": 20, "P3": 10, "P4": 5,
 }
-_TERMINAL_LAYERS = {"L6", "L9", "L10", "L11"}
+_TERMINAL_LAYERS = {"L6", "L8", "L9", "L10", "L11"}
 
 
 def _detect_layers(
@@ -182,8 +182,8 @@ def classify_step() -> dict:
             primary = layer_result["primary"]
             secondary = layer_result["secondary"]
 
-            # L8 edges-based detection: if memory has structural edges or MODULE refs,
-            # promote to L8 regardless of keyword matching (replaces old keyword approach)
+            # L8 edges-based promotion (Phase 3: keyword _L8_WORDS removed)
+            # promote to L8 regardless of keyword matching
             meta_raw = row["metadata"] or "{}"
             try:
                 meta_val = json.loads(meta_raw) if isinstance(meta_raw, str) else meta_raw
