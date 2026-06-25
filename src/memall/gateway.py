@@ -42,6 +42,7 @@ _NAV_HTML = '<div style="margin-bottom:16px">' \
     '<a href="/dashboard" style="color:#555;text-decoration:none;margin-right:16px">仪表盘</a>' \
     '<a href="/todos" style="color:#555;text-decoration:none;margin-right:16px">待办</a>' \
     '<a href="/discussions" style="color:#555;text-decoration:none;margin-right:16px">讨论</a>' \
+    '<a href="/graph" style="color:#555;text-decoration:none;margin-right:16px">图谱</a>' \
     '</div>'
 
 
@@ -230,7 +231,7 @@ class MemAllGateway:
     async def _auth_middleware(self, request: web.Request,
                                handler: Any) -> web.Response:
         """Require a valid Bearer token on all endpoints except /health, /pair and OPTIONS."""
-        if request.method == "OPTIONS" or request.path in ("/health", "/pair", "/dashboard"):
+        if request.method == "OPTIONS" or request.path in ("/health", "/pair", "/dashboard", "/graph"):
             return await handler(request)
         if request.path.startswith("/api/"):
             return await handler(request)
@@ -255,6 +256,8 @@ class MemAllGateway:
         app.router.add_get("/api/timeline/density", self._handle_api_timeline_density)
         app.router.add_get("/api/timeline/epochs", self._handle_api_timeline_epochs)
         app.router.add_get("/discussions", self._handle_discussions)
+        app.router.add_get("/graph", self._handle_graph)
+        app.router.add_get("/api/graph", self._handle_api_graph)
         app.router.add_get("/api/discussions", self._handle_api_discussions)
         app.router.add_get("/api/discussions/{topic_id}", self._handle_api_discussion_detail)
         app.router.add_post("/api/discussions/create", self._handle_api_discussion_create)
@@ -433,6 +436,150 @@ class MemAllGateway:
   {stats}
 </body></html>"""
         return web.Response(text=html, content_type="text/html")
+
+    async def _handle_graph(self, request: web.Request) -> web.Response:
+        node_id = request.query.get("node_id", "").strip()
+        with pool_conn() as conn:
+            mem_count = conn.execute("SELECT COUNT(*) AS c FROM memories").fetchone()["c"]
+            edge_count = conn.execute("SELECT COUNT(*) AS c FROM edges").fetchone()["c"]
+            density = round(edge_count / max(mem_count, 1), 2)
+
+            # Type distribution
+            type_rows = conn.execute(
+                "SELECT relation_type, COUNT(*) AS cnt FROM edges GROUP BY relation_type ORDER BY cnt DESC"
+            ).fetchall()
+
+            # Hub nodes top 20
+            hub_rows = conn.execute(
+                "SELECT node_id, COUNT(*) AS edge_count FROM ("
+                "SELECT source_id AS node_id FROM edges UNION ALL SELECT target_id AS node_id FROM edges"
+                ") GROUP BY node_id ORDER BY edge_count DESC LIMIT 20"
+            ).fetchall()
+            hub_ids = [r["node_id"] for r in hub_rows]
+            hub_map = {}
+            if hub_ids:
+                ph = ",".join("?" for _ in hub_ids)
+                for r in conn.execute(f"SELECT id, subject FROM memories WHERE id IN ({ph})", hub_ids).fetchall():
+                    hub_map[r["id"]] = r["subject"] or f"#{r['id']}"
+
+        # Stats card
+        stats_card = (
+            f'<div class="card">'
+            f'<h3>整体统计</h3>'
+            f'<div class="meta">记忆 {mem_count} · 关系 {edge_count} · 密度 {density}</div>'
+            f'</div>'
+        )
+
+        # Type distribution card
+        total = edge_count or 1
+        type_rows_html = "".join(
+            f'<tr><td>{esc_html(r["relation_type"])}</td>'
+            f'<td>{r["cnt"]}</td>'
+            f'<td>{r["cnt"]/total*100:.1f}%</td></tr>'
+            for r in type_rows
+        )
+        types_card = (
+            f'<div class="card">'
+            f'<h3>关系类型分布</h3>'
+            f'<table style="width:100%;border-collapse:collapse;font-size:14px">'
+            f'<tr style="background:#f0f0f0"><th style="text-align:left;padding:6px">类型</th><th style="text-align:right;padding:6px">数量</th><th style="text-align:right;padding:6px">占比</th></tr>'
+            f'{type_rows_html}'
+            f'</table></div>'
+        )
+
+        # Hub nodes card
+        hub_rows_html = []
+        for h in hub_rows:
+            hid = h["node_id"]
+            subj = hub_map.get(hid, f"#{hid}")
+            hub_rows_html.append(
+                f'<tr><td>#{hid}</td>'
+                f'<td><a href="/graph?node_id={hid}" style="color:#1976d2;text-decoration:none">{esc_html(subj)}</a></td>'
+                f'<td style="text-align:right">{h["edge_count"]}</td></tr>'
+            )
+        hub_rows_html = "".join(hub_rows_html)
+        hubs_card = (
+            f'<div class="card">'
+            f'<h3>活跃节点 TOP 20</h3>'
+            f'<table style="width:100%;border-collapse:collapse;font-size:14px">'
+            f'<tr style="background:#f0f0f0"><th style="text-align:left;padding:6px">ID</th><th style="text-align:left;padding:6px">主题</th><th style="text-align:right;padding:6px">边数</th></tr>'
+            f'{hub_rows_html}'
+            f'</table></div>'
+        )
+
+        extra = ""
+        if node_id.isdigit():
+            nid = int(node_id)
+            with pool_conn() as conn:
+                edge_rows = conn.execute(
+                    "SELECT e.source_id, e.target_id, e.relation_type, e.weight, e.created_at, "
+                    "ms.subject AS source_subject, mt.subject AS target_subject "
+                    "FROM edges e "
+                    "LEFT JOIN memories ms ON ms.id = e.source_id "
+                    "LEFT JOIN memories mt ON mt.id = e.target_id "
+                    "WHERE e.source_id = ? OR e.target_id = ? "
+                    "ORDER BY e.id DESC LIMIT 50",
+                    (nid, nid),
+                ).fetchall()
+                node_subj = conn.execute("SELECT subject FROM memories WHERE id=?", (nid,)).fetchone()
+            subj = esc_html(node_subj["subject"] if node_subj else f"#{nid}")
+            edge_rows_html = []
+            for r in edge_rows:
+                src = r["source_subject"] or f"#{r['source_id']}"
+                tgt = r["target_subject"] or f"#{r['target_id']}"
+                edge_rows_html.append(
+                    f'<tr>'
+                    f'<td>{esc_html(src)}</td>'
+                    f'<td style="text-align:center">→ ({esc_html(r["relation_type"])})</td>'
+                    f'<td>{esc_html(tgt)}</td>'
+                    f'</tr>'
+                )
+            edge_rows_html = "".join(edge_rows_html)
+            extra = (
+                f'<div class="card">'
+                f'<h3>节点详情: {subj} <span style="font-weight:normal;font-size:13px;color:#999">#{nid}</span></h3>'
+                f'<div class="meta">{len(edge_rows)} 条边</div>'
+                f'<table style="width:100%;border-collapse:collapse;font-size:14px">'
+                f'<tr style="background:#f0f0f0"><th style="text-align:left;padding:6px">来源</th><th style="text-align:center;padding:6px">关系</th><th style="text-align:left;padding:6px">目标</th></tr>'
+                f'{edge_rows_html}'
+                f'</table></div>'
+            )
+        elif node_id:
+            extra = f'<div class="card"><div class="empty-state">无效节点 ID: {esc_html(node_id)}</div></div>'
+
+        html = (
+            f'<!DOCTYPE html>\n<html><head><meta charset="utf-8"><title>MemALL · 图谱</title>{self._HTML_STYLE}'
+            f'</head><body>{_NAV_HTML}<h1>知识图谱</h1>{stats_card}{types_card}{hubs_card}{extra}</body></html>'
+        )
+        return web.Response(text=html, content_type="text/html")
+
+    async def _handle_api_graph(self, request: web.Request) -> web.Response:
+        with pool_conn() as conn:
+            mem_count = conn.execute("SELECT COUNT(*) AS c FROM memories").fetchone()["c"]
+            edge_count = conn.execute("SELECT COUNT(*) AS c FROM edges").fetchone()["c"]
+            type_rows = conn.execute(
+                "SELECT relation_type, COUNT(*) AS cnt FROM edges GROUP BY relation_type ORDER BY cnt DESC"
+            ).fetchall()
+            hub_rows = conn.execute(
+                "SELECT node_id, COUNT(*) AS edge_count FROM ("
+                "SELECT source_id AS node_id FROM edges UNION ALL SELECT target_id AS node_id FROM edges"
+                ") GROUP BY node_id ORDER BY edge_count DESC LIMIT 20"
+            ).fetchall()
+            hub_ids = [r["node_id"] for r in hub_rows]
+            hub_map = {}
+            if hub_ids:
+                ph = ",".join("?" for _ in hub_ids)
+                for r in conn.execute(f"SELECT id, subject FROM memories WHERE id IN ({ph})", hub_ids).fetchall():
+                    hub_map[r["id"]] = r["subject"] or f"#{r['id']}"
+        total = edge_count or 1
+        return web.json_response(
+            {
+                "totals": {"memories": mem_count, "edges": edge_count, "density": round(edge_count / max(mem_count, 1), 2)},
+                "types": [{"type": r["relation_type"], "count": r["cnt"], "pct": round(r["cnt"] / total * 100, 1)} for r in type_rows],
+                "hubs": [{"id": r["node_id"], "subject": hub_map.get(r["node_id"], f"#{r['node_id']}"), "edge_count": r["edge_count"]} for r in hub_rows],
+            },
+            headers=_cors_headers(request),
+        )
 
     async def _handle_todos(self, request: web.Request) -> web.Response:
         from memall.pipeline.task_lifecycle import list_active_tasks, list_blocked_tasks
