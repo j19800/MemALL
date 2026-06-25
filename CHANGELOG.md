@@ -1,3 +1,11 @@
+## [v0.1.9] - 2026-06-25
+
+### Fixed
+
+- **supersedes FK constraint — schema + all INSERT paths**: `db.py` still had `supersedes TEXT NOT NULL DEFAULT '[]'` but models use `Optional[str] = None`. Fresh DBs rejected all INSERTs with `None` for supersedes. Fixed schema to `INTEGER REFERENCES memories(id)` (no NOT NULL), changed all 4 INSERT paths in `convergence.py` + guard in `thin_waist.py`. (`core/db.py`, `core/models.py`, `core/thin_waist.py`, `pipeline/convergence.py`)
+
+- **converge_discussion string action_items missing assignee**: When action_items are plain strings (not dicts), the loop left `assigned_to=""`. Now extracts `participants` from discussion metadata and rotates through them as fallback assignees. Also adds `"assignee"` to task_meta dict for proper task attribution. (`pipeline/convergence.py`)
+
 ## [v0.1.8] - 2026-06-25
 
 ### Fixed

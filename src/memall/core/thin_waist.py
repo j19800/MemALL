@@ -347,7 +347,7 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
                         data.owner = owners[0] if owners else data.agent_name
 
         occurred = data.occurred_at or now
-        supersedes = data.supersedes if data.supersedes is not None else "[]"
+        supersedes = data.supersedes if data.supersedes not in (None, "[]") else None
         cur = conn.execute(
             """INSERT INTO memories
                (content, content_hash, level, owner, agent_name, subject,
@@ -358,7 +358,7 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
                 data.content, h, data.level, data.owner, data.agent_name,
                 data.subject, data.project, data.category, data.summary,
                 occurred, now, now,
-                data.supersedes, data.confidence, data.visibility,
+                supersedes, data.confidence, data.visibility,
                 json.dumps(data.metadata) if isinstance(data.metadata, dict) else data.metadata,
                 data.thread_id,
             ),

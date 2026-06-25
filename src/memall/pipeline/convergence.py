@@ -113,7 +113,7 @@ def create_discussion(
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (content, h, "L5", creator, creator, subject,
              "discussion", "", "", now, now, now,
-             "[]", 0.5, "private", meta, "open"),
+             None, 0.5, "private", meta, "open"),
         )
         memory_id = cur.lastrowid
         conn.commit()
@@ -338,7 +338,7 @@ def confirm_discussion(
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (content, h, "P2", agent_name, agent_name, subject,
              "discussion_response", "", "", now, now, now,
-             "[]", 0.6, "private", rmeta, "open"),
+             None, 0.6, "private", rmeta, "open"),
         )
         resp_id = cur.lastrowid
 
@@ -402,6 +402,9 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
     action_items = _unwrap_meta(meta, "action_items")
     title = disc.get("subject", "").replace("[??] ", "", 1)
 
+    # Collect participant names (used as fallback assignees for string action_items)
+    participants = _unwrap_meta(meta, "participants") or []
+
     # Aggregate latest stances from responses (simplified: just the confirming agent)
     latest: dict[str, dict] = {}
     for resp in responses:
@@ -448,7 +451,7 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (l4_content, l4_hash, "L4", "system", "system",
          f"[??] {title}", "decision", "", now, now, now,
-         "[]", 0.7, "private", l4_meta, "open"),
+         None, 0.7, "private", l4_meta, "open"),
     )
     l4_id = cur.lastrowid
 
@@ -469,10 +472,10 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
 
     # Create L5 tasks per action_items (may be strings or dicts)
     task_ids = []
-    for item in action_items:
+    for i, item in enumerate(action_items):
         if isinstance(item, str):
             desc = item
-            assigned_to = ""
+            assigned_to = participants[i % len(participants)] if participants else ""
         else:
             assigned_to = item.get("assigned_to", "")
             desc = item.get("description", "")
@@ -481,6 +484,7 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
         task_hash = hashlib.sha256(task_content.encode("utf-8")).hexdigest()
         task_meta = json.dumps({
             "status": "active",
+            "assignee": assigned_to,
             "source_discussion": disc["id"],
             "source_decision": l4_id,
         })
@@ -492,7 +496,7 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (task_content, task_hash, "L5", assigned_to, assigned_to,
              task_subject, "task", disc.get("project", ""), "", now, now, now,
-             "[]", 0.6, "private", task_meta, "open"),
+             None, 0.6, "private", task_meta, "open"),
         )
         tid = cur.lastrowid
         task_ids.append(tid)
