@@ -18,6 +18,10 @@
 
 - **Phase 1: 层级命名规范统一 — subject 前缀**: 新增 `_LEVEL_SUBJECT_PREFIX` 映射表（level → `[Lx 标签]`），`_make_subject()` 签名增加 `level` 参数，优先使用 level prefix 再 fallback 到 category prefix。distill.py L9 subject 追加 `[L9 蒸馏]` 前缀，integrate.py L10 subject 从 `"L10:{agent}跨领域洞察({})"` 改为 `"[L10 整合] {agent} 跨领域洞察({})"`。85 tests pass（无新增失败）。 (`core/thin_waist.py`, `pipeline/distill.py`, `pipeline/integrate.py`)
 
+- **Phase 2: 遗留 subject 数据清理**: 975 条 L9 旧数据追加 `[L9 蒸馏]` 前缀，4 条 L4 `[??]` 编码残损修复为 `[L4 会话]`。不改新生成逻辑，只清理存量。 (`一次性数据迁移`)
+
+- **Artifact 页面 `/artifact`**: 新增 gateway 公共路由，展示 session 成果清单（commits、讨论收敛、Agent 评估矩阵），添加到导航栏和 auth 白名单。 (`gateway.py`)
+
 ## [v0.1.8] - 2026-06-25
 
 ### Fixed
