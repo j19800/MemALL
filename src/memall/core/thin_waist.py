@@ -75,6 +75,18 @@ _FILLER_STARTS = [
 ]
 
 
+def normalize_agent_name(name: str) -> str:
+    """Normalize and validate an agent_name. Returns safe fallback "system" if invalid."""
+    if not name:
+        return "system"
+    name = name.strip().lower()
+    if (not _VALID_AGENT_RE.match(name)
+            or name in _AGENT_BLACKLIST
+            or _AGENT_TAG_RE.search(name)):
+        return "system"
+    return name
+
+
 def _make_subject(content: str, category: str, agent_name: str, owner: str) -> str:
     """Auto-generate a human-readable subject line.
 
@@ -214,16 +226,8 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
     elif content_len < 80:
         logger.info(f"capture: short memory ({content_len} chars) agent={data.agent_name} cat={data.category}: {data.content[:60]}")
 
-    # Ensure every memory has an agent_name — fallback to "system"
-    if not data.agent_name:
-        data.agent_name = "system"
-
-    # Agent name normalization and validation
-    data.agent_name = data.agent_name.strip().lower()
-    if (not _VALID_AGENT_RE.match(data.agent_name)
-            or data.agent_name in _AGENT_BLACKLIST
-            or _AGENT_TAG_RE.search(data.agent_name)):
-        data.agent_name = "system"
+    # Agent name normalization and validation (handles empty -> system)
+    data.agent_name = normalize_agent_name(data.agent_name)
 
     # Ensure owner has a sensible default for display
     if not data.owner:
@@ -333,8 +337,24 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
                     conn.commit()
                     return dup["id"]
 
+        # API 层校验：agent_name 必须在 identities 表中存在
         if data.agent_name:
-            data.visibility = _get_allowed_write_visibility(conn, data.agent_name, data.visibility)
+            # 查询 identities 表验证
+            ident = conn.execute(
+                "SELECT id FROM identities WHERE agent_name = ?",
+                (data.agent_name,)
+            ).fetchone()
+
+            if not ident:
+                logger.warning(
+                    f"capture BLOCKED: agent_name '{data.agent_name}' not found in identities table"
+                )
+                raise ValueError(
+                    f"Agent name '{data.agent_name}' 未在 identities 表中注册。"
+                    f"请联系管理员先在 identities 表中创建该 agent。"
+                )
+
+            # 如果 owner 存在且不是 agent_name 本身，需要验证是否为 trusted
             if data.owner and data.owner != data.agent_name:
                 ident = conn.execute(
                     "SELECT agent_type, trusted_by FROM identities WHERE agent_name = ?",
@@ -346,14 +366,16 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
                         owners = [data.agent_name] + trusted[:3]
                         data.owner = owners[0] if owners else data.agent_name
 
+            data.visibility = _get_allowed_write_visibility(conn, data.agent_name, data.visibility)
+
         occurred = data.occurred_at or now
         supersedes = data.supersedes if data.supersedes not in (None, "[]") else None
         cur = conn.execute(
             """INSERT INTO memories
                (content, content_hash, level, owner, agent_name, subject,
                 project, category, summary, occurred_at, created_at, updated_at,
-                supersedes, confidence, visibility, metadata, thread_id)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                supersedes, confidence, visibility, metadata, thread_id, agent_name_locked)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 data.content, h, data.level, data.owner, data.agent_name,
                 data.subject, data.project, data.category, data.summary,
@@ -361,6 +383,7 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
                 supersedes, data.confidence, data.visibility,
                 json.dumps(data.metadata) if isinstance(data.metadata, dict) else data.metadata,
                 data.thread_id,
+                0,  # 默认 0 = 未锁定
             ),
         )
         mem_id = cur.lastrowid
@@ -459,6 +482,9 @@ def update(memory_id: int, **fields) -> bool:
 
         for k, v in fields.items():
             if k in _ALLOWED_UPDATE_FIELDS:
+                # Normalize agent_name on update
+                if k == "agent_name":
+                    v = normalize_agent_name(v)
                 sets.append(f"{k} = ?")  # safe: k is whitelisted
                 params.append(v)
         if not sets:

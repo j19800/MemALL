@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS memories (
     access_count INTEGER NOT NULL DEFAULT 0,
     metadata TEXT NOT NULL DEFAULT '{}',
     arc_status TEXT,
-    thread_id INTEGER DEFAULT NULL
+    thread_id INTEGER DEFAULT NULL,
+    agent_name_locked BOOLEAN NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS edges (

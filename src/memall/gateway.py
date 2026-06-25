@@ -28,6 +28,7 @@ from memall.core.thin_waist import (
     traverse,
     timeline,
     MemoryInput,
+    normalize_agent_name,
 )
 from memall.pipeline.persona import generate_profile_3layer
 
@@ -1739,6 +1740,7 @@ def export_bundle(agent_name: str, fmt: str = "json") -> Dict[str, Any]:
 
 def _import_identity(conn, identity: dict, agent_name: str) -> bool:
     """Import/update an identity record. Returns True if updated/inserted."""
+    agent_name = normalize_agent_name(agent_name)
     if not identity or not agent_name:
         return False
     existing = conn.execute(
@@ -1773,9 +1775,10 @@ def _import_identity(conn, identity: dict, agent_name: str) -> bool:
 
 def _import_memories(conn, memories: list, agent_name: str) -> tuple:
     """Import memories with dedup by content_hash.
-    
+
     Returns (imported_count, old_id_to_new: dict).
     """
+    agent_name = normalize_agent_name(agent_name)
     existing_hashes = {
         r["content_hash"]
         for r in conn.execute(

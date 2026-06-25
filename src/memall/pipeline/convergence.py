@@ -13,6 +13,7 @@ converges the discussion.
 
 import hashlib
 import json
+from memall.core.thin_waist import normalize_agent_name
 import logging
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -75,6 +76,7 @@ def create_discussion(
     confirm_discussion() call converges it.  Extra kwargs are silently
     accepted for backward compat (callers that still pass participants=).
     """
+    creator = normalize_agent_name(creator)
     conn = get_conn()
     try:
         now = _now()
@@ -303,6 +305,7 @@ def confirm_discussion(
 
     Returns decision_id + task_ids from converge_discussion.
     """
+    agent_name = normalize_agent_name(agent_name)
     conn = get_conn()
     try:
         now = _now()
@@ -479,6 +482,7 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
         else:
             assigned_to = item.get("assigned_to", "")
             desc = item.get("description", "")
+        assigned_to = normalize_agent_name(assigned_to)
         task_subject = f"[任务] {title} — {_smart_subject(desc)}"[:200]
         task_content = f"[任务] {title} | {desc}"[:2000]
         task_hash = hashlib.sha256(task_content.encode("utf-8")).hexdigest()
@@ -599,6 +603,7 @@ def check_pending_discussions(agent_name: str) -> list[dict]:
     Captures a P2 reminder memory (dedup''d: skips if one exists within 1h
     for the same discussion+agent pair).
     """
+    agent_name = normalize_agent_name(agent_name)
     conn = get_conn()
     try:
         rows = conn.execute(

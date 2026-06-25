@@ -14,6 +14,8 @@
 
 - **converge_discussion string action_items missing assignee**: When action_items are plain strings (not dicts), the loop left `assigned_to=""`. Now extracts `participants` from discussion metadata and rotates through them as fallback assignees. Also adds `"assignee"` to task_meta dict for proper task attribution. (`pipeline/convergence.py`)
 
+- **agent_name 规范化管理 (方案 C)**: 从 `capture()` 中提取 `normalize_agent_name()` 独立函数至 `core/thin_waist.py`，应用于 `update()`、`convergence.py` 中 4 处直接 INSERT（`create_discussion`、`confirm_discussion`、`converge_discussion` L5 task、`check_pending_discussions`）以及 `gateway.py` 中 `_import_identity` 和 `_import_memories` 路径。数据清理：40 条空 agent_name → "system"。代理名称统一经过 strip+lower+regex+黑名单校验。 (`core/thin_waist.py`, `pipeline/convergence.py`, `gateway.py`)
+
 ## [v0.1.8] - 2026-06-25
 
 ### Fixed
