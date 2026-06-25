@@ -66,6 +66,16 @@ _SUBJECT_PREFIX = {
     "heartbeat": "",
 }
 
+# Level-based subject prefixes (Phase 1: level naming unification)
+_LEVEL_SUBJECT_PREFIX = {
+    "L1": "[L1 身份]", "L2": "[L2 时间]", "L3": "[L3 流程]",
+    "L4": "[L4 会话]", "L5": "[L5 计划]", "L6": "[L6 反思]",
+    "L7": "[L7 教训]", "L8": "[L8 关系]", "L9": "[L9 蒸馏]",
+    "L10": "[L10 整合]", "L11": "[L11 商业]",
+    "P0": "[P0 原始]", "P1": "[P1 原始]", "P2": "[P2 原始]",
+    "P3": "[P3 原始]", "P4": "[P4 原始]",
+}
+
 # Conversation filler starts to strip when generating subject
 _FILLER_STARTS = [
     "好的，", "好的 ", "明白了，", "明白了 ", "我知道了，", "我知道了 ",
@@ -87,13 +97,15 @@ def normalize_agent_name(name: str) -> str:
     return name
 
 
-def _make_subject(content: str, category: str, agent_name: str, owner: str) -> str:
+def _make_subject(content: str, category: str, level: str, agent_name: str, owner: str) -> str:
     """Auto-generate a human-readable subject line.
 
-    Format: [TypePrefix] Who: core_phrase  (≤60 chars)
-    Example: [决策] admin: 从 SQLite 迁移到 PostgreSQL
+    Format: [LevelPrefix] Who: core_phrase  (≤60 chars)
+    Example: [L4 会话] admin: 从 SQLite 迁移到 PostgreSQL
+    Falls back to category-based prefix if level has no mapping.
     """
-    prefix = _SUBJECT_PREFIX.get(category, "")
+    # Prefer level-based prefix, fallback to category-based
+    prefix = _LEVEL_SUBJECT_PREFIX.get(level, _SUBJECT_PREFIX.get(category, ""))
 
     # Extract core phrase: strip filler starts, take first meaningful segment
     core = content.strip()
@@ -235,7 +247,7 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
 
     # Auto-generate subject if not provided by caller
     if not data.subject:
-        data.subject = _make_subject(data.content, data.category, data.agent_name, data.owner)
+        data.subject = _make_subject(data.content, data.category, data.level, data.agent_name, data.owner)
 
     now = datetime.now(timezone.utc).isoformat()
     h = content_hash(data.content)
@@ -267,7 +279,7 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
     # Enforce: subject must be non-empty for L4+
     if data.level in ("L4", "L5", "L6", "L7", "L9", "L10", "L11") and not data.subject:
         logger.warning("capture: %s memory missing subject, content=%.60s", data.level, data.content or "")
-        data.subject = _make_subject(data.content, data.category, data.agent_name, data.owner)
+        data.subject = _make_subject(data.content, data.category, data.level, data.agent_name, data.owner)
 
     # Auto-inject provenance if caller didn't provide it
     if isinstance(data.metadata, dict):

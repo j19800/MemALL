@@ -16,6 +16,8 @@
 
 - **agent_name 规范化管理 (方案 C)**: 从 `capture()` 中提取 `normalize_agent_name()` 独立函数至 `core/thin_waist.py`，应用于 `update()`、`convergence.py` 中 4 处直接 INSERT（`create_discussion`、`confirm_discussion`、`converge_discussion` L5 task、`check_pending_discussions`）以及 `gateway.py` 中 `_import_identity` 和 `_import_memories` 路径。数据清理：40 条空 agent_name → "system"。代理名称统一经过 strip+lower+regex+黑名单校验。 (`core/thin_waist.py`, `pipeline/convergence.py`, `gateway.py`)
 
+- **Phase 1: 层级命名规范统一 — subject 前缀**: 新增 `_LEVEL_SUBJECT_PREFIX` 映射表（level → `[Lx 标签]`），`_make_subject()` 签名增加 `level` 参数，优先使用 level prefix 再 fallback 到 category prefix。distill.py L9 subject 追加 `[L9 蒸馏]` 前缀，integrate.py L10 subject 从 `"L10:{agent}跨领域洞察({})"` 改为 `"[L10 整合] {agent} 跨领域洞察({})"`。85 tests pass（无新增失败）。 (`core/thin_waist.py`, `pipeline/distill.py`, `pipeline/integrate.py`)
+
 ## [v0.1.8] - 2026-06-25
 
 ### Fixed

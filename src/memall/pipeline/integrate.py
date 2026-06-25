@@ -59,7 +59,7 @@ def _build_subject(agent: str, categories: list[str], source_count: int) -> str:
     cat_str = " + ".join(cats[:3])
     if len(cats) > 3:
         cat_str += f" +{len(cats)-3}"
-    return f"L10:{agent}跨领域洞察({cat_str})"
+    return f"[L10 整合] {agent} 跨领域洞察({cat_str})"
 
 
 def _recent_l10_similar(conn, merged_content: str, agent: str,

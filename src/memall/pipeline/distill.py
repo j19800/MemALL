@@ -66,6 +66,7 @@ def distill_step() -> dict:
 
             merged_content = header
             l9_subject = _smart_subject(merged_content)
+            l9_subject = f"[L9 蒸馏] {l9_subject}"
 
             # Majority project from source memories
             source_ids = mem_ids[:10]

@@ -14,7 +14,7 @@ _ERR_NOT_INITIALIZED = -32000
 _ERR_VERSION_MISMATCH = -32001
 
 # Protocol version support
-_SUPPORTED_PROTOCOL_VERSIONS = {"2025-11-25", "2025-03-26", "2024-11-05"}
+_SUPPORTED_PROTOCOL_VERSIONS = {"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"}
 _MAX_LINE_LENGTH = 65536  # 64KB max input line
 
 # ── Stderr logging to diagnose crashes without interfering with MCP stdio ──
