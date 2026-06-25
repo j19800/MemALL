@@ -554,11 +554,40 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 tops = " · ".join(d["subject"] for d in domain[:2] if d.get("subject"))
                 fmt_parts.append(f"[DOMAIN] {tops}")
 
-            # [GRAPH] L8 graph relations — knowledge graph connections
-            graph = injection.get("graph_relations", [])
-            if graph:
-                nodes = " · ".join(g["subject"] for g in graph[:3] if g.get("subject"))
-                fmt_parts.append(f"[GRAPH] {nodes}")
+            # [GRAPH] edges live query — replaces old L8 keyword query
+            graph = injection.get("graph_relations", {})
+            counts = graph.get("counts", {}) if isinstance(graph, dict) else {}
+            if counts.get("total", 0) > 0:
+                parts = []
+                # Line 1: time-window counts
+                parts.append(f"[GRAPH] Edges: 24h={counts['last_24h']} | 7d={counts['last_7d']} | total={counts['total']}")
+
+                # Line 2: type distribution (top 6, cap at ~120 chars)
+                types = graph.get("types", [])
+                if types:
+                    type_str = ", ".join(f"{t['type']} {t['count']}" for t in types[:6])
+                    if len(type_str) > 120:
+                        type_str = type_str[:117] + "..."
+                    parts.append(f"Types: {type_str}")
+
+                # Line 3: recent edges (up to 3)
+                recent = graph.get("recent", [])
+                if recent:
+                    recent_str = " | ".join(
+                        f"#{r['source']} → #{r['target']} ({r['type']})"
+                        for r in recent[:3]
+                    )
+                    parts.append(f"Recent: {recent_str}")
+
+                # Line 4: hub nodes (up to 3)
+                hubs = graph.get("hubs", [])
+                if hubs:
+                    hubs_str = ", ".join(
+                        f"#{h['id']} ({h['edge_count']} edges)" for h in hubs[:3]
+                    )
+                    parts.append(f"Hubs: {hubs_str}")
+
+                fmt_parts.append("\n".join(parts))
 
             # [DISTILL] pending groups
             try:

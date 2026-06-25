@@ -1,5 +1,9 @@
 ## [v0.1.9] - 2026-06-25
 
+### Changed
+
+- **Phase 1: [GRAPH] 段从 L8 关键词查询改为 edges 实时聚合**: `auto_inject` 中 4 条 edges 查询替换了旧 L8 memories 查询——时间窗口计数(24h/7d/total)、类型分布(GROUP BY)、最近 5 条边(ID 无 JOIN)、活跃节点 TOP5 含 subject。`session_start` 中 `[GRAPH]` 从单行 subjects 升级为 4 行结构化输出。95 tests pass。 (`mcp/federation_tools.py`, `pipeline/session.py`)
+
 ### Fixed
 
 - **supersedes FK constraint — schema + all INSERT paths**: `db.py` still had `supersedes TEXT NOT NULL DEFAULT '[]'` but models use `Optional[str] = None`. Fresh DBs rejected all INSERTs with `None` for supersedes. Fixed schema to `INTEGER REFERENCES memories(id)` (no NOT NULL), changed all 4 INSERT paths in `convergence.py` + guard in `thin_waist.py`. (`core/db.py`, `core/models.py`, `core/thin_waist.py`, `pipeline/convergence.py`)

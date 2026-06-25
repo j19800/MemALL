@@ -403,22 +403,53 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject panoramic_overview failed", exc_info=True)
 
-        # ── 14. L8 Graph Relations (knowledge graph connections) ──
-        graph_relations = []
+        # ── 14. [GRAPH] Edges live query (replaces old L8 keyword query) ──
+        graph_relations = {}
         try:
-            rows = conn.execute(
-                "SELECT id, subject, content, category, created_at FROM memories "
-                "WHERE level = 'L8' AND LENGTH(TRIM(content)) > 30 "
-                "ORDER BY created_at DESC LIMIT 5"
+            # A — Time-window counts
+            cnt_row = conn.execute(
+                "SELECT "
+                "SUM(CASE WHEN created_at >= datetime('now', '-1 day') THEN 1 ELSE 0 END) as last_24h, "
+                "SUM(CASE WHEN created_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END) as last_7d, "
+                "COUNT(*) as total FROM edges"
+            ).fetchone()
+            counts = {"last_24h": cnt_row["last_24h"], "last_7d": cnt_row["last_7d"], "total": cnt_row["total"]}
+
+            # B — Type distribution
+            type_rows = conn.execute(
+                "SELECT relation_type, COUNT(*) as cnt FROM edges "
+                "GROUP BY relation_type ORDER BY cnt DESC"
             ).fetchall()
-            for r in rows:
-                graph_relations.append({
-                    "id": r["id"],
-                    "subject": r["subject"][:60],
-                    "summary": (r["content"] or "")[:200],
-                    "category": r["category"],
-                    "at": r["created_at"],
-                })
+            types = [{"type": r["relation_type"], "count": r["cnt"]} for r in type_rows]
+
+            # C — Recent 5 edges (IDs only, no JOIN)
+            recent_rows = conn.execute(
+                "SELECT source_id, target_id, relation_type FROM edges "
+                "ORDER BY id DESC LIMIT 5"
+            ).fetchall()
+            recent = [{"source": r["source_id"], "target": r["target_id"], "type": r["relation_type"]} for r in recent_rows]
+
+            # D — Hub nodes (top 5 most connected)
+            hub_rows = conn.execute(
+                "SELECT node_id, COUNT(*) as edge_count FROM ("
+                "SELECT source_id as node_id FROM edges "
+                "UNION ALL "
+                "SELECT target_id as node_id FROM edges"
+                ") GROUP BY node_id ORDER BY edge_count DESC LIMIT 5"
+            ).fetchall()
+            hub_ids = [r["node_id"] for r in hub_rows]
+            hubs = []
+            if hub_ids:
+                ph = ",".join("?" for _ in hub_ids)
+                subject_map = {
+                    r["id"]: r["subject"] or f"#{r['id']}"
+                    for r in conn.execute(
+                        f"SELECT id, subject FROM memories WHERE id IN ({ph})", hub_ids
+                    ).fetchall()
+                }
+                hubs = [{"id": r["node_id"], "subject": subject_map.get(r["node_id"], f"#{r['node_id']}"), "edge_count": r["edge_count"]} for r in hub_rows]
+
+            graph_relations = {"counts": counts, "types": types, "recent": recent, "hubs": hubs}
         except Exception:
             logger.warning("auto_inject graph_relations failed", exc_info=True)
 
