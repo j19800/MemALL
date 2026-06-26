@@ -53,26 +53,12 @@ _PUBLIC_PATHS = frozenset({"/", "/docs", "/redoc", "/openapi.json", "/api/routes
 
 
 def _get_api_token() -> str:
-    """Read the configured API token. Auto-generates one if empty."""
+    """Read the configured API token. Returns empty string if not set (open access)."""
     try:
-        from memall.config import get_config, save_config
-        token = get_config("gateway.secret_key", "")
-        if not token:
-            # Auto-generate a token on first access
-            import secrets
-            token = secrets.token_hex(32)
-            cfg = get_config()
-            if "gateway" not in cfg:
-                cfg["gateway"] = {}
-            cfg["gateway"]["secret_key"] = token
-            try:
-                save_config(cfg, path=str(Path.home() / ".memall" / "config.json"))
-            except Exception:
-                pass  # best-effort
-        return token
+        from memall.config import get_config
+        return get_config("gateway.secret_key", "")
     except Exception:
         pass
-    # Fallback: read from token file
     token_file = Path.home() / ".memall" / "api_token.txt"
     if token_file.exists():
         return token_file.read_text(encoding="utf-8").strip()

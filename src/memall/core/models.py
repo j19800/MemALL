@@ -27,6 +27,8 @@ class Memory:
     visibility: str = "private"
     access_count: int = 0
     metadata: str = "{}"
+    thread_id: Optional[int] = None
+    agent_name_locked: bool = False
 
 
 @dataclass

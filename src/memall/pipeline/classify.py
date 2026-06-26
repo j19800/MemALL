@@ -158,6 +158,20 @@ def classify_step() -> dict:
         counts: dict = {}
         layer_counts: dict = {}
 
+        # Pre-aggregate edge counts for all rows in this batch (avoid N+1)
+        row_ids = [r["id"] for r in rows]
+        edge_count_map: dict[int, int] = {}
+        if row_ids:
+            ph = ",".join("?" * len(row_ids))
+            for edge_row in conn.execute(
+                f"SELECT source_id, COUNT(*) AS c FROM edges "
+                f"WHERE source_id IN ({ph}) AND relation_type IN "
+                f"('delegates','replies_to','extends','contradicts','cites','supersedes') "
+                f"GROUP BY source_id",
+                row_ids,
+            ).fetchall():
+                edge_count_map[edge_row["source_id"]] = edge_row["c"]
+
         for row in rows:
             text = row["content"]
             best_cat = "general"
@@ -198,12 +212,7 @@ def classify_step() -> dict:
                     primary = "L8"
                     secondary = [s for s in secondary if s != "L8"]
                 else:
-                    edge_count = conn.execute(
-                        "SELECT COUNT(*) AS c FROM edges "
-                        "WHERE source_id = ? AND relation_type IN "
-                        "('delegates','replies_to','extends','contradicts','cites','supersedes')",
-                        (row["id"],),
-                    ).fetchone()["c"]
+                    edge_count = edge_count_map.get(row["id"], 0)
                     if edge_count > 0:
                         primary = "L8"
                         secondary = [s for s in secondary if s != "L8"]

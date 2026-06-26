@@ -148,6 +148,7 @@ def _row_to_memory(row) -> Memory:
         supersedes=row["supersedes"], confidence=row["confidence"],
         visibility=row["visibility"],
         access_count=row["access_count"], metadata=row["metadata"],
+        thread_id=row.get("thread_id"), agent_name_locked=bool(row.get("agent_name_locked", 0)),
     )
 
 

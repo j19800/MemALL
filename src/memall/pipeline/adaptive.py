@@ -116,7 +116,7 @@ def adaptive_clean(
                 f"compression activated"
             )
             rows = conn.execute(
-                "SELECT id, content FROM memories ORDER BY id"
+                "SELECT id, content FROM memories ORDER BY id LIMIT 5000"
             ).fetchall()
             to_delete: List[int] = []
             n = len(rows)

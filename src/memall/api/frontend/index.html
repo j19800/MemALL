@@ -462,6 +462,62 @@ td .tag{
 .text-muted{color:var(--text-muted);font-size:12px}
 .divider{height:1px;background:var(--border);margin:12px 0}
 pre{font-family:inherit;white-space:pre-wrap;word-break:break-word}
+
+/* ===== Debt Dashboard ===== */
+.debt-container{max-width:1280px}
+.debt-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
+.debt-card{background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:16px;position:relative;overflow:hidden}
+.debt-card .num{font-size:36px;font-weight:700;line-height:1.1}
+.debt-card .label{font-size:13px;color:var(--text-secondary);margin-top:4px}
+.debt-card .bar{position:absolute;bottom:0;left:0;height:3px;transition:width 0.6s ease}
+.debt-s0 .bar{background:#ff4444}.debt-card.debt-s0 .num{color:#ff4444}
+.debt-s1 .bar{background:#ff8800}.debt-card.debt-s1 .num{color:#ff8800}
+.debt-s2 .bar{background:#f0c000}.debt-card.debt-s2 .num{color:#f0c000}
+.debt-s3 .bar{background:#4488ff}.debt-card.debt-s3 .num{color:#4488ff}
+.debt-total .bar{background:var(--accent)}
+.debt-rate .bar{background:var(--green)}
+.debt-hours .bar{background:var(--yellow)}
+.debt-panel{background:var(--bg-card);border:1px solid var(--border);border-radius:8px;margin-bottom:16px;padding:20px}
+.debt-panel h2{font-size:16px;font-weight:600;margin-bottom:16px;color:var(--accent)}
+.debt-pie-wrap{display:flex;align-items:center;gap:32px}
+.debt-pie-chart{width:200px;height:200px;border-radius:50%;flex-shrink:0}
+.debt-pie-legend{display:flex;flex-direction:column;gap:8px}
+.debt-pie-legend .item{display:flex;align-items:center;gap:8px;font-size:14px}
+.debt-pie-legend .dot{width:12px;height:12px;border-radius:3px;flex-shrink:0}
+.debt-pie-legend .val{margin-left:auto;font-weight:600}
+.debt-hm-table{width:100%;border-collapse:collapse;font-size:14px}
+.debt-hm-table th,.debt-hm-table td{padding:8px 12px;text-align:right;border-bottom:1px solid var(--border)}
+.debt-hm-table th{text-align:left;color:var(--text-secondary);font-weight:500}
+.debt-hm-table td:first-child{text-align:left;font-weight:500}
+.debt-hm-table .sev{display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;border-radius:4px;font-size:12px;font-weight:700}
+.sev-s0{background:#ff444422;color:#ff4444}
+.sev-s1{background:#ff880022;color:#ff8800}
+.sev-s2{background:#f0c00022;color:#f0c000}
+.sev-s3{background:#4488ff22;color:#4488ff}
+.debt-warn{color:var(--red)}
+.debt-crit{color:var(--red);font-weight:700}
+.debt-kanban{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+.debt-kanban-col h3{font-size:14px;margin-bottom:8px;padding:8px 0;border-bottom:2px solid var(--border)}
+.debt-kanban-col h3 .cnt{font-size:12px;color:var(--text-muted)}
+.debt-kanban-item{background:var(--bg-body);border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:6px;font-size:13px;display:flex;justify-content:space-between;align-items:center}
+.debt-kanban-item .tag{font-size:11px;padding:2px 6px;border-radius:4px;background:var(--border);color:var(--text-muted);flex-shrink:0}
+.debt-kanban-item .badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:3px;margin-left:6px}
+.badge-sec{background:#ff444422;color:#ff4444}
+.badge-auth{background:#d2992222;color:#d29922}
+.badge-data{background:#4488ff22;color:#4488ff}
+.badge-perf{background:#3fb95022;color:#3fb950}
+.debt-sprint-table{width:100%;border-collapse:collapse;font-size:14px}
+.debt-sprint-table th,.debt-sprint-table td{padding:6px 12px;text-align:left;border-bottom:1px solid var(--border)}
+.debt-sprint-table th{color:var(--text-secondary);font-weight:500}
+.debt-sprint-table .gh-btn{display:inline-block;padding:2px 10px;border-radius:4px;font-size:12px;font-weight:500;text-decoration:none;background:#238636;color:#fff}
+.debt-sprint-table .gh-btn:hover{background:#2ea043}
+.debt-progress-bar{height:6px;border-radius:3px;background:var(--border);overflow:hidden;margin-top:12px}
+.debt-progress-fill{height:100%;border-radius:3px;background:var(--accent);width:0%;transition:width 0.5s}
+.debt-rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px}
+.debt-rule-item{background:var(--bg-body);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:13px}
+.debt-rule-item .num{color:var(--accent);font-weight:600;margin-right:6px}
+.debt-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:768px){.debt-grid-2{grid-template-columns:1fr}.debt-pie-wrap{flex-direction:column;align-items:flex-start}.debt-kanban{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -514,6 +570,10 @@ pre{font-family:inherit;white-space:pre-wrap;word-break:break-word}
       <button class="nav-item" data-page="agents" onclick="switchPage('agents')">
         <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
         <span>Agent视图</span>
+      </button>
+      <button class="nav-item" data-page="debt" onclick="switchPage('debt')">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/><path d="M12 7v6"/><circle cx="12" cy="16" r="1" fill="currentColor"/></svg></span>
+        <span>技术负债</span>
       </button>
       <button class="nav-item" data-page="settings" onclick="switchPage('settings')">
         <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
@@ -658,6 +718,221 @@ pre{font-family:inherit;white-space:pre-wrap;word-break:break-word}
         <div id="agentGrid" class="agent-grid"></div>
       </div>
 
+      <!-- ===== Debt Dashboard ===== -->
+      <div class="page" id="page-debt">
+        <div class="debt-container">
+          <header style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px">
+            <div>
+              <div style="font-size:14px;color:var(--text-secondary)">代码行数 28,057 · 156 文件 · 版本 0.1.4</div>
+            </div>
+            <div class="text-muted" style="text-align:right;font-size:12px">
+              <div>更新时间</div>
+              <div style="font-size:16px;font-weight:600;">2026-06-26</div>
+            </div>
+          </header>
+
+          <div class="debt-cards">
+            <div class="debt-card debt-s0">
+              <div class="num">5</div>
+              <div class="label">S0 Critical (8 已修复)</div>
+              <div class="bar" style="width:10%;"></div>
+            </div>
+            <div class="debt-card debt-s1">
+              <div class="num">33</div>
+              <div class="label">S1 Major</div>
+              <div class="bar" style="width:44%;"></div>
+            </div>
+            <div class="debt-card debt-s2">
+              <div class="num">24</div>
+              <div class="label">S2 Minor</div>
+              <div class="bar" style="width:32%;"></div>
+            </div>
+            <div class="debt-card debt-s3">
+              <div class="num">13</div>
+              <div class="label">S3 Architecture</div>
+              <div class="bar" style="width:17%;"></div>
+            </div>
+            <div class="debt-card debt-total">
+              <div class="num">75</div>
+              <div class="label">负债总数</div>
+              <div class="bar" style="width:100%;"></div>
+            </div>
+            <div class="debt-card debt-rate">
+              <div class="num">62%</div>
+              <div class="label">S0 修复率</div>
+              <div class="bar" style="width:62%;"></div>
+            </div>
+            <div class="debt-card debt-hours">
+              <div class="num">~50h</div>
+              <div class="label">预估总工时</div>
+              <div class="bar" style="width:50%;"></div>
+            </div>
+          </div>
+
+          <div class="debt-grid-2">
+            <div class="debt-panel">
+              <h2>分布概览</h2>
+              <div class="debt-pie-wrap">
+                <svg class="debt-pie-chart" viewBox="0 0 100 100">
+                  <circle cx="50" cy="50" r="40" fill="none" stroke="#ff4444" stroke-width="20"
+                    stroke-dasharray="6.67 93.33" stroke-dashoffset="25" transform="rotate(-90,50,50)"/>
+                  <circle cx="50" cy="50" r="40" fill="none" stroke="#ff8800" stroke-width="20"
+                    stroke-dasharray="44 56" stroke-dashoffset="-6.33" transform="rotate(-90,50,50)"/>
+                  <circle cx="50" cy="50" r="40" fill="none" stroke="#f0c000" stroke-width="20"
+                    stroke-dasharray="32 68" stroke-dashoffset="-50.33" transform="rotate(-90,50,50)"/>
+                  <circle cx="50" cy="50" r="40" fill="none" stroke="#4488ff" stroke-width="20"
+                    stroke-dasharray="17.33 82.67" stroke-dashoffset="-82.33" transform="rotate(-90,50,50)"/>
+                  <circle cx="50" cy="50" r="28" fill="var(--bg-body)"/>
+                  <text x="50" y="48" text-anchor="middle" fill="var(--text-primary)" font-size="14" font-weight="700">75</text>
+                  <text x="50" y="60" text-anchor="middle" fill="var(--text-muted)" font-size="8">项</text>
+                </svg>
+                <div class="debt-pie-legend">
+                  <div class="item"><div class="dot" style="background:#ff4444;"></div>S0 Critical<span class="val">5</span></div>
+                  <div class="item"><div class="dot" style="background:#ff8800;"></div>S1 Major<span class="val">33</span></div>
+                  <div class="item"><div class="dot" style="background:#f0c000;"></div>S2 Minor<span class="val">24</span></div>
+                  <div class="item"><div class="dot" style="background:#4488ff;"></div>S3 Architecture<span class="val">13</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="debt-panel">
+              <h2>模块热力图 <span style="font-size:12px;color:var(--text-muted);font-weight:400;">负债密度 (项/KLOC)</span></h2>
+              <table class="debt-hm-table">
+                <tr><th>模块</th><th>S0</th><th>S1</th><th>S2</th><th>S3</th><th>总计</th><th>行数</th><th>密度</th></tr>
+                <tr><td>pipeline/</td><td><span class="sev sev-s0">3</span></td><td>13</td><td>6</td><td>4</td><td><b>28</b></td><td>11,528</td><td>2.43</td></tr>
+                <tr><td>mcp/</td><td><span class="sev sev-s0">0</span></td><td>4</td><td>3</td><td>1</td><td><b>11</b></td><td>4,193</td><td>2.62</td></tr>
+                <tr><td>gateway</td><td><span class="sev sev-s0">0</span></td><td>3</td><td>2</td><td>1</td><td><b>9</b></td><td>2,500</td><td class="debt-warn">3.60</td></tr>
+                <tr><td>core/</td><td><span class="sev sev-s0">1</span></td><td>7</td><td>4</td><td>2</td><td><b>15</b></td><td>2,465</td><td class="debt-crit">6.09</td></tr>
+                <tr><td>cli/</td><td>0</td><td>1</td><td>2</td><td>2</td><td><b>5</b></td><td>6,800</td><td>0.74</td></tr>
+                <tr><td>tests/</td><td>0</td><td>2</td><td>4</td><td>0</td><td><b>6</b></td><td>3,000</td><td>2.00</td></tr>
+                <tr><td>search/</td><td>0</td><td>2</td><td>1</td><td>2</td><td><b>5</b></td><td>401</td><td class="debt-crit">12.47</td></tr>
+                <tr><td>graph/</td><td><span class="sev sev-s0">0</span></td><td>1</td><td>1</td><td>1</td><td><b>4</b></td><td>753</td><td class="debt-warn">5.31</td></tr>
+                <tr><td>bridge/</td><td>0</td><td>1</td><td>1</td><td>0</td><td><b>2</b></td><td>631</td><td class="debt-warn">3.17</td></tr>
+              </table>
+            </div>
+          </div>
+
+          <div class="debt-panel">
+            <h2>S0 Critical 修复看板 <span style="font-size:12px;color:var(--text-muted);font-weight:400;">5 项待修复（8/13 已修复）| 预估 5 小时</span></h2>
+            <div class="debt-kanban">
+              <div class="debt-kanban-col">
+                <h3>待修复 <span class="cnt">5 项</span></h3>
+                <div class="debt-kanban-item">
+                  <span>S0-001 <span class="badge badge-data">bug</span> session_project NameError</span>
+                  <span class="tag">15m</span>
+                </div>
+                <div class="debt-kanban-item">
+                  <span>S0-007 <span class="badge badge-data">data</span> UUID truncated</span>
+                  <span class="tag">5m</span>
+                </div>
+                <div class="debt-kanban-item">
+                  <span>S0-009 <span class="badge badge-perf">perf</span> N+1 edge count</span>
+                  <span class="tag">1h</span>
+                </div>
+                <div class="debt-kanban-item">
+                  <span>S0-011 <span class="badge badge-perf">perf</span> O(n²) adaptive.py</span>
+                  <span class="tag">2h</span>
+                </div>
+                <div class="debt-kanban-item">
+                  <span>S0-012 <span class="badge badge-data">data</span> Memory dataclass mismatch</span>
+                  <span class="tag">15m</span>
+                </div>
+              </div>
+              <div class="debt-kanban-col">
+                <h3>已修复 <span class="cnt">8 项</span></h3>
+                <div class="debt-kanban-item" style="opacity:0.6;">
+                  <span>S0-002 <span class="badge badge-data">data</span> PRAGMA FK OFF</span>
+                  <span class="tag">v0.1.11</span>
+                </div>
+                <div class="debt-kanban-item" style="opacity:0.6;">
+                  <span>S0-003 <span class="badge badge-sec">sec</span> /api/* auth bypass</span>
+                  <span class="tag">v0.1.11</span>
+                </div>
+                <div class="debt-kanban-item" style="opacity:0.6;">
+                  <span>S0-004 <span class="badge badge-auth">auth</span> /pair token leak</span>
+                  <span class="tag">v0.1.11</span>
+                </div>
+                <div class="debt-kanban-item" style="opacity:0.6;">
+                  <span>S0-005 <span class="badge badge-sec">sec</span> int() crash</span>
+                  <span class="tag">v0.1.11</span>
+                </div>
+                <div class="debt-kanban-item" style="opacity:0.6;">
+                  <span>S0-006 <span class="badge badge-sec">sec</span> MCP HTTP no auth</span>
+                  <span class="tag">v0.1.11</span>
+                </div>
+                <div class="debt-kanban-item" style="opacity:0.6;">
+                  <span>S0-008 <span class="badge badge-perf">perf</span> O(n²) link.py</span>
+                  <span class="tag">v0.1.12</span>
+                </div>
+                <div class="debt-kanban-item" style="opacity:0.6;">
+                  <span>S0-010 <span class="badge badge-perf">perf</span> enrich.py no LIMIT</span>
+                  <span class="tag">v0.1.12</span>
+                </div>
+                <div class="debt-kanban-item" style="opacity:0.6;">
+                  <span>S0-013 <span class="badge badge-perf">perf</span> embedding silent fail</span>
+                  <span class="tag">v0.1.12</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="debt-panel">
+            <h2>下一轮推荐修复 <span style="font-size:12px;color:var(--text-muted);font-weight:400;">5 项 S0 剩余 | 预估 5 小时</span></h2>
+            <table class="debt-sprint-table">
+              <tr><th>优先级</th><th>ID</th><th>问题</th><th>模块</th><th>类型</th><th>工时</th><th>影响</th></tr>
+              <tr><td>P1</td><td>S0-009</td><td>N+1 edge count</td><td>classify.py:203</td><td>性能</td><td>1h</td><td>classify 逐条 COUNT</td></tr>
+              <tr><td>P2</td><td>S0-011</td><td>O(n²) adaptive.py</td><td>adaptive.py:118</td><td>性能</td><td>2h</td><td>去重全表对比</td></tr>
+              <tr><td>P3</td><td>S0-001</td><td>session_project NameError</td><td>session.py:770</td><td>崩溃</td><td>15m</td><td>L6 静默丢失</td></tr>
+              <tr><td>P4</td><td>S0-012</td><td>Memory dataclass mismatch</td><td>models.py</td><td>数据</td><td>15m</td><td>对象字段缺失</td></tr>
+              <tr><td>P5</td><td>S0-007</td><td>UUID truncation</td><td>session.py:353</td><td>数据</td><td>5m</td><td>碰撞风险</td></tr>
+            </table>
+            <div class="debt-progress-bar"><div class="debt-progress-fill" style="width:65%;"></div></div>
+            <div style="margin-top:8px;font-size:13px;color:var(--text-muted);">整体 S0 修复进度：8 / 13（62%）— 剩余 5 项</div>
+          </div>
+
+          <div class="debt-panel">
+            <h2>修复趋势</h2>
+            <div style="height:100px;display:flex;align-items:flex-end;gap:8px;">
+              <div style="flex:1;text-align:center;">
+                <div style="height:50px;background:var(--accent);border-radius:2px 2px 0 0;width:100%;"></div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">06-26 初扫</div>
+                <div style="font-size:12px;font-weight:600;">0%</div>
+              </div>
+              <div style="flex:1;text-align:center;">
+                <div style="height:62px;background:var(--green);border-radius:2px 2px 0 0;width:100%;"></div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">06-26 修复</div>
+                <div style="font-size:12px;font-weight:600;">62%</div>
+              </div>
+              <div style="flex:1;text-align:center;opacity:0.3;">
+                <div style="height:4px;background:var(--border);border-radius:2px;width:100%;"></div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">下一轮</div>
+                <div style="font-size:12px;font-weight:600;">—</div>
+              </div>
+            </div>
+            <div style="margin-top:12px;font-size:13px;color:var(--text-muted);">
+              8/13 S0 已修复（v0.1.11~v0.1.12）。已修复：安全漏洞（S0-003~006）、数据完整性（S0-002）、性能（S0-008,010）、静默失败（S0-013）。
+            </div>
+          </div>
+
+          <div class="debt-panel">
+            <h2>负债预防规则</h2>
+            <div class="debt-rules">
+              <div class="debt-rule-item"><span class="num">#1</span>所有 SQL 必须用 <code>?</code> 参数绑定，禁止 f-string 拼接</div>
+              <div class="debt-rule-item"><span class="num">#2</span>所有 query param 必须通过 try/except 或 Pydantic 校验</div>
+              <div class="debt-rule-item"><span class="num">#3</span>所有 pipeline 步骤必须有 LIMIT + 游标</div>
+              <div class="debt-rule-item"><span class="num">#4</span>新增 agent 必须过 3 个 gate：必要性 → 命名规范 → 责任边界</div>
+              <div class="debt-rule-item"><span class="num">#5</span>每步 <code>PRAGMA</code> 必须有 <code>try/finally</code> 恢复</div>
+              <div class="debt-rule-item"><span class="num">#6</span><code>except Exception</code> 必须注明具体异常类型</div>
+              <div class="debt-rule-item"><span class="num">#7</span>新增字段必须同时更新 dataclass + _row_to_memory + INSERT</div>
+            </div>
+          </div>
+
+          <footer style="margin-top:16px;padding:12px 0;border-top:1px solid var(--border);font-size:12px;color:var(--text-muted);">
+            MemALL Technical Debt Dashboard · 自动生成于 debt/DASHBOARD.md
+          </footer>
+        </div>
+      </div>
+
       <!-- ===== Settings ===== -->
       <div class="page" id="page-settings">
         <div class="card" style="margin-bottom:16px">
@@ -779,7 +1054,7 @@ function api(method, path, data){
 // ============================================================
 var pageTitles = {
   dashboard:'仪表盘', chat:'对话', memories:'记忆库',
-  graph:'知识图谱', agents:'Agent视图', settings:'设置'
+  graph:'知识图谱', agents:'Agent视图', debt:'技术负债', settings:'设置'
 };
 
 function switchPage(name){
@@ -803,7 +1078,21 @@ function switchPage(name){
   if(name==='memories'){ loadFilters(); searchMemories(); }
   if(name==='graph') loadVisNetwork();
   if(name==='agents') loadAgents();
+  if(name==='debt') initDebtBars();
   if(name==='settings') loadSettings();
+}
+
+// ============================================================
+//  Debt Dashboard
+// ============================================================
+function initDebtBars(){
+  setTimeout(function(){
+    document.querySelectorAll('#page-debt .debt-card .bar').forEach(function(b){
+      var w = b.style.width;
+      b.style.width = '0%';
+      setTimeout(function(){ b.style.width = w; }, 100);
+    });
+  }, 50);
 }
 
 // ============================================================
@@ -1571,7 +1860,6 @@ function loadGraph(){
         else if(level==='L7'||level==='L8'||level===7||level===8) color='#f472b6';
         else if(level==='L9'||level===9) color='#6366f1';
         else if(level==='L10'||level===10) color='#4ade80';
-        else if(level==='L11'||level===11) color='#14b8a6';
         else color='#3b82f6';
 
         return {id:id, label:(''+label).substring(0,20), color:{background:color,border:color,highlight:{background:color,border:'#fff'}}, font:{color:'#e8edf5',size:11}, borderWidth:1, size:15};

@@ -349,7 +349,7 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
             except Exception:
                 logger.warning("session.py: silent error", exc_info=True)
 
-        sid = str(uuid.uuid4())[:8]
+        sid = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             "INSERT INTO sessions (session_id, agent_name, started_at, status) VALUES (?, ?, ?, ?)",

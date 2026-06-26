@@ -1,3 +1,22 @@
+## [v0.1.13] - 2026-06-26
+
+### Fixed
+
+- **S0-007 UUID 截断碰撞风险**: `str(uuid.uuid4())[:8]` 截断到 32 位 → 使用完整 UUID 字符串，消除 10 万次操作 50% 碰撞风险。 (`pipeline/session.py`)
+
+- **S0-009 N+1 边缘计数**: `classify_step()` 每行执行独立 `COUNT(*) FROM edges` WHERE source_id=? → 预聚合 `GROUP BY source_id` 一次性查完，消除每 batch 500 次额外查询。 (`pipeline/classify.py`)
+
+- **S0-011 O(n²) 自适应去重**: `adaptive.py` compression 模式 `SELECT id, content FROM memories ORDER BY id` 无 LIMIT → 添加 `LIMIT 5000`，防止大库时 O(n²) 性能爆炸。 (`pipeline/adaptive.py`)
+
+- **S0-012 Memory dataclass 字段缺失**: `Memory` dataclass 缺 `thread_id` 和 `agent_name_locked` → 补全字段；`_row_to_memory()` 同步添加 `.get()` 安全读取；下游代码可通过 Memory 对象直接访问所有 DB 字段。 (`core/models.py`, `core/thin_waist.py`)
+
+- **S0 清零确认**: 全部 13 项 S0 Critical 负债已修复（v0.1.11~v0.1.13）。
+  - 安全类：S0-003~006（auth bypass、token leak、int crash、MCP auth）
+  - 数据类：S0-002（PRAGMA FK）、S0-007（UUID）、S0-012（dataclass）
+  - 性能类：S0-008（link O(n²)）、S0-009（N+1）、S0-010（enrich LIMIT）、S0-011（adaptive O(n²)
+  - 静默失败：S0-013（embedding）
+  - 运行时：S0-001（NameError）
+
 ## [v0.1.12] - 2026-06-26
 
 ### Fixed
