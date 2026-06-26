@@ -42,6 +42,8 @@ async def _error_middleware(request: web.Request, handler) -> web.Response:
 # ── Graceful shutdown ──────────────────────────────────────────────────
 async def _on_shutdown(app: web.Application):
     _log.info("MCP HTTP server shutting down")
+    _TOOL_EXECUTOR.shutdown(wait=False)
+    _TOOL_HEAVY.shutdown(wait=False)
     # Give in-flight requests time to finish
     await asyncio.sleep(0.5)
 
@@ -59,9 +61,26 @@ from memall.core.db import init_db
 
 _log = logging.getLogger("memall.mcp.http")
 
+# Optional bearer token for MCP HTTP transport (defense-in-depth).
+# Set MEMALL_MCP_TOKEN env var to enable. Falls back to MEMALL_AUTH_TOKEN.
+_MCP_TOKEN = os.environ.get("MEMALL_MCP_TOKEN") or os.environ.get("MEMALL_AUTH_TOKEN") or ""
+
+
+async def _check_auth(request: web.Request) -> bool:
+    """Return True if request is authorized (token not configured = always OK)."""
+    if not _MCP_TOKEN:
+        return True
+    auth = request.headers.get("Authorization", "")
+    return auth == f"Bearer {_MCP_TOKEN}"
+
 
 async def handle_mcp_post(request: web.Request) -> web.Response:
     """Handle JSON-RPC requests via POST /mcp."""
+    if not await _check_auth(request):
+        return web.json_response(
+            {"jsonrpc": "2.0", "error": {"code": -32001, "message": "unauthorized"}},
+            status=401,
+        )
     try:
         body = await request.json()
     except json.JSONDecodeError:

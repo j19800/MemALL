@@ -19,6 +19,15 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Tuple
 
+
+def _safe_int(val: Any, default: int = 0) -> int:
+    """Safely parse an integer from query params, returning *default* on invalid input."""
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
 from aiohttp import web, ClientSession, ClientTimeout
 
 from memall.core.db import pool_conn, get_conn
@@ -236,7 +245,8 @@ class MemAllGateway:
         """Require a valid Bearer token on all endpoints except /health, /pair and OPTIONS."""
         if request.method == "OPTIONS" or request.path in ("/health", "/pair", "/dashboard", "/graph", "/artifact", "/features"):
             return await handler(request)
-        if request.path.startswith("/api/"):
+        # GET/HEAD /api/* is read-only and public; POST/PUT/DELETE requires auth
+        if request.method in ("GET", "HEAD") and request.path.startswith("/api/"):
             return await handler(request)
         err = _require_auth(request, self._auth_token)
         if err is not None:
@@ -977,7 +987,7 @@ class MemAllGateway:
 
     async def _handle_dashboard(self, request: web.Request) -> web.Response:
         agent_name = request.query.get("agent_name", "").strip() or None
-        days = int(request.query.get("days", 30))
+        days = _safe_int(request.query.get("days", 30))
 
         with pool_conn() as conn:
             # Daily slices
@@ -1201,7 +1211,7 @@ class MemAllGateway:
     async def _handle_api_slices(self, request: web.Request) -> web.Response:
         agent_name = request.query.get("agent_name", "").strip() or "*"
         granularity = request.query.get("granularity", "day")
-        days = int(request.query.get("days", 30))
+        days = _safe_int(request.query.get("days", 30))
 
         from datetime import timedelta
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
@@ -1222,7 +1232,7 @@ class MemAllGateway:
     # ── API: timeline density (daily memory counts for heatmap) ──
 
     async def _handle_api_timeline_density(self, request: web.Request) -> web.Response:
-        days = int(request.query.get("days", 30))
+        days = _safe_int(request.query.get("days", 30))
         agent_name = request.query.get("agent_name", "").strip() or None
         from datetime import timedelta
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
@@ -1249,7 +1259,7 @@ class MemAllGateway:
     # ── API: epoch-structured timeline ──
 
     async def _handle_api_timeline_epochs(self, request: web.Request) -> web.Response:
-        days = int(request.query.get("days", 7))
+        days = _safe_int(request.query.get("days", 7))
         agent_name = request.query.get("agent_name", "").strip() or None
 
         # Get memories in time window
@@ -1617,7 +1627,7 @@ class MemAllGateway:
         return web.json_response(result, headers=_cors_headers(request))
 
     async def _handle_timeline_html(self, request: web.Request) -> web.Response:
-        days = int(request.query.get("days", 7))
+        days = _safe_int(request.query.get("days", 7))
         agent_name = request.query.get("agent_name", "").strip() or None
         category = request.query.get("category", "").strip() or None
 
@@ -1995,7 +2005,6 @@ class MemAllGateway:
                     "paired": True,
                     "peer_name": device_name,
                     "remote_address": remote_addr,
-                    "token": self._auth_token,
                 },
                 headers=_cors_headers(request),
             )
@@ -2345,7 +2354,11 @@ def discover_peers(timeout: float = 5.0) -> List[Dict[str, Any]]:
         sock.bind(("", _DISCOVERY_PORT))
     except OSError:
         # Port in use — try a random port for listening
-        sock.bind(("", 0))
+        try:
+            sock.bind(("", 0))
+        except OSError:
+            sock.close()
+            raise
 
     deadline = time.time() + timeout
     while time.time() < deadline:

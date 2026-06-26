@@ -629,8 +629,10 @@ def hub_sync(direction: str = "bidirectional", limit: int = 20,
                 (limit,),
             ).fetchall()
             for r in rows:
-                content_preview = r["content"][:300]
-                subject = r["subject"] or ""
+                # Sanitize: strip non-printable chars, limit length
+                raw_content = (r["content"] or "")[:300]
+                content_preview = "".join(c for c in raw_content if c.isprintable() or c in "\n\r\t")
+                subject = (r["subject"] or "").strip()[:100]
                 agent = r["agent_name"] or "memall"
                 msg = f"[MemALL] {agent}: {subject}\n\n{content_preview}"
                 if len(msg) > 500:

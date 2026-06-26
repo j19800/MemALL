@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 def distill_step() -> dict:
     conn = get_conn()
+    fk_was_on = conn.execute("PRAGMA foreign_keys").fetchone()[0]
     conn.execute("PRAGMA foreign_keys=OFF")
     try:
         rows = conn.execute(
@@ -120,6 +121,7 @@ def distill_step() -> dict:
         conn.commit()
         return {"distilled": distilled, "groups_processed": len(groups)}
     finally:
+        conn.execute(f"PRAGMA foreign_keys={'ON' if fk_was_on else 'OFF'}")
         conn.close()
 
 

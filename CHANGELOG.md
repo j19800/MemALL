@@ -1,3 +1,27 @@
+## [v0.1.11] - 2026-06-26
+
+### Security
+
+- **/pair 端点泄漏 auth_token**: 移除配对响应中的 `token` 字段，防止未授权用户通过 `/pair` 获取凭据。 (`gateway.py`)
+
+- **所有 /api/* 绕过认证**: 改为仅 GET/HEAD /api/* 免认证（只读公开），POST/PUT/DELETE 需要 Bearer token，修复 `POST /api/discussions/create` 和 `/respond` 无认证问题。 (`gateway.py`)
+
+- **MCP HTTP 零认证**: `handle_mcp_post` 新增可选的 Bearer token 检查（`MEMALL_MCP_TOKEN` 环境变量），作为 127.0.0.1 绑定之外的纵深防御。 (`mcp/http_transport.py`)
+
+### Fixed
+
+- **int(query_param) 非数字入参崩溃**: 4 处 `int(request.query.get(...))` 改为 `_safe_int()`，非数字入参返回默认值而非 500。 (`gateway.py`)
+
+- **PRAGMA foreign_keys=OFF 无恢复**: `distill_step()` 在 try 前保存 `PRAGMA foreign_keys` 状态，finally 中恢复，防止连接池复用后外键永久失效。 (`pipeline/distill.py`)
+
+- **discover_peers socket fd 泄漏**: 二次 bind 失败时关闭 socket 再 raise，防止 fd 泄漏。 (`gateway.py`)
+
+- **Hub 消息未做清理**: 从数据库拼接 agent_name/subject/content 到消息体时过滤非打印字符，限制长度。 (`mcp/federation_tools.py`)
+
+- **ThreadPoolExecutor 永不 shutdown**: `_on_shutdown` 中调用 `executor.shutdown(wait=False)`，确保平滑退出。 (`mcp/http_transport.py`)
+
+- **session_end 重复 if count>3 块**: 移除第 2 个重复的 `if count > 3:` 块（lines 683-781），该块与第一个块（line 109）功能重复，会创建重复的 L4 会话记忆和 L6 反思。 (`pipeline/session.py`)
+
 ## [v0.1.10] - 2026-06-26
 
 ### Fixed
