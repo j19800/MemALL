@@ -2,6 +2,8 @@
 
 ### Security
 
+- **L7 自助化闭环**: `handle_session_start()` 从 `auto_inject()` 结果中提取 L7 lessons/preferences 和 L6 reflections，格式化为显式行为指导文本返回，Claude 在 session 启动时即可读取并遵循。 (`mcp/tools/session.py`)
+
 - **/pair 端点泄漏 auth_token**: 移除配对响应中的 `token` 字段，防止未授权用户通过 `/pair` 获取凭据。 (`gateway.py`)
 
 - **所有 /api/* 绕过认证**: 改为仅 GET/HEAD /api/* 免认证（只读公开），POST/PUT/DELETE 需要 Bearer token，修复 `POST /api/discussions/create` 和 `/respond` 无认证问题。 (`gateway.py`)
