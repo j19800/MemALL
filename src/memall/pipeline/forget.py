@@ -31,8 +31,13 @@ from memall.core.db import get_conn
 
 
 def _ttl_cutoff(days: int) -> str:
-    """Return ISO-8601 datetime string for `days` ago (UTC)."""
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    """Return SQLite-compatible datetime string for `days` ago (UTC).
+
+    Uses the same format as SQLite datetime('now') — no T separator,
+    no timezone suffix — so lexicographic comparison with stored
+    created_at values produces correct results.
+    """
+    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _backup_before_delete() -> Dict[str, Any]:

@@ -2,6 +2,7 @@ import logging
 import hashlib
 import json
 import re
+import sqlite3
 from datetime import datetime, timezone
 from collections import Counter, defaultdict
 from memall.core.db import get_conn
@@ -100,8 +101,8 @@ def distill_step() -> dict:
                         "UPDATE memories SET supersedes = ? WHERE id = ?",
                         (json.dumps(sup_list, ensure_ascii=False), mid),
                     )
-                except Exception:
-                    logger.warning("distill.py: silent error", exc_info=True)
+                except sqlite3.OperationalError as e:
+                    logger.warning("distill: supersedes update failed for %d: %s", mid, e)
                 try:
                     # Only create edge if both memories still exist (avoids FK constraint failures)
                     exists = conn.execute(
@@ -113,8 +114,8 @@ def distill_step() -> dict:
                             "INSERT OR IGNORE INTO edges (source_id, target_id, relation_type, weight, created_at) VALUES (?, ?, ?, ?, ?)",
                             (new_id, mid, "refines", 1.0, now),
                         )
-                except Exception:
-                    logger.warning("distill.py: silent error", exc_info=True)
+                except sqlite3.IntegrityError as e:
+                    logger.warning("distill: edge INSERT FK violation %d->%d: %s", new_id, mid, e)
 
             distilled += 1
 
