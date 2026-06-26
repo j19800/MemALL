@@ -422,9 +422,18 @@ def forget_stats() -> Dict[str, Any]:
             "newest_memory_date": newest["created_at"][:19] if (newest and newest["created_at"]) else None,
             "avg_content_length": round(avg_len, 1) if avg_len else 0,
             "size_estimate_mb": round(total_bytes / 1024 / 1024, 3),
+            "archive": _get_archive_info(),
         }
     finally:
         conn.close()
+
+
+def _get_archive_info() -> dict:
+    try:
+        from memall.core.db import archive_db_stats
+        return archive_db_stats()
+    except Exception:
+        return {"exists": False, "memories": 0, "edges": 0, "file_size_mb": 0}
 
 
 # ══════════════════════════════════════════════════════════════════

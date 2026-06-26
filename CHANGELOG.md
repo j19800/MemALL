@@ -2,7 +2,11 @@
 
 ### Added
 
-- **S3-03**: 搜索向量化升级 — 意图路由 + 双引擎：① 新增 `search/intent_router.py` `IntentRouter`；② 新增 `memall_search` MCP 工具（统一入口，mode=auto 自动路由）；③ `thin_waist.py` `fts_query()` 集成 jieba 分词；④ 默认提供者从幽灵 `"tfidf"` 改为 `"faiss"`。 (`search/intent_router.py`, `search/__init__.py`, `mcp/tools/__init__.py`, `mcp/tools/retrieve.py`, `core/thin_waist.py`, `search/registry.py`)
+- **S3-03**: 搜索向量化升级 CLI ↔ MCP 合并 — `federation/family.py` 扩展参数支持 MCP 重用：`search_family(content_length=200)` MCP 可请求 500；`publish_memory(redact=False)` MCP 可传入 True 以触发内容审计日志。架构对齐，消除约 76 行重复 INSERT 逻辑。 (`federation/family.py`)
+
+- **S3-08**: [Lx] 前缀标准化：① `reflect.py` focus_tag 嵌套方括号修复（`[[L6]]` → `[L6]`）；② `thin_waist.py` 新增 L6-聚合/周反思/月反思 + L9-聚合 前缀常量；③ `federation_tools.py` `startswith('[L7')` → `startswith('[L7 ')` 修复；④ `mcp/tools/distill.py` startswith + 操作符优先级 bug 修复。 (`reflect.py`, `core/thin_waist.py`, `mcp/federation_tools.py`, `mcp/tools/distill.py`)
+
+- **S3-11**: 跨 agent 路由 — `create_discussion()` 存储 `participants` 到 metadata；Lark 通知传递真实 participants/timeout_hours；`check_pending_discussions()` 按 participants LIKE 过滤；`mcp/tools/discussion.py` handle_create() 转发 participants/timeout_hours。 (`federation/discussion.py`, `lark/notify.py`, `mcp/tools/discussion.py`) — 意图路由 + 双引擎：① 新增 `search/intent_router.py` `IntentRouter`；② 新增 `memall_search` MCP 工具（统一入口，mode=auto 自动路由）；③ `thin_waist.py` `fts_query()` 集成 jieba 分词；④ 默认提供者从幽灵 `"tfidf"` 改为 `"faiss"`。 (`search/intent_router.py`, `search/__init__.py`, `mcp/tools/__init__.py`, `mcp/tools/retrieve.py`, `core/thin_waist.py`, `search/registry.py`)
 
 - **S3-05**: Federation 主动推 — Hub → MemALL push 机制：① `federation_tools.py` 新增 `fed_deliver()`（Hub → MemALL 事件投递，写入本地 DB）；② `hub_client.py` 新增 `hub_deliver_event()`（MemALL → Hub REST POST `/api/deliver`）+ `start_websocket_listener()`（aiohttp 异步 WebSocket 背景监听器，自动重连）；③ `mcp/tools/federation.py` 新增 `handle_deliver()` + 注册 `memall_fed_deliver` MCP 工具；④ `gateway.py` 新增 `POST /federation/events` 端点（Hub 调用 MemALL 的 push receiver）。 (`mcp/federation_tools.py`, `mcp/hub_client.py`, `mcp/tools/federation.py`, `mcp/tools/__init__.py`, `gateway.py`)
 

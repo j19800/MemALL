@@ -836,8 +836,37 @@ def cmd_db(args):
         print(f"After:   {d['after_mb']} MB")
         print(f"Reclaimed: {d['reclaimed_mb']} MB")
 
+    elif action == "archive_stats":
+        result = mcp_call("memall_db", action="archive_stats")
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        if not d.get("exists"):
+            print("Archive DB does not exist yet (run pipeline with archive step)")
+        else:
+            print(f"Archive DB: {d['db_path']}")
+            print(f"File size:  {d['file_size_mb']} MB")
+            print(f"Memories:   {d['memories']}")
+            print(f"Edges:      {d['edges']}")
+            if d.get("level_distribution"):
+                print(f"By level:")
+                for level, cnt in d["level_distribution"].items():
+                    print(f"  {level}: {cnt}")
+
+    elif action == "archive_vacuum":
+        result = mcp_call("memall_db", action="archive_vacuum")
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        if "note" in d:
+            print(d["note"])
+        else:
+            print(f"Before:  {d['before_mb']} MB")
+            print(f"After:   {d['after_mb']} MB")
+            print(f"Reclaimed: {d['reclaimed_mb']} MB")
+
     else:
-        print("Usage: memall db {optimize|stats|vacuum}")
+        print("Usage: memall db {optimize|stats|vacuum|archive_stats|archive_vacuum}")
 
 
 # ──────────────────────────────────────────────

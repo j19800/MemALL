@@ -693,3 +693,120 @@ def db_stats(db_path: "str | None" = None) -> dict:
 # Auto-init flag: ``get_conn()`` / ``ConnectionPool._new_conn()``
 # run ``init_db()`` exactly once on the first connection.
 _auto_init_done = False
+
+# ── Archive DB (hot/cold separation, S3-02) ──
+
+ARCHIVE_DB_PATH: Path = DB_PATH.parent / "archive.db"
+
+ARCHIVE_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS archived_memories (
+    id INTEGER PRIMARY KEY,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    level TEXT NOT NULL,
+    owner TEXT NOT NULL DEFAULT '',
+    agent_name TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT '',
+    project TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT 'general',
+    summary TEXT NOT NULL DEFAULT '',
+    occurred_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    supersedes INTEGER,
+    trust_level REAL NOT NULL DEFAULT 1.0,
+    access_count INTEGER NOT NULL DEFAULT 0,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    arc_status TEXT,
+    thread_id INTEGER DEFAULT NULL,
+    agent_name_locked BOOLEAN NOT NULL DEFAULT 0,
+    archived_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS archived_edges (
+    id INTEGER PRIMARY KEY,
+    source_id INTEGER NOT NULL,
+    target_id INTEGER NOT NULL,
+    relation_type TEXT NOT NULL DEFAULT 'refines',
+    weight REAL NOT NULL DEFAULT 1.0,
+    created_at TEXT NOT NULL,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    archived_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_archived_memories_level ON archived_memories(level);
+CREATE INDEX IF NOT EXISTS idx_archived_memories_agent ON archived_memories(agent_name);
+CREATE INDEX IF NOT EXISTS idx_archived_edges_source ON archived_edges(source_id);
+CREATE INDEX IF NOT EXISTS idx_archived_edges_target ON archived_edges(target_id);
+"""
+
+
+def init_archive_db(conn=None):
+    """Create archive tables if they don't exist."""
+    close = False
+    if conn is None:
+        conn = sqlite3.connect(str(ARCHIVE_DB_PATH), timeout=10)
+        conn.row_factory = sqlite3.Row
+        close = True
+    try:
+        conn.executescript(ARCHIVE_SCHEMA_SQL)
+        conn.commit()
+    finally:
+        if close:
+            conn.close()
+
+
+def get_archive_db_path() -> Path:
+    return ARCHIVE_DB_PATH
+
+
+def _db_file_size_mb(path: str) -> float:
+    try:
+        return round(Path(path).stat().st_size / (1024 * 1024), 2)
+    except (OSError, FileNotFoundError):
+        return 0.0
+
+
+def archive_db_stats() -> dict:
+    """Return stats for archive.db."""
+    path = str(ARCHIVE_DB_PATH)
+    if not Path(path).exists():
+        return {"db_path": path, "exists": False, "file_size_mb": 0, "memories": 0, "edges": 0}
+    file_mb = _db_file_size_mb(path)
+    conn = sqlite3.connect(path, timeout=5)
+    conn.row_factory = sqlite3.Row
+    try:
+        mem_count = conn.execute("SELECT COUNT(*) FROM archived_memories").fetchone()[0]
+        edge_count = conn.execute("SELECT COUNT(*) FROM archived_edges").fetchone()[0]
+        level_dist = {}
+        for row in conn.execute(
+            "SELECT level, COUNT(*) as cnt FROM archived_memories GROUP BY level ORDER BY cnt DESC"
+        ).fetchall():
+            level_dist[row["level"]] = row["cnt"]
+        return {
+            "db_path": path,
+            "exists": True,
+            "file_size_mb": file_mb,
+            "memories": mem_count,
+            "edges": edge_count,
+            "level_distribution": level_dist,
+        }
+    finally:
+        conn.close()
+
+
+def vacuum_archive_db() -> dict:
+    """Run VACUUM on archive.db. Returns before/after sizes."""
+    path = str(ARCHIVE_DB_PATH)
+    if not Path(path).exists():
+        return {"before_mb": 0, "after_mb": 0, "reclaimed_mb": 0, "note": "archive.db does not exist"}
+    before = _db_file_size_mb(path)
+    conn = sqlite3.connect(path, timeout=10)
+    try:
+        conn.execute("VACUUM")
+    finally:
+        conn.close()
+    after = _db_file_size_mb(path)
+    return {
+        "before_mb": before,
+        "after_mb": after,
+        "reclaimed_mb": round(max(0, before - after), 2),
+    }

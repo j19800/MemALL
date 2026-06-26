@@ -64,7 +64,8 @@ def create_discussion(
     action_items: list | None = None,
     recommendation: str = "",
     creator: str = "system",
-    **kwargs,
+    participants: list | None = None,
+    timeout_hours: int = 24,
 ) -> dict:
     """Create a discussion as an L5 memory (category=discussion).
 
@@ -73,11 +74,11 @@ def create_discussion(
       == 解决方案 ==   ← options list
       == 建议 ==       ← recommendation field
 
-    Simplified: a single confirm_discussion() call converges it.
+    Multi-agent: converge_discussion() checks participants before converging.
+    If participants is empty or None, discussion converges on first response.
     """
     creator = normalize_agent_name(creator)
-    participants_list = [normalize_agent_name(p) for p in kwargs.get("participants", [])]
-    timeout_hours = kwargs.get("timeout_hours", 24)
+    participants_list = [normalize_agent_name(p) for p in (participants or [])]
     conn = get_conn()
     try:
         now = _now()
@@ -278,6 +279,7 @@ def _converge_single(conn, disc: dict) -> dict:
 
     Called by confirm_discussion() and resolve_pending_deliberations().
     Expects *conn* with an open transaction.
+    Only converges if all participants (if any) have responded.
     """
     meta = json.loads(disc.get("metadata") or "{}")
     if meta.get("status") != "active":
@@ -291,6 +293,19 @@ def _converge_single(conn, disc: dict) -> dict:
 
     if not responses:
         return {"warning": "no responses, can not converge"}
+
+    # Check if all participants have responded
+    participants = _unwrap_meta(meta, "participants") or []
+    if participants and len(participants) > 1:
+        responded_agents = set()
+        for resp in responses:
+            rmeta = json.loads(resp.get("metadata") or "{}")
+            a = rmeta.get("agent_name", resp.get("agent_name", ""))
+            if a:
+                responded_agents.add(a)
+        missing = [p for p in participants if p not in responded_agents]
+        if missing:
+            return {"warning": f"waiting for participants: {missing}", "participants": participants}
 
     return converge_discussion(conn, disc, [dict(r) for r in responses], "confirmed")
 
@@ -356,14 +371,44 @@ def confirm_discussion(
 
         conn.commit()
 
-        # ── Auto-converge: one confirm is enough for simplified flow ──
+        # ── Auto-converge: check if all participants have responded ──
+        participants = _unwrap_meta(disc_meta, "participants") or []
+
+        # Fetch ALL responses so far
         responses = conn.execute(
             "SELECT * FROM memories WHERE id IN ("
             "  SELECT target_id FROM edges WHERE source_id = ? AND relation_type = 'cites'"
             ") AND level = 'P2' ORDER BY created_at ASC",
             (discussion_id,),
         ).fetchall()
-        result = converge_discussion(conn, disc, [dict(r) for r in responses], f"Confirmed by {agent_name}")
+        response_list = [dict(r) for r in responses]
+
+        # Check if all participants have responded
+        if participants and len(participants) > 1:
+            responded_agents = set()
+            for resp in response_list:
+                rmeta = json.loads(resp.get("metadata") or "{}")
+                a = rmeta.get("agent_name", resp.get("agent_name", ""))
+                if a:
+                    responded_agents.add(a)
+            missing = [p for p in participants if p not in responded_agents]
+            if missing:
+                # Not all participants have responded yet — do NOT converge
+                conn.execute(
+                    "UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps(disc_meta), _now(), discussion_id),
+                )
+                conn.commit()
+                return {
+                    "status": "pending",
+                    "discussion_id": discussion_id,
+                    "response_id": resp_id,
+                    "responded_agents": list(responded_agents),
+                    "missing_agents": missing,
+                }
+
+        # All participants (if any) have responded, or no participants listed → converge
+        result = converge_discussion(conn, disc, response_list, f"Confirmed by {agent_name}")
         result["response_id"] = resp_id
         return result
 

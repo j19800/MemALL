@@ -3,7 +3,10 @@ from memall.pipeline.forget import forget_stats, forget_review, forget_expired, 
 from memall.pipeline.adaptive import adaptive_clean, adaptive_index, adaptive_distill, adaptive_step, adaptive_report
 from memall.pipeline.security import audit_sensitive, set_permission, check_access, security_score, list_agents_by_permission
 from memall.pipeline.ops import merge_memories, split_memory, tag_memory, batch_tag, batch_archive, batch_restore, deduplicate, undo
-from memall.core.db import optimize_db, db_stats, vacuum_db
+from memall.core.db import (
+    optimize_db, db_stats, vacuum_db,
+    archive_db_stats as _arch_stats, vacuum_archive_db as _vac_arch,
+)
 
 
 def handle_forget(arguments: dict) -> str:
@@ -138,6 +141,12 @@ def handle_db(arguments: dict) -> str:
         return json.dumps(result, default=str)
     elif action == "vacuum":
         result = vacuum_db()
+        return json.dumps(result)
+    elif action == "archive_stats":
+        result = _arch_stats()
+        return json.dumps(result, default=str)
+    elif action == "archive_vacuum":
+        result = _vac_arch()
         return json.dumps(result)
     else:
         return json.dumps({"error": f"unknown action: {action}"})

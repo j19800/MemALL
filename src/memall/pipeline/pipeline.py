@@ -293,6 +293,7 @@ _PIPELINE_STEPS = [
     ("improve",         "memall.pipeline.improve",         "improve_step",                    None),
     ("observation",     "memall.pipeline.observation",     "observation_step",                None),
     ("identity",        "memall.pipeline.identity",        "identity_step",                   None),
+    ("archive",         "memall.pipeline.archive",         "archive_step",                    None),
 ]
 
 # Steps whose execution is gated by a boolean run_pipeline(...) kwarg
@@ -303,6 +304,7 @@ _SKIP_WHEN = {
     "improve":     "include_improve",
     "embed_index": "include_embed_index",
     "identity":    "include_identity",
+    "archive":     "include_archive",
 }
 
 _OPTIONAL_STEPS = {
@@ -333,6 +335,7 @@ def run_pipeline(
     include_improve: bool = True,
     include_procedure: bool = True,
     include_embed_index: bool = False,
+    include_archive: bool = True,
     cluster_method: str = "embedding",
 ) -> dict:
     global _pipeline_start_time

@@ -8,6 +8,7 @@ def handle(arguments: dict) -> str:
     include_distill = arguments.get("include_distill", True)
     include_integrate = arguments.get("include_integrate", True)
     include_persona = arguments.get("include_persona", True)
+    include_archive = arguments.get("include_archive", True)
     timeout = arguments.get("timeout", 300)
     with concurrent.futures.ThreadPoolExecutor() as pool:
         fut = pool.submit(
@@ -16,6 +17,7 @@ def handle(arguments: dict) -> str:
             include_distill=include_distill,
             include_integrate=include_integrate,
             include_persona=include_persona,
+            include_archive=include_archive,
         )
         try:
             result = fut.result(timeout=timeout)

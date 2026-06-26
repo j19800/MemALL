@@ -560,7 +560,9 @@ def retrieve(query=None, viewer=None, **filters) -> list | Memory | None:
             conn.commit()
             cur = conn.execute("SELECT * FROM memories WHERE id = ?", (rid,))
             row = cur.fetchone()
-            return _row_to_memory(row) if row else None
+            if row:
+                return _row_to_memory(row)
+            return None
 
         where = ["1=1"]
         params = []
