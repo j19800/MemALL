@@ -358,12 +358,16 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
             ).fetchone()
 
             if not ident:
-                logger.warning(
-                    f"capture BLOCKED: agent_name '{data.agent_name}' not found in identities table"
+                # Auto-register unknown agent — capture() is the write path,
+                # not a validation gate. Identity records are created lazily.
+                conn.execute(
+                    "INSERT OR IGNORE INTO identities (agent_name, agent_type) "
+                    "VALUES (?, 'ai')",
+                    (data.agent_name,),
                 )
-                raise ValueError(
-                    f"Agent name '{data.agent_name}' 未在 identities 表中注册。"
-                    f"请联系管理员先在 identities 表中创建该 agent。"
+                logger.info(
+                    "capture: auto-registered agent '%s' in identities table",
+                    data.agent_name,
                 )
 
             # 如果 owner 存在且不是 agent_name 本身，需要验证是否为 trusted
@@ -494,9 +498,15 @@ def update(memory_id: int, **fields) -> bool:
 
         for k, v in fields.items():
             if k in _ALLOWED_UPDATE_FIELDS:
-                # Normalize agent_name on update
+                # Normalize agent_name on update (log warning if changed)
                 if k == "agent_name":
-                    v = normalize_agent_name(v)
+                    normalized = normalize_agent_name(v)
+                    if normalized != v:
+                        logger.warning(
+                            f"update({memory_id}): agent_name %r normalized to %r",
+                            v, normalized,
+                        )
+                    v = normalized
                 sets.append(f"{k} = ?")  # safe: k is whitelisted
                 params.append(v)
         if not sets:

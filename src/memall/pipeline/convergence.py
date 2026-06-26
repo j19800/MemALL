@@ -403,7 +403,8 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
 
     now = _now()
     action_items = _unwrap_meta(meta, "action_items")
-    title = disc.get("subject", "").replace("[??] ", "", 1)
+    import re as _re
+    title = _re.sub(r'^(\[??\] |\[讨论\] )', '', disc.get("subject", ""))
 
     # Collect participant names (used as fallback assignees for string action_items)
     participants = _unwrap_meta(meta, "participants") or []
@@ -434,10 +435,10 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
         stances_lines.append(f"  {agent}: {stance} - {args}")
 
     l4_content = (
-        f"# ??: {title}\n\n"
-        f"## ??\n{conclusion if conclusion else '(????)'}\n\n"
-        f"## ??\n" + "\n".join(stances_lines) + "\n\n"
-        f"## ????\n{reason}"
+        f"# [L4 会话] {title}\n\n"
+        f"## 结论\n{conclusion if conclusion else '(未记录)'}\n\n"
+        f"## 各方立场\n" + "\n".join(stances_lines) + "\n\n"
+        f"## 收敛原因\n{reason}"
     )[:2000]
     l4_hash = hashlib.sha256(l4_content.encode("utf-8")).hexdigest()
     l4_meta = json.dumps({
@@ -453,7 +454,7 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
             supersedes, confidence, visibility, metadata, arc_status)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (l4_content, l4_hash, "L4", "system", "system",
-         f"[??] {title}", "decision", "", now, now, now,
+         f"[L4 会话] {title}", "decision", "", now, now, now,
          None, 0.7, "private", l4_meta, "open"),
     )
     l4_id = cur.lastrowid

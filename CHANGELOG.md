@@ -1,3 +1,15 @@
+## [v0.1.10] - 2026-06-26
+
+### Fixed
+
+- **agent_name_locked 列缺少迁移**: 新建 `020_add_memories_agent_name_locked.py`，对已有数据库执行 `ALTER TABLE ADD COLUMN`。防止 `capture()` 因缺失列而崩溃。 (`migrations/020_add_memories_agent_name_locked.py`)
+
+- **"system" 身份未在 identities 表注册**: `init_db()` 中 seed "system" agent；`capture()` 改为自动注册未知 agent_name 而非 raise ValueError，修复 gateway HTTP API 对新 agent 请求返回 500 的问题。 (`core/db.py`, `core/thin_waist.py`)
+
+- **confirm_discussion 硬编码 [??] 前缀未随 Phase 1 更新**: 主题剥离改用 regex 同时兼容 `[??]` 和 `[讨论]` 前缀；L4 decision subject 和 content 改为 `[L4 会话]` 标准格式。 (`pipeline/convergence.py`)
+
+- **update() 静默规范化 agent_name**: 当 agent_name 被 normalize 改变时（如小写化、黑名单命中→"system"）添加 logger.warning 告警。 (`core/thin_waist.py`)
+
 ## [v0.1.9] - 2026-06-25
 
 ### Changed

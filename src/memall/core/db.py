@@ -322,6 +322,12 @@ def init_db(conn=None, migrate=True, db_path_for_backup: str = ""):
                     conn.commit()
             except ImportError:
                 logger.warning("db.py: silent error", exc_info=True)
+        # Seed "system" identity — required by capture() identity check
+        # (normalize_agent_name() falls back to "system" for empty/invalid names)
+        conn.execute(
+            "INSERT OR IGNORE INTO identities (agent_name, agent_type, description) "
+            "VALUES ('system', 'system', 'System agent for internal operations')"
+        )
         conn.commit()
     finally:
         if close:
