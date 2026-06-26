@@ -2348,38 +2348,38 @@ def discover_peers(timeout: float = 5.0) -> List[Dict[str, Any]]:
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.settimeout(timeout)
     try:
-        sock.bind(("", _DISCOVERY_PORT))
-    except OSError:
-        # Port in use — try a random port for listening
         try:
-            sock.bind(("", 0))
+            sock.bind(("", _DISCOVERY_PORT))
         except OSError:
-            sock.close()
-            raise
+            # Port in use — try a random port for listening
+            try:
+                sock.bind(("", 0))
+            except OSError:
+                raise
 
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        remaining = deadline - time.time()
-        if remaining <= 0:
-            break
-        try:
-            sock.settimeout(remaining)
-            data, addr = sock.recvfrom(4096)
-            msg = json.loads(data.decode("utf-8"))
-            if msg.get("type") == "memall_discovery":
-                dev = msg.get("device_name", addr[0])
-                if dev not in seen:
-                    seen.add(dev)
-                    peers.append({
-                        "device_name": dev,
-                        "address": addr[0],
-                        "port": msg.get("port", _DISCOVERY_PORT),
-                        "version": msg.get("version", "1.0"),
-                    })
-        except (socket.timeout, json.JSONDecodeError, OSError):
-            continue
-
-    sock.close()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            try:
+                sock.settimeout(remaining)
+                data, addr = sock.recvfrom(4096)
+                msg = json.loads(data.decode("utf-8"))
+                if msg.get("type") == "memall_discovery":
+                    dev = msg.get("device_name", addr[0])
+                    if dev not in seen:
+                        seen.add(dev)
+                        peers.append({
+                            "device_name": dev,
+                            "address": addr[0],
+                            "port": msg.get("port", _DISCOVERY_PORT),
+                            "version": msg.get("version", "1.0"),
+                        })
+            except (socket.timeout, json.JSONDecodeError, OSError):
+                continue
+    finally:
+        sock.close()
     return peers
 
 

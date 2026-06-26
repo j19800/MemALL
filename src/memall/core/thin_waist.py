@@ -1047,6 +1047,8 @@ def _context_rerank(results: list[dict], query: str, top_k: int,
     viewer_lower = viewer.lower()
 
     # 2. Apply per-result boost
+    from datetime import timedelta as _td
+    _freshness_cutoff = (datetime.now(timezone.utc) - _td(days=7)).date().isoformat()
     for r in results:
         boost = 1.0
         cat = (r.get("category") or "").lower()
@@ -1060,9 +1062,9 @@ def _context_rerank(results: list[dict], query: str, top_k: int,
         if agent == viewer_lower:
             boost += (affinity_boost - 1.0) * 0.5
 
-        # Freshness boost: recent memories
+        # Freshness boost: recent memories (~7 day window)
         created = r.get("created_at") or r.get("occurred_at") or ""
-        if created and created[:10] > "2026-06-15":  # rough ~7 day window
+        if created and created[:10] > _freshness_cutoff:
             boost += (freshness_boost - 1.0)
 
         r["context_score"] = (r.get("rerank_score", 0) or 0) * (1 + weight * (boost - 1.0))

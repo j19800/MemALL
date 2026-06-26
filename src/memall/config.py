@@ -279,15 +279,19 @@ def reset_config() -> None:
 
 
 def save_config(config: Optional[Dict[str, Any]] = None, path: str = "config.json") -> None:
-    """Save configuration to a JSON file.
+    """Save configuration to a JSON file (atomic write: temp + rename).
 
     Args:
         config: The config dict to save. Uses current config if None.
         path: Output path (default: config.json in CWD).
     """
     cfg = config or get_config()
-    with open(path, "w", encoding="utf-8") as f:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
 
 
 def config_dir() -> Path:

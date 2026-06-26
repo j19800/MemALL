@@ -13,7 +13,9 @@ from memall.migrations import get_pending_migrations
 
 logger = logging.getLogger(__name__)
 
-NOW = datetime.now(timezone.utc)
+def _now() -> datetime:
+    """Return current UTC time (not frozen at import)."""
+    return datetime.now(timezone.utc)
 
 
 def _pct(a: int, b: int) -> float:
@@ -134,7 +136,7 @@ def collect() -> dict:
         pipeline_fresh = True
         if last_pipeline:
             last_run = datetime.fromisoformat(last_pipeline)
-            days_since = (NOW - last_run).days
+            days_since = (_now() - last_run).days
             pipeline_fresh = days_since < 2
         elif total > 10:
             pipeline_fresh = False
