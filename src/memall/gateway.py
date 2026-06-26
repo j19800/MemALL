@@ -245,9 +245,6 @@ class MemAllGateway:
         """Require a valid Bearer token on all endpoints except /health, /pair and OPTIONS."""
         if request.method == "OPTIONS" or request.path in ("/health", "/pair", "/dashboard", "/graph", "/artifact", "/features"):
             return await handler(request)
-        # GET/HEAD /api/* is read-only and public; POST/PUT/DELETE requires auth
-        if request.method in ("GET", "HEAD") and request.path.startswith("/api/"):
-            return await handler(request)
         err = _require_auth(request, self._auth_token)
         if err is not None:
             return err

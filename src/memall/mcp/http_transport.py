@@ -61,9 +61,11 @@ from memall.core.db import init_db
 
 _log = logging.getLogger("memall.mcp.http")
 
-# Optional bearer token for MCP HTTP transport (defense-in-depth).
-# Set MEMALL_MCP_TOKEN env var to enable. Falls back to MEMALL_AUTH_TOKEN.
+# Bearer token for MCP HTTP transport (required for production).
+# Set MEMALL_MCP_TOKEN env var, falls back to MEMALL_AUTH_TOKEN.
 _MCP_TOKEN = os.environ.get("MEMALL_MCP_TOKEN") or os.environ.get("MEMALL_AUTH_TOKEN") or ""
+if not _MCP_TOKEN:
+    _log.warning("MCP HTTP auth disabled — set MEMALL_MCP_TOKEN or MEMALL_AUTH_TOKEN for production use")
 
 
 async def _check_auth(request: web.Request) -> bool:
