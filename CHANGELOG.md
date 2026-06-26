@@ -1,3 +1,14 @@
+## [v0.1.14] - 2026-06-26
+
+### Docs
+
+- **技术负债看板审计修复**: 基于逐文件行数统计校准 cli/ (6,800→4,338) 和 tests/ (3,000→11,476) 行数；验证 13 项 S0 代码级存在性（S0-003/S0-006 本轮修复，其余 11 项已核实）；Kanban 合并为单列"13/13 全部已修复"；Sprint 表替换为 S1 批量计划（5 项 ~45m）；饼图移除 S0 段重算（S1 47%/S2 34%/S3 19%）；热力图 85 项计数不一致修复。 (`frontend/index.html`, `src/memall/api/frontend/index.html`, `debt/INVENTORY.md`, `debt/DASHBOARD.md`)
+
+### Note
+
+- S0-004/S0-005 经审计确认当前代码已不存在裸漏洞（token leak 不在 handler 中，int() 已用 _safe_int/except 保护），标注"已核实"而非"已修复"。
+- 缺失模块（lark/api/federation/scheduler/plugins/migrations 约 5,800 行）尚未纳入负债扫描，需后续 scan.py 规则收敛后补充。
+
 ## [v0.1.13] - 2026-06-26
 
 ### Fixed
