@@ -13,6 +13,7 @@ converges the discussion.
 
 import hashlib
 import json
+import re
 from memall.core.thin_waist import normalize_agent_name
 import logging
 import uuid
@@ -403,8 +404,7 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
 
     now = _now()
     action_items = _unwrap_meta(meta, "action_items")
-    import re as _re
-    title = _re.sub(r'^(\[??\] |\[讨论\] )', '', disc.get("subject", ""))
+    title = re.sub(r'^(\[\?\?\] |\[讨论\] )', '', disc.get("subject", ""))
 
     # Collect participant names (used as fallback assignees for string action_items)
     participants = _unwrap_meta(meta, "participants") or []

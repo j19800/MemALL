@@ -12,8 +12,7 @@ import logging
 import numpy as np
 
 from memall.core.db import pool_conn
-from memall.core.nlp import tfidf_svd_embed
-from memall.graph.embeddings import _load_embeddings_matrix, EMBED_DIM
+from memall.graph.embeddings import EMBED_DIM
 
 logger = logging.getLogger(__name__)
 

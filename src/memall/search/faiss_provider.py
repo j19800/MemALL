@@ -15,9 +15,7 @@ logger = logging.getLogger(__name__)
 
 import json
 import os
-import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 from memall.search.base import SearchProvider
@@ -228,7 +226,7 @@ class FaissProvider(SearchProvider):
             model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
             return model.encode(texts, normalize_embeddings=True, show_progress_bar=False).astype(np.float32)
         except ImportError:
-            logger.warning("faiss_provider.py: silent error", exc_info=True)
+            logger.warning("faiss(%s) sentence-transformers not available, falling back to TF-IDF+SVD", self.__class__.__name__)
 
         try:
             from memall.core.nlp import tfidf_svd_embed
@@ -243,6 +241,6 @@ class FaissProvider(SearchProvider):
             if result is not None:
                 return result.astype(np.float32)
         except Exception:
-            logger.warning("faiss_provider.py: silent error", exc_info=True)
+            logger.warning("faiss(%s) TF-IDF+SVD fallback encode failed", self.__class__.__name__, exc_info=True)
 
         return None

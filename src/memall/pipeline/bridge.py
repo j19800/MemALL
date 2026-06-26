@@ -1,7 +1,6 @@
 import json
-import math
 from datetime import datetime, timezone
-from collections import defaultdict, Counter
+from collections import Counter
 from memall.core.db import get_conn
 
 

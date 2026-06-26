@@ -516,12 +516,6 @@ def adaptive_report() -> Dict[str, Any]:
             "table_name TEXT PRIMARY KEY, created_at TEXT, last_used TEXT, "
             "hit_count INTEGER DEFAULT 0)"
         )
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS distill_history ("
-            "id INTEGER PRIMARY KEY, agent_name TEXT, "
-            "memory_count_before INT, memory_count_after INT, "
-            "triggered_at TEXT, mode TEXT)"
-        )
 
         query_log_total = conn.execute(
             "SELECT COUNT(*) as c FROM query_log"

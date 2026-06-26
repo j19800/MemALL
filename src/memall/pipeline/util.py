@@ -55,7 +55,7 @@ def _smart_subject(content: str, max_len: int = 80) -> str:
     # Chinese sentence end: 。！？;
     # English sentence end: . ! ? (but not in abbreviations like "v0.1" or "U.S.")
     sentence_end = re.search(
-        r'[。！？；](?:\s|$)|[.!?](?:\s+[A-Z"「『]|\s*$|$)',
+        r'[。！？；……～](?:\s|$)|[.!?](?:\s+[A-Z"「『]|\s*$|$)',
         candidate
     )
     if sentence_end:

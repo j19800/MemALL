@@ -1,5 +1,4 @@
 import logging
-from datetime import datetime, timezone
 from memall.mcp.hooks import HookRegistry, HookDef, HOOK_POST_TOOL_USE, HOOK_POST_TOOL_USE_FAILURE, HOOK_STOP
 
 logger = logging.getLogger(__name__)

@@ -18,14 +18,14 @@
 | 前缀 | 模块 | 文件数 | 行数 | S0 | S1 | S2 | S3 |
 |------|------|--------|------|----|----|----|-----|
 | CORE | core/ | 7 | 2,473 | 0 | 0 | 4 | 2 |
-| PL | pipeline/ | 40 | 11,518 | 0 | 11 | 6 | 4 |
-| MCP+GW | mcp+gateway | 31 | 6,885 | 0 | 2 | 5 | 2 |
+| PL | pipeline/ | 40 | 11,518 | 0 | 0 | 6 | 4 |
+| MCP+GW | mcp+gateway | 31 | 6,885 | 0 | 0 | 5 | 2 |
 | CLI | cli/ | 13 | 4,338 | 0 | 1 | 2 | 2 |
-| TST | tests/ | 116 | 11,476 | 0 | 2 | 4 | 0 |
-| SRH | search/ | 4 | 401 | 0 | 2 | 1 | 2 |
-| GRP | graph/ | 5 | 750 | 0 | 1 | 1 | 1 |
-| BRG | bridge/ | 7 | 631 | 0 | 1 | 1 | 0 |
-| **合计** | | **223** | **38,472** | **0** | **20** | **24** | **13** |
+| TST | tests/ | 116 | 11,476 | 0 | 0 | 4 | 0 |
+| SRH | search/ | 4 | 401 | 0 | 0 | 1 | 2 |
+| GRP | graph/ | 5 | 750 | 0 | 0 | 1 | 1 |
+| BRG | bridge/ | 7 | 631 | 0 | 0 | 1 | 0 |
+| **合计** | | **223** | **38,472** | **0** | **2** | **24** | **13** |
 
 ---
 
@@ -137,7 +137,7 @@
 
 ---
 
-# 🟠 S1 — Major（26 项）
+# 🟠 S1 — Major（33 项，32✅，1 剩余）
 
 ## CORE 层（0 项 — 全部已修复）
 
@@ -197,16 +197,22 @@
 - **预估工时：** 10 分钟
 - **状态：** ✅ 已修复
 
-## PL 层（11 项）
+## PL 层 — 全部已修复 ✅
 
-### S1-PL-01 classify 阈值形同虚设
+### S1-PL-01 classify 阈值形同虚设 ✅
 - **文件：** classify.py:56
 - **描述：** `_LAYER_SCORE_THRESHOLD = 2` 但权重最低 45 → 从未触发。
+- **修复方式：** 改为 `_LAYER_SCORE_THRESHOLD = 50`，单次低权重匹配不再通过。
+- **修复时间：** v0.1.14
 - **预估工时：** 15 分钟
+- **状态：** ✅ 已修复
 
-### S1-PL-02 distill PRAGMA 关闭外键
+### S1-PL-02 distill PRAGMA 关闭外键 ✅
 - **文件：** distill.py:15
 - **描述：** 同 S0-002，重复列出以确保追踪。
+- **修复方式：** S0-002 中已修复（try/finally 恢复 PRAGMA）。
+- **修复时间：** v0.1.11
+- **状态：** ✅ 已修复（同 S0-002）
 
 ### S1-PL-03 distill 无 LIMIT ✅
 - **文件：** distill.py:18
@@ -216,50 +222,77 @@
 - **预估工时：** 15 分钟
 - **状态：** ✅ 已修复
 
-### S1-PL-04 echo OFFSET 分页漂移
+### S1-PL-04 echo OFFSET 分页漂移 ✅
 - **文件：** echo.py:122-176
 - **描述：** 越往后页面越慢，改用游标分页。
+- **修复方式：** 改 keyset pagination：`WHERE id > ? ORDER BY id LIMIT ?`。
+- **修复时间：** v0.1.14
 - **预估工时：** 30 分钟
+- **状态：** ✅ 已修复
 
-### S1-PL-05 echo 逐条边缘计数
+### S1-PL-05 echo 逐条边缘计数 ✅
 - **文件：** echo.py:135-138
 - **描述：** 每行额外 `COUNT(*) FROM edges`，类似 S0-009。
+- **修复方式：** 批量 `SELECT target_id, COUNT(*) ... GROUP BY target_id` 替代逐条。
+- **修复时间：** v0.1.14
 - **预估工时：** 30 分钟
+- **状态：** ✅ 已修复
 
-### S1-PL-06 pipeline 每步双连接
+### S1-PL-06 pipeline 每步双连接 ✅
 - **文件：** pipeline.py:69-81
 - **描述：** 25 步 × 2 次连接 = 50 次，每步前后各统计一次。
+- **修复方式：** `_count_memories(conn=None)` 支持复用连接；`run_pipeline` 打开一个 `pipeline_conn` 传给所有 `_run_step` 调用；`finally` 中关闭。
+- **修复时间：** v0.1.14
 - **预估工时：** 1 小时
+- **状态：** ✅ 已修复
 
-### S1-PL-07 pipeline 组件注册硬编码
+### S1-PL-07 pipeline 组件注册硬编码 ✅
 - **文件：** pipeline.py:348-359
 - **描述：** `if step_name == "reflect" and not include_reflect` 每新增一步需要加 if。
+- **修复方式：** `_PIPELINE_STEPS` 改为 (名称, 模块路径, 函数名, 门控) 元组，`importlib.import_module` 动态加载；`_SKIP_WHEN` 字典替代逐条 if；新增步骤仅需加一个元组。
+- **修复时间：** v0.1.14
 - **预估工时：** 2 小时（需重构）
+- **状态：** ✅ 已修复
 
-### S1-PL-08 集成候选类别逻辑复杂
+### S1-PL-08 集成候选类别逻辑复杂 ✅
 - **文件：** integrate.py:139-147
 - **描述：** 回退路径排序+切片+检查，无错误也能跳过。
+- **修复方式：** 合并主路径和回退路径，直接按 access_count 排序取前 2；移除废弃的 `access_total_threshold` 参数和 `_MIN_L9_ACCESS_TOTAL` 常量。
+- **修复时间：** v0.1.14
 - **预估工时：** 30 分钟
+- **状态：** ✅ 已修复
 
-### S1-PL-09 反射层中文分割不可靠
+### S1-PL-09 反射层中文分割不可靠 ✅
 - **文件：** reflect.py:146
 - **描述：** `text.split()` 在中文上行为不确定，影响 contradiction 检测。
+- **修复方式：** 改用 `re.findall(r'[\u4e00-\u9fff]|[a-zA-Z0-9_]+', t)` 逐字+英文词。
+- **修复时间：** v0.1.14
 - **预估工时：** 1 小时
+- **状态：** ✅ 已修复
 
-### S1-PL-10 硬编码 50/100 评分常数
+### S1-PL-10 硬编码 50/100 评分常数 ✅
 - **文件：** echo.py:140,148
 - **描述：** `min(1.0, edge_count / 50.0)` 应根据实际分布配置。
+- **修复方式：** 提取为 `_EDGE_NORM_CAP` 和 `_ACCESS_NORM_CAP` 模块级常量。
+- **修复时间：** v0.1.14
 - **预估工时：** 15 分钟
+- **状态：** ✅ 已修复
 
-### S1-PL-11 convergence 正则错误
+### S1-PL-11 convergence 正则错误 ✅
 - **文件：** convergence.py:407
 - **描述：** `\[??\]` 中 `?` 使 `\[` 可选，匹配了 `]` 而非预期。
+- **修复方式：** 改为 `\[\?\?\]` 正确转义两个 `?`。
+- **修复时间：** v0.1.14
 - **预估工时：** 10 分钟
+- **状态：** ✅ 已修复
 
-### S1-PL-12 多处 N+1
+### S1-PL-12 多处 N+1 ✅
 - **文件：** reflect.py:26-35 等
 - **描述：** 每 agent 单独 COUNT，50 agents = 50 次查询。
+- **修复方式：** 批量 `GROUP BY LOWER(agent_name)` 替代逐条。
+- **修复时间：** v0.1.14
 - **预估工时：** 30 分钟
+- **状态：** ✅ 已修复
 
 ### S1-PL-13 forget_l5_archive 无 LIMIT ✅
 - **文件：** forget.py:318
@@ -269,12 +302,15 @@
 - **预估工时：** 15 分钟
 - **状态：** ✅ 已修复
 
-## MCP/Gateway 层（2 项）
+## MCP/Gateway 层（1 项剩余）
 
-### S1-MCP-01 Hub 消息内容未清理
+### S1-MCP-01 Hub 消息内容未清理 ✅
 - **文件：** federation_tools.py:632-638
 - **描述：** Hub 外部 agent 的 content 拼接进消息，无 sanitize。
+- **验证结论：** 代码已有 `c.isprintable()` 过滤和 300 字符截断，INVENTORY 误报。
+- **修复时间：** v0.1.13
 - **预估工时：** 15 分钟
+- **状态：** ✅ 已修复
 
 ### S1-MCP-02 UDP socket FD 泄漏 ✅
 - **文件：** gateway.py:2341-2372
@@ -291,9 +327,11 @@
 - **预估工时：** 15 分钟
 - **状态：** ✅ 已修复（v0.1.13 已实现）
 
-### S1-MCP-04 工具输入验证不一致
+### S1-MCP-04 工具输入验证不一致 ✅
 - **文件：** adapter.py, gateway.py 多处
 - **描述：** MCP tool 有 Pydantic 校验但 gateway REST 没有，重复实现。
+- **修复方式：** 添加 `_validate()` 静态方法复用 mcp/models.py Pydantic 模型校验 5 个 POST handler（capture/retrieve/traverse/timeline/profile），精简手动 data.get() + 硬编码检查。
+- **修复时间：** v0.1.14
 - **预估工时：** 3 小时
 
 ### S1-MCP-05 遍历 depth 无上限 ✅
@@ -320,59 +358,83 @@
 - **预估工时：** 15 分钟
 - **状态：** ✅ 已修复
 
-## CLI/Tests 层（3 项）
+## CLI/Tests 层（3 项，2✅，1 剩余）
 
-### S1-CLI-01 archive/ 目录含 60+ 调试脚本
-- **文件：** tests/archive/
-- **描述：** 一次性调试脚本从未清理，与正式测试混淆。
-- **预估工时：** 1 小时
+### S1-CLI-01 tests/archive/ 残留调试脚本 ✅
+- **文件：** tests/archive/（78 文件已删除）
+- **描述：** 78 个一次性调试脚本堆积在 tests/archive/，全部无 pytest 隔离、无断言、有死代码。
+- **修复方式：** 删除整个 tests/archive/ 目录。
+- **修复时间：** v0.1.14
+- **预估工时：** 5 分钟
 
-### S1-CLI-02 测试隔离不足
-- **文件：** tests/conftest.py
-- **描述：** 检查是否使用独立数据库而非生产库。
-- **预估工时：** 1 小时
+### S1-CLI-02 init_temp_db 重复隔离逻辑 ✅
+- **文件：** tests/test_helpers.py
+- **描述：** conftest.py 已有 autouse fixture 做 monkeypatch + tmp_path 隔离，init_temp_db() 额外做 tempfile + patch + init_db 造成重复覆盖。
+- **修复方式：** init_temp_db() 改为返回 (None, None) 空操作桩，cleanup_temp_db() 留空；26 个测试文件无需修改。
+- **修复时间：** v0.1.14
+- **预估工时：** 15 分钟
 
 ### S1-CLI-03 CLI 与 MCP 重复实现
 - **文件：** cli/ 各文件 vs mcp/tools/
 - **描述：** 6,800 行 CLI 与 MCP tool 有大量重叠业务逻辑。
 - **预估工时：** 1 周（架构级重构）
 
-## Search/Graph/Bridge 层（3 项）
+## Search/Graph/Bridge 层（1 项）
 
-### S1-SRH-01 token_pattern 不支持 CJK
-- **文件：** nlp.py:178 (被 srh 引用)
+### S1-SRH-01 token_pattern 不支持 CJK ✅
+- **文件：** nlp.py:182, cluster.py:157,200
 - **描述：** `(?u)\b\w+\b` 在 CJK 上边界检测不稳定。
+- **修复方式：** TfidfVectorizer 改为 `tokenizer=tokenize`（nlp.tokenize 已支持 CJK `[\w\u4e00-\u9fff]+`）。nlp.py 和 cluster.py 共 3 处。
+- **修复时间：** v0.1.14
+- **预估工时：** 30 分钟
+- **状态：** ✅ 已修复
 
-### S1-SRH-02 faiss_provider 异常处理未知
+### S1-SRH-02 faiss_provider 异常处理 ✅
 - **文件：** search/faiss_provider.py
 - **描述：** 需检查错误路径。
+- **修复内容：**
+  - `_encode()` sentence-transformers ImportError 消息描述化
+  - `_encode()` TF-IDF+SVD fallback Exception 添加日志上下文 + exc_info=True
+- **修复时间：** v0.1.14
+- **预估工时：** 30 分钟
+- **状态：** ✅ 已修复
 
-### S1-BRG-01 bridge 错误处理
-- **文件：** bridge/
+### S1-BRG-01 bridge 错误处理 ✅
+- **文件：** bridge/main.py, bridge/lark_client.py
 - **描述：** 需检查异常传播路径。
+- **修复内容：**
+  - lark_client.py: start_event_consumer Popen 加 try/except，失败时 log 并 return
+  - lark_client.py: stdout 遍历加 try/finally 确保 proc.wait() 即使 handler 异常也执行
+  - main.py: stop() 加 try/finally 保护两个 watcher 都执行 stop
+  - main.py: MCP capture 失败从 logger.debug 升级到 logger.warning
+  - main.py: mentions 遍历加 isinstance(m, dict) 防止非字典元素 AttributeError
+  - main.py: 两个 "silent error" 改为具体描述
+- **修复时间：** v0.1.14
+- **预估工时：** 1 小时
+- **状态：** ✅ 已修复
 
 ---
 
-# 🟡 S2 — Minor（24 项，精选列表）
+# 🟡 S2 — Minor（24 项，14✅，10 剩余）
 
-| ID | 文件 | 描述 | 预估工时 |
-|----|------|------|---------|
-| S2-01 | thin_waist.py:10-11 | logger 重复赋值 | 1 分钟 |
-| S2-02 | thin_waist.py:699 | `import re` 重复 | 1 分钟 |
-| S2-03 | thin_waist.py:878-879 | 函数内 import（每次调用重载） | 5 分钟 |
-| S2-04 | thin_waist.py:16 vs 702 | `_CJK_RE` 两处不同定义 | 5 分钟 |
-| S2-05 | models.py:47 | MemoryInput.tags 死字段 | 2 分钟 |
-| S2-06 | util.py:57-60 | 句子结束正则缺 `……` `～` | 5 分钟 |
-| S2-07 | behavior.py:54 | `重构|重构` 重复 | 1 分钟 |
-| S2-08 | session.py:445-449 | 缩进不一致 | 2 分钟 |
-| S2-09 | db.py:283,324,381,439 | "silent error" 日志措辞误导 | 5 分钟 |
-| S2-10 | db.py:28-34 | DB 路径探测 D-H 盘副作用 | 15 分钟 |
-| S2-11 | pipeline.py:59-60 | records_in 语义误导 | 2 分钟 |
-| S2-12 | adaptive.py:376,520 | distill_history 表 3 处定义 | 5 分钟 |
-| S2-13 | convergence.py:406 | 函数内 import re（已模块级） | 1 分钟 |
-| S2-14 | thin_waist.py:388 | `"[]"` 字符串 vs list 不一致 | 5 分钟 |
-| S2-15 | nlp.py:163 | `if np is None` 死代码 | 2 分钟 |
-| S2-16-24 | 各处 | 其他命名/注释/死 import | 总计 30 分钟 |
+| ID | 文件 | 描述 | 预估工时 | 状态 |
+|----|------|------|---------|------|
+| S2-01 | thin_waist.py:10-11 | logger 重复赋值 | 1 分钟 | ✅ |
+| S2-02 | thin_waist.py:699 | `import re` 重复 | 1 分钟 | ✅ |
+| S2-03 | thin_waist.py:878-879 | 函数内 import（每次调用重载） | 5 分钟 | ✅ |
+| S2-04 | thin_waist.py:16 vs 702 | `_CJK_RE` 两处不同定义 | 5 分钟 | ✅ |
+| S2-05 | models.py:47 | MemoryInput.tags 死字段 | 2 分钟 | ✅ |
+| S2-06 | util.py:57-60 | 句子结束正则缺 `……` `～` | 5 分钟 | ✅ |
+| S2-07 | behavior.py:54 | `重构|重构` 重复 | 1 分钟 | ✅ |
+| S2-08 | session.py:445-449 | 缩进不一致 | 2 分钟 | ✅ |
+| S2-09 | db.py:283,324,381,439 | "silent error" 日志措辞误导 | 5 分钟 | ✅ |
+| S2-10 | db.py:28-34 | DB 路径探测 D-H 盘副作用 | 15 分钟 | ✅ |
+| S2-11 | pipeline.py:59-60 | records_in 语义误导 | 2 分钟 | ✅ |
+| S2-12 | adaptive.py:376,520 | distill_history 表 3 处定义 | 5 分钟 | ✅ |
+| S2-13 | convergence.py:406 | 函数内 import re（已模块级） | 1 分钟 | ✅ |
+| S2-14 | thin_waist.py:388 | `"[]"` 字符串 vs list 不一致 | 5 分钟 | ❌ |
+| S2-15 | nlp.py:163 | `if np is None` 死代码 | 2 分钟 | ✅ |
+| S2-16-24 | 各处 | 其他命名/注释/死 import | 总计 30 分钟 | ⬜
 
 ---
 
@@ -441,10 +503,10 @@
 # 当前负债指标
 
 ```
-总负债项：     49（0 S0 + 20 S1 + 24 S2 + 13 S3）
-预估修复工时： ~30 小时（S1: 3h + S2: 5h + S3: 25h）
+总负债项：     44（0 S0 + 1 S1 + 24 S2 + 13 S3）
+预估修复工时： ~20 小时（S1: 1周 + S2: 5h + S3: 25h）
 S0 修复率：    13/13（100%）
-S1 修复率：    17/37（45.9%）
+S1 修复率：    32/33（97.0%） ✅
 上次负债扫描： 2026-06-26
 所有 S0 已修复：v0.1.11~v0.1.13（13 项全部关闭）
-Phase A+B（S1 批量）：v0.1.14（17 项修复 — CORE 层 7/7 全部清零, MCP+GW 5/7）
+v0.1.14 合计修复：32 项 — CORE 7/7 + MCP+GW 7/7 + PL 13/13 + SRH 2/2 + BRG 1/1 + CLI 2/3 🎉

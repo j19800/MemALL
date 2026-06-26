@@ -446,7 +446,7 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 except Exception:
                     logger.warning("session.py: silent error", exc_info=True)
 
-                        # ── Formatted injection (4 sections, ~800 chars) ──
+            # ── Formatted injection (4 sections, ~800 chars) ──
             fmt_parts = [
                 "[CONTEXT] 会话上下文（首段先概括以下信息）：",
             ]

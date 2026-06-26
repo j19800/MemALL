@@ -6,7 +6,7 @@ import queue
 import logging
 from contextlib import contextmanager
 from pathlib import Path
-from datetime import datetime
+
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +25,16 @@ def _resolve_db_path() -> Path:
     _default = Path(_home) / ".memall" / "data.db"
     # Prefer non-system drive on Windows (DB + backups too large for C:)
     if os.name == "nt" and str(_default).startswith("C:\\"):
+        _try_count = 0
         for drive in "DEFGH":
+            if _try_count >= 3:
+                break
             candidate = Path(f"{drive}:") / ".memall" / "data.db"
             try:
                 if candidate.parent.exists() or candidate.parent.mkdir(parents=True, exist_ok=True):
                     return candidate
             except (OSError, PermissionError):
+                _try_count += 1
                 continue
     return _default
 
@@ -282,7 +286,7 @@ def get_conn(db_path=None) -> sqlite3.Connection:
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
     except Exception:
-        logger.warning("db.py: silent error", exc_info=True)
+        logger.warning("db.py: failed to load sqlite_vec extension", exc_info=True)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA cache_size=-8000")
@@ -322,7 +326,7 @@ def init_db(conn=None, migrate=True, db_path_for_backup: str = ""):
                         log.warning(f"Migrations completed with {result['errors']} error(s)")
                     conn.commit()
             except ImportError:
-                logger.warning("db.py: silent error", exc_info=True)
+                logger.warning("db.py: migration import failed", exc_info=True)
         # Seed "system" identity — required by capture() identity check
         # (normalize_agent_name() falls back to "system" for empty/invalid names)
         conn.execute(
@@ -379,7 +383,7 @@ class ConnectionPool:
             conn.enable_load_extension(True)
             sqlite_vec.load(conn)
         except Exception:
-            logger.warning("db.py: silent error", exc_info=True)
+            logger.warning("db.py: get_conn vec load failed", exc_info=True)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA cache_size=-8000")
@@ -438,7 +442,7 @@ class ConnectionPool:
             except sqlite3.ProgrammingError:
                 pass  # can't close connection owned by another thread
             except Exception:
-                logger.warning("db.py: silent error", exc_info=True)
+                logger.warning("db.py: close conn failed on thread switch", exc_info=True)
             return self._new_conn()
 
         return conn

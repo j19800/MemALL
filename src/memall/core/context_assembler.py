@@ -1,6 +1,6 @@
 import json
 from collections import Counter
-from datetime import datetime, timezone
+
 from memall.core.db import pool_conn
 
 

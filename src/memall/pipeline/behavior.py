@@ -50,7 +50,7 @@ _DEVIATE_SIGNALS = re.compile(
 )
 
 _CORRECT_SIGNALS = re.compile(
-    r"(?:纠正|调整|改进|优化|修复|重构|重构|补充|修改|"
+    r"(?:纠正|调整|改进|优化|修复|重构|补充|修改|"
     r"修正|重做|更换|替换|更新|升级|降级|"
     r"fix|correct|adjust|improve|optimize|refactor|update|"
     r"modify|change|replace|upgrade|patch|tune)",

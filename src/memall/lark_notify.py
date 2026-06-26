@@ -7,9 +7,7 @@ responded to, or converged.  All functions are best-effort (no raise).
 import json
 import logging
 import subprocess
-import sys
 import os
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

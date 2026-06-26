@@ -9,7 +9,6 @@ import logging
 import sys
 import time
 import threading
-from pathlib import Path
 from typing import Optional
 
 from memall.bridge.config import BridgeConfig
@@ -66,8 +65,10 @@ class AgentBridge:
 
     def stop(self) -> None:
         self._stop.set()
-        self._inbox_watcher.stop()
-        self._outbox_watcher.stop()
+        try:
+            self._inbox_watcher.stop()
+        finally:
+            self._outbox_watcher.stop()
         logger.info("bridge(%s) stopped", self.config.agent_name)
 
     def _start_event_listener(self) -> None:
@@ -126,7 +127,7 @@ class AgentBridge:
                     if isinstance(p, dict):
                         raw_text = p.get("text", raw_text)
                 except (_j2.JSONDecodeError, TypeError):
-                    logger.warning("main.py: silent error", exc_info=True)
+                    logger.warning("bridge(%s) failed to parse reply content: %s", self.config.agent_name, exc_info=True)
             reply_msg = {
                 "id": f"reply_{msg_id[:12]}",
                 "type": "response",
@@ -160,12 +161,13 @@ class AgentBridge:
                 if isinstance(p, dict):
                     text = p.get("text", text)
             except (_j2.JSONDecodeError, TypeError):
-                logger.warning("main.py: silent error", exc_info=True)
+                    logger.warning("bridge(%s) failed to parse mention content: %s", self.config.agent_name, exc_info=True)
 
         for m in mentions:
-            key = m.get("key", "")
-            if key:
-                text = text.replace(key, "", 1).strip()
+            if isinstance(m, dict):
+                key = m.get("key", "")
+                if key:
+                    text = text.replace(key, "", 1).strip()
         text = text.strip()
         if not text:
             return
@@ -204,7 +206,7 @@ class AgentBridge:
             )
             urllib.request.urlopen(req, timeout=5)
         except Exception as e:
-            logger.debug("bridge(%s) capture to memall failed: %s", self.config.agent_name, e)
+            logger.warning("bridge(%s) capture to memall failed: %s", self.config.agent_name, e)
 
     def _on_agent_message(self, data: dict, filename: str) -> None:
         """Process a message file written by the local agent into inbox."""

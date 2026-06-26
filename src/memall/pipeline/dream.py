@@ -25,7 +25,6 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from memall.core.db import pool_conn
 from memall.core.nlp import tokenize
 
 logger = logging.getLogger(__name__)

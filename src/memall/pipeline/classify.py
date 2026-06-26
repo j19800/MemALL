@@ -51,7 +51,7 @@ _LAYER_RULE_LIST = [
     ("L4", _LAYER_PREFIX_RE, _L4_WORDS, 45),
 ]
 
-_LAYER_SCORE_THRESHOLD = 2
+_LAYER_SCORE_THRESHOLD = 50
 
 # Layer ranking for "only upgrade, never downgrade"
 # Higher number = higher rank. Terminal layers (L6/L8/L9/L10/L11) are immutable.

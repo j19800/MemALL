@@ -8,7 +8,6 @@ and pairing, and federated cross-device queries.
 import asyncio
 import json
 import logging
-import os
 import re
 import secrets
 import socket
@@ -40,6 +39,13 @@ from memall.core.thin_waist import (
     normalize_agent_name,
 )
 from memall.pipeline.persona import generate_profile_3layer
+from memall.mcp.models import (
+    CaptureInput,
+    RetrieveInput,
+    TraverseInput,
+    TimelineInput,
+    PersonaProfileInput,
+)
 
 
 logger = logging.getLogger("memall.gateway")
@@ -1871,20 +1877,28 @@ class MemAllGateway:
             esc_html((mem.content or "")[:250]),
         )
 
+    @staticmethod
+    def _validate(data: dict, model) -> tuple[dict | None, str | None]:
+        """Validate data against a Pydantic model. Returns (validated_dict, None) or (None, error_msg)."""
+        try:
+            m = model(**data)
+            return m.model_dump(), None
+        except Exception as e:
+            return None, str(e)
+
     async def _handle_capture(self, request: web.Request) -> web.Response:
         data = await self._read_json(request)
         if data is None:
             return web.json_response({"error": "invalid JSON body"}, status=400, headers=_cors_headers(request))
+        validated, err = self._validate(data, CaptureInput)
+        if err:
+            return web.json_response({"error": err}, status=400, headers=_cors_headers(request))
         try:
-            agent_name = data.get("agent_name", "")
-            content = data.get("content", "")
-            if not content:
-                return web.json_response({"error": "content is required"}, status=400, headers=_cors_headers(request))
             inp = MemoryInput(
-                content=content,
-                agent_name=agent_name,
-                category=data.get("category", "general"),
-                level=data.get("level", "P2"),
+                content=validated["content"],
+                agent_name=validated["agent_name"],
+                category=validated["category"],
+                level=validated["level"],
             )
             mid = capture(inp)
             return web.json_response({"id": mid, "status": "ok"}, headers=_cors_headers(request))
@@ -1895,21 +1909,20 @@ class MemAllGateway:
         data = await self._read_json(request)
         if data is None:
             return web.json_response({"error": "invalid JSON body"}, status=400, headers=_cors_headers(request))
+        validated, err = self._validate(data, RetrieveInput)
+        if err:
+            return web.json_response({"error": err}, status=400, headers=_cors_headers(request))
         try:
-            query = data.get("query", "")
-            agent = data.get("agent_name", None)
-            top_n = data.get("top_n", 20)
-            results = retrieve(query=query, agent_name=agent, limit=top_n)
-            items = []
-            for r in results:
-                items.append({
-                    "id": r.id,
-                    "content": r.content,
-                    "agent_name": r.agent_name,
-                    "category": r.category,
-                    "level": r.level,
-                    "confidence": r.confidence,
-                })
+            results = retrieve(
+                query=validated.get("query", ""),
+                agent_name=validated.get("agent_name"),
+                limit=validated.get("limit", 20),
+            )
+            items = [
+                {"id": r.id, "content": r.content, "agent_name": r.agent_name,
+                 "category": r.category, "level": r.level, "confidence": r.confidence}
+                for r in results
+            ]
             return web.json_response({"results": items, "count": len(items)}, headers=_cors_headers(request))
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=500, headers=_cors_headers(request))
@@ -1918,45 +1931,27 @@ class MemAllGateway:
         data = await self._read_json(request)
         if data is None:
             return web.json_response({"error": "invalid JSON body"}, status=400, headers=_cors_headers(request))
+        validated, err = self._validate(data, TraverseInput)
+        if err:
+            return web.json_response({"error": err}, status=400, headers=_cors_headers(request))
         try:
-            mid = data.get("memory_id")
-            if mid is None:
-                return web.json_response(
-                    {"error": "memory_id is required"},
-                    status=400,
-                    headers=_cors_headers(request),
-                )
-            depth = min(int(data.get("depth", 1)), 5)  # clamp to prevent BFS explosion
-            result = traverse(int(mid), depth=depth)
+            result = traverse(validated["node_id"], depth=validated["depth"])
             return web.json_response(result, headers=_cors_headers(request))
         except Exception as exc:
-            return web.json_response(
-                {"error": str(exc)}, status=500, headers=_cors_headers(request)
-            )
+            return web.json_response({"error": str(exc)}, status=500, headers=_cors_headers(request))
 
     async def _handle_timeline(self, request: web.Request) -> web.Response:
         data = await self._read_json(request)
         if data is None:
             return web.json_response({"error": "invalid JSON body"}, status=400, headers=_cors_headers(request))
+        validated, err = self._validate(data, TimelineInput)
+        if err:
+            return web.json_response({"error": err}, status=400, headers=_cors_headers(request))
         try:
-            agent = data.get("agent_name")
-            if not agent:
-                return web.json_response(
-                    {"error": "agent_name is required"},
-                    status=400,
-                    headers=_cors_headers(request),
-                )
-            days = data.get("days", 7)
-            results = timeline(agent_name=agent, days=int(days))
-            items = [
-                {
-                    "id": r.id,
-                    "content": r.content,
-                    "occurred_at": r.occurred_at,
-                    "category": r.category,
-                }
-                for r in results
-            ]
+            results = timeline(
+                query=validated.get("query", ""),
+                days=validated.get("days", 7),
+            )
             return web.json_response(
                 {"results": items, "count": len(items)},
                 headers=_cors_headers(request),
@@ -1970,8 +1965,11 @@ class MemAllGateway:
         data = await self._read_json(request)
         if data is None:
             return web.json_response({"error": "invalid JSON body"}, status=400, headers=_cors_headers(request))
+        validated, err = self._validate(data, PersonaProfileInput)
+        if err:
+            return web.json_response({"error": err}, status=400, headers=_cors_headers(request))
         try:
-            agent = data.get("agent_name")
+            agent = validated.get("agent_name")
             if not agent:
                 return web.json_response(
                     {"error": "agent_name is required"},
@@ -1979,7 +1977,7 @@ class MemAllGateway:
                     headers=_cors_headers(request),
                 )
             profile = generate_profile_3layer(agent)
-            layer = data.get("layer")
+            layer = validated.get("layer")
             if layer and layer in profile:
                 return web.json_response(
                     {layer: profile[layer]}, headers=_cors_headers(request)

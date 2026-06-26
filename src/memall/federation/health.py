@@ -1,15 +1,11 @@
 import logging
 logger = logging.getLogger(__name__)
 import sqlite3
-import json
-import math
-import re
 from collections import Counter
 from datetime import datetime, timezone
-from pathlib import Path
 
 from memall.federation.family import get_family_db_path
-from memall.core.nlp import tokenize, cosine_sim, compute_tfidf
+from memall.core.nlp import cosine_sim, compute_tfidf
 
 
 def _ensure_metrics_table(conn):

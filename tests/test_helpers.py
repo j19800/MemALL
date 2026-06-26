@@ -6,10 +6,7 @@ Provides temporary database isolation to avoid polluting the real DB.
 
 import os
 import sys
-import tempfile
 import time
-from pathlib import Path
-from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -22,40 +19,12 @@ def _unique_agent() -> str:
 
 
 def init_temp_db():
-    """Initialize a temporary database and return (db_path, patcher).
-
-    Usage::
-
-        db_path, patcher = init_temp_db()
-        try:
-            # ... test code ...
-        finally:
-            cleanup_temp_db(db_path, patcher)
-    """
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    db_path_obj = Path(tmp.name)
-    patcher = patch("memall.core.db.DB_PATH", db_path_obj)
-    patcher.start()
-
-    from memall.core.db import init_db as _init_db
-
-    _init_db(migrate=True)
-    return db_path_obj, patcher
+    """Legacy — isolation handled by conftest.py autouse fixture."""
+    return (None, None)
 
 
-def cleanup_temp_db(db_path_obj: Path, patcher):
-    """Clean up the temporary database and restore DB_PATH."""
-    patcher.stop()
-    try:
-        if db_path_obj.exists():
-            db_path_obj.unlink()
-        for ext in ["-wal", "-shm"]:
-            p = db_path_obj.parent / (db_path_obj.name + ext)
-            if p.exists():
-                p.unlink()
-    except Exception:
-        pass
+def cleanup_temp_db(*args):
+    """Legacy — no-op, isolation handled by conftest."""
 
 
 def insert_memory(

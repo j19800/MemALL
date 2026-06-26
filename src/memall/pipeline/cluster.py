@@ -1,9 +1,8 @@
 import re
 import math
-import json
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
-from memall.core.db import get_conn, init_db
+from memall.core.db import get_conn
 from memall.core.nlp import tokenize, compute_tfidf, cosine_sim
 
 MIN_MEMORY_LENGTH = 50
@@ -154,7 +153,8 @@ def _narrative_tfidf_pca(texts: list, n_components: int = 50):
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.decomposition import PCA
     import numpy as np
-    vec = TfidfVectorizer(max_features=2000, stop_words=None, token_pattern=r'(?u)\b\w+\b')
+    from memall.core.nlp import tokenize
+    vec = TfidfVectorizer(max_features=2000, stop_words=None, tokenizer=tokenize)
     X = vec.fit_transform(texts)
     n = X.shape[0]
     k = min(n_components, n, X.shape[1])
@@ -197,7 +197,7 @@ def _cluster_method_embedding(conn):
     from sklearn.cluster import KMeans
     import numpy as np
 
-    vec = TfidfVectorizer(max_features=2000, stop_words=None, token_pattern=r'(?u)\b\w+\b')
+    vec = TfidfVectorizer(max_features=2000, stop_words=None, tokenizer=tokenize)
     X = vec.fit_transform(texts)
     n = X.shape[0]
     n_comp = min(50, n, X.shape[1])

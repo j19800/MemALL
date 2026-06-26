@@ -9,7 +9,7 @@ import re
 from collections import Counter
 from typing import Optional
 
-import numpy as np
+
 
 STOPWORDS_CJK_EN: set = {
     # Chinese stopwords
@@ -165,8 +165,6 @@ def tfidf_svd_embed(
     before importing sklearn, preventing memory allocation failures
     under high load on Windows.
     """
-    if np is None:
-        raise ImportError("numpy is required for SVD embedding; install with: pip install numpy")
     # ── OpenBLAS OOM fix ─────────────────────────────────────────
     # Windows/OpenBLAS can OOM under memory pressure during SVD.
     # Limit threads before importing sklearn to avoid fork bomb.
@@ -179,14 +177,18 @@ def tfidf_svd_embed(
     from sklearn.decomposition import TruncatedSVD
     from sklearn.feature_extraction.text import TfidfVectorizer
 
-    if token_pattern is None:
-        token_pattern = r'(?u)\b\w+\b'
-
-    vec = TfidfVectorizer(
-        max_features=2000,
-        stop_words=None,
-        token_pattern=token_pattern,
-    )
+    if token_pattern is not None:
+        vec = TfidfVectorizer(
+            max_features=2000,
+            stop_words=None,
+            token_pattern=token_pattern,
+        )
+    else:
+        vec = TfidfVectorizer(
+            max_features=2000,
+            stop_words=None,
+            tokenizer=tokenize,
+        )
     X = vec.fit_transform(texts)
     n = X.shape[0]
     k = min(dims, n, X.shape[1])

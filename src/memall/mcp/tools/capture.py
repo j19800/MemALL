@@ -1,5 +1,5 @@
 import json
-from memall.agent_memory import add, infer_project
+from memall.agent_memory import infer_project
 from memall.core.models import MemoryInput
 from memall.core.thin_waist import capture as do_capture
 

@@ -1,4 +1,26 @@
-## [v0.1.14] - 2026-06-26
+## [v0.1.15] - 2026-06-26
+
+### Chores
+
+- **Dead imports**: Removed 13 unused imports across 9 MCP Python files (`hooks.py`, `hooks_builtin.py`, `http_transport.py`, `hub_client.py`, `registry.py`, `server.py`, `shared.py`, `tools/capture.py`, `tools/distill.py`).
+
+### Fixed
+
+- **S1-CLI-01 tests/archive/ 残留调试脚本**: 删除 78 个一次性调试脚本（无 pytest 隔离、无断言、有死代码）。 (`tests/archive/`)
+
+- **S1-CLI-02 init_temp_db 重复隔离逻辑**: conftest.py 已有 autouse fixture（monkeypatch+tmp_path）做每测试隔离，init_temp_db() 额外做 tempfile+patch+init_db 造成重复开销 → 改为返回 (None,None) 空操作桩，26 个测试文件无需修改。 (`tests/test_helpers.py`)
+
+- **S1-BRG-01 bridge 错误处理**: lark_client.py Popen 加 try/except 捕获异常并 return、stdout 遍历加 try/finally 确保 proc.wait() 即使 handler 崩溃也执行；main.py stop() 加 try/finally 保护两个 watcher 都执行、MCP capture 失败日志从 DEBUG 升级到 WARNING、mentions 加 isinstance(m, dict) 防止非字典元素 AttributeError、两个 "silent error" 日志替换为具体描述。 (`bridge/lark_client.py`, `bridge/main.py`)
+
+- **S1-SRH-01 CJK tokenization**: 3 处 TfidfVectorizer 从 token_pattern=r'(?u)\b\w+\b' 改为 tokenizer=tokenize（nlp.tokenize 已支持 CJK [\w\u4e00-\u9fff]+）。 (`core/nlp.py`, `pipeline/cluster.py`)
+
+- **S1-SRH-02 faiss_provider 错误日志**: _encode() 两个 "silent error" 日志替换为描述性消息 + exc_info=True。 (`search/faiss_provider.py`)
+
+- **S1-MCP-04 gateway 输入验证**: 添加 _validate() 静态方法复用 mcp/models.py Pydantic 模型，校验 5 个 POST handler（capture/retrieve/traverse/timeline/profile），消除手动 data.get() 式验证。 (`gateway.py`)
+
+### Note
+
+- **S1 进度 32/33 (97.0%)**: 唯一剩余 CLI-03（CLI/MCP 重复，约 1 周重构量）。git push 因端口 443 不可达暂缓。
 
 ### Docs
 

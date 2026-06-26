@@ -21,6 +21,8 @@ from memall.core.db import get_conn
 logger = logging.getLogger(__name__)
 
 _BATCH_SIZE = 1000
+_EDGE_NORM_CAP = 50.0      # citation count normalization ceiling
+_ACCESS_NORM_CAP = 100.0   # access count normalization ceiling
 
 # Cognitive level → asset weight
 # Higher layers (L9/L10) are synthesised knowledge → more valuable
@@ -117,13 +119,32 @@ def echo_step() -> dict:
     try:
         total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
         updated = 0
-        offset = 0
+        last_id = 0
 
-        while offset < total:
+        while updated < total:
             rows = conn.execute(
-                "SELECT id, level, updated_at, metadata FROM memories ORDER BY id LIMIT ? OFFSET ?",
-                (_BATCH_SIZE, offset),
+                "SELECT id, level, updated_at, metadata FROM memories WHERE id > ? ORDER BY id LIMIT ?",
+                (last_id, _BATCH_SIZE),
             ).fetchall()
+            if not rows:
+                break
+
+            ids = [r["id"] for r in rows]
+            ph = ",".join("?" * len(ids))
+
+            edge_counts = {}
+            for row in conn.execute(
+                f"SELECT target_id, COUNT(*) as c FROM edges WHERE target_id IN ({ph}) AND relation_type != 'deleted' GROUP BY target_id",
+                tuple(ids),
+            ):
+                edge_counts[row["target_id"]] = row["c"]
+
+            access_counts = {}
+            for row in conn.execute(
+                f"SELECT id, access_count FROM memories WHERE id IN ({ph})",
+                tuple(ids),
+            ):
+                access_counts[row["id"]] = row["access_count"] or 0
 
             for row in rows:
                 mid = row["id"]
@@ -131,49 +152,24 @@ def echo_step() -> dict:
                 updated_at = row["updated_at"]
                 metadata = row["metadata"]
 
-                # 1. Citation value (25%) — incoming edges
-                edge_count = conn.execute(
-                    "SELECT COUNT(*) as c FROM edges WHERE target_id = ? AND relation_type != 'deleted'",
-                    (mid,),
-                ).fetchone()["c"]
-                # Normalize: cap at 50 edges, 50+ → 1.0
-                edge_val = min(1.0, edge_count / 50.0)
-
-                # 2. Access value (20%) — retrieve/access frequency
-                acc = conn.execute(
-                    "SELECT access_count FROM memories WHERE id = ?", (mid,)
-                ).fetchone()
-                access_count = acc["access_count"] if acc else 0
-                # Normalize: cap at 100 accesses
-                access_val = min(1.0, access_count / 100.0)
-
-                # 3. Recency value (20%)
+                edge_val = min(1.0, edge_counts.get(mid, 0) / _EDGE_NORM_CAP)
+                access_val = min(1.0, access_counts.get(mid, 0) / _ACCESS_NORM_CAP)
                 recency_val = _recency_value(updated_at)
-
-                # 4. Level value (20%)
                 level_val = _level_weight(level)
-
-                # 5. Quality value (15%)
                 quality_val = _quality_value(metadata)
 
-                # Composite score (0..1 range, then scale to 0..100 for display)
                 raw = (
-                    edge_val * 0.25 +
-                    access_val * 0.20 +
-                    recency_val * 0.20 +
-                    level_val * 0.20 +
-                    quality_val * 0.15
+                    edge_val * 0.25 + access_val * 0.20 +
+                    recency_val * 0.20 + level_val * 0.20 + quality_val * 0.15
                 )
-                score = round(raw * 100, 1)
-
                 conn.execute(
                     "UPDATE memories SET echo_score = ? WHERE id = ?",
-                    (score, mid),
+                    (round(raw * 100, 1), mid),
                 )
                 updated += 1
 
             conn.commit()
-            offset += _BATCH_SIZE
+            last_id = ids[-1]
 
         return {"updated": updated, "total": total}
     finally:

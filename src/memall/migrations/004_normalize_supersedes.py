@@ -9,7 +9,6 @@ was storing comma-separated IDs as TEXT. This migration:
 """
 
 import json
-import re
 
 MIGRATION_ID = "004_normalize_supersedes"
 DESCRIPTION = "Normalize supersedes column to TEXT JSON array"

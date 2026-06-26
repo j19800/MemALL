@@ -15,7 +15,6 @@ After pipeline runs, produces a structured "本轮观察" report capturing:
 import json
 import hashlib
 from datetime import datetime, timezone
-from pathlib import Path
 from memall.core.db import get_conn
 from memall.pipeline.metrics import read_history
 

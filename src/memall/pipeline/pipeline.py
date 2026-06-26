@@ -1,33 +1,9 @@
+import importlib
 import json
 import logging
 import time
 from datetime import datetime, timezone
-from .enrich import enrich_step
-from .classify import classify_step
-from .link import link_step
-from .decay import decay_step
-from .backup import backup_step
 from .metrics import collect_metrics, append_metrics
-from .narrative import narrative_step
-from .cluster import cluster_step
-from .suggest import suggest_step
-from .bridge import bridge_analysis_step
-from .distill import distill_step
-from .reflect import reflect_step
-from .embed_index import embed_index_step
-from .integrate import integrate_step
-from .procedure import procedure_step
-from .cleanup import cleanup_step
-from .observe import observation_step
-from .identity import identity_step
-from .time_slice import time_slice_step
-from .arc_status import arc_status_step
-from .echo import echo_step
-from .epoch import epoch_step
-from .convergence import convergence_step, resolve_pending_deliberations
-from .improve import improve_step
-from .distill_l7 import distill_l7_step
-from .session import harvest_step
 from memall.core.db import get_conn
 from memall.mcp.hooks import HookRegistry, HOOK_STOP
 
@@ -66,8 +42,14 @@ def _coerce_int(val) -> int:
     return 0
 
 
-def _count_memories() -> int:
-    """Total memories in DB (cheap COUNT query)."""
+def _count_memories(conn=None) -> int:
+    """Total memories in DB (cheap COUNT query). Reuses conn if provided."""
+    if conn is not None:
+        try:
+            row = conn.execute("SELECT COUNT(*) FROM memories").fetchone()
+            return row[0] if row else 0
+        except Exception:
+            return 0
     try:
         conn = get_conn()
         row = conn.execute("SELECT COUNT(*) FROM memories").fetchone()
@@ -75,10 +57,11 @@ def _count_memories() -> int:
     except Exception:
         return 0
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _check_quality_gate(step_name: str, entry: dict, gate: dict) -> dict:
@@ -120,7 +103,8 @@ def _check_quality_gate(step_name: str, entry: dict, gate: dict) -> dict:
 
 
 def _run_step(step_name: str, step_fn, step_results: dict,
-              quality_gate: dict | None = None) -> dict:
+              quality_gate: dict | None = None,
+              conn=None) -> dict:
     """Run one pipeline step with timing, error isolation, and quality check.
 
     Args:
@@ -128,16 +112,17 @@ def _run_step(step_name: str, step_fn, step_results: dict,
         step_fn: Zero-argument callable (the pipeline step function).
         step_results: Shared results dict; mutated with the coerced result.
         quality_gate: Optional quality gate dict (see QUALITY_GATES).
+        conn: Optional db connection (avoids extra open/close for counting).
 
     Returns:
         A step entry dict suitable for storing in the pipeline_runs.steps JSON.
     """
     start = time.time()
-    records_before = _count_memories()
+    records_before = _count_memories(conn)
     try:
         result = step_fn()
         elapsed_ms = int((time.time() - start) * 1000)
-        records_after = _count_memories()
+        records_after = _count_memories(conn)
 
         entry: dict = {
             "step": step_name,
@@ -282,37 +267,54 @@ def check_level_discipline() -> dict:
 
 # ── Pipeline steps definitions ─────────────────────────────────────────
 
-# Each step is defined as a list: (name, function, quality_gate_or_None)
+# Each step is defined as (name, module_path, function_name, quality_gate_or_None)
+# The function is loaded via importlib at runtime — adding a step only
+# requires appending one tuple here.
 _PIPELINE_STEPS = [
-    ("enrich",          enrich_step,           QUALITY_GATES.get("enrich")),
-    ("cleanup",         cleanup_step,          None),
-    ("classify",        classify_step,         QUALITY_GATES.get("classify")),
-    ("time_slice",      time_slice_step,       None),
-    ("arc_status",      arc_status_step,       None),
-    ("echo",            echo_step,             None),
-    ("epoch",           epoch_step,            None),
-    ("convergence",     resolve_pending_deliberations, None),
-    ("link",            link_step,             QUALITY_GATES.get("link")),
-    ("decay",           decay_step,            None),
-    ("backup",          backup_step,           None),
-    ("session",         harvest_step,          None),
-    ("embed_index",     embed_index_step,      None),
-    ("reflect",         reflect_step,          QUALITY_GATES.get("reflect")),
-    ("distill_l7",      distill_l7_step,       None),
-    ("distill",         distill_step,          QUALITY_GATES.get("distill")),
-    ("integrate",       integrate_step,        QUALITY_GATES.get("integrate")),
-    ("improve",         improve_step,          None),
-    ("observation",     observation_step,      None),
-    ("identity",        identity_step,         None),
+    ("enrich",          "memall.pipeline.enrich",          "enrich_step",                     QUALITY_GATES.get("enrich")),
+    ("cleanup",         "memall.pipeline.cleanup",         "cleanup_step",                    None),
+    ("classify",        "memall.pipeline.classify",        "classify_step",                   QUALITY_GATES.get("classify")),
+    ("time_slice",      "memall.pipeline.time_slice",      "time_slice_step",                 None),
+    ("arc_status",      "memall.pipeline.arc_status",      "arc_status_step",                 None),
+    ("echo",            "memall.pipeline.echo",            "echo_step",                       None),
+    ("epoch",           "memall.pipeline.epoch",           "epoch_step",                      None),
+    ("convergence",     "memall.pipeline.convergence",     "resolve_pending_deliberations",   None),
+    ("link",            "memall.pipeline.link",            "link_step",                       QUALITY_GATES.get("link")),
+    ("decay",           "memall.pipeline.decay",           "decay_step",                      None),
+    ("backup",          "memall.pipeline.backup",          "backup_step",                     None),
+    ("session",         "memall.pipeline.session",         "harvest_step",                    None),
+    ("embed_index",     "memall.pipeline.embed_index",     "embed_index_step",                None),
+    ("reflect",         "memall.pipeline.reflect",         "reflect_step",                    QUALITY_GATES.get("reflect")),
+    ("distill_l7",      "memall.pipeline.distill_l7",      "distill_l7_step",                 None),
+    ("distill",         "memall.pipeline.distill",         "distill_step",                    QUALITY_GATES.get("distill")),
+    ("integrate",       "memall.pipeline.integrate",       "integrate_step",                  QUALITY_GATES.get("integrate")),
+    ("improve",         "memall.pipeline.improve",         "improve_step",                    None),
+    ("observation",     "memall.pipeline.observation",     "observation_step",                None),
+    ("identity",        "memall.pipeline.identity",        "identity_step",                   None),
 ]
 
-_OPTIONAL_STEPS = {
-    "persona":  ("persona",  "memall.pipeline.persona.persona_step", None),
-    "narrative":("narrative","memall.pipeline.narrative.narrative_step", None),
-    "cluster":  ("cluster",  "memall.pipeline.cluster.cluster_step", None),
-    "suggest":  ("suggest",  "memall.pipeline.suggest.suggest_step", None),
-    "bridge":   ("bridge",   "memall.pipeline.bridge.bridge_analysis_step", None),
+# Steps whose execution is gated by a boolean run_pipeline(...) kwarg
+_SKIP_WHEN = {
+    "reflect":     "include_reflect",
+    "distill":     "include_distill",
+    "integrate":   "include_integrate",
+    "improve":     "include_improve",
+    "embed_index": "include_embed_index",
+    "identity":    "include_identity",
 }
+
+_OPTIONAL_STEPS = {
+    "persona":  ("persona",  "memall.pipeline.persona.persona_step",            None),
+    "narrative":("narrative","memall.pipeline.narrative.narrative_step",        None),
+    "cluster":  ("cluster",  "memall.pipeline.cluster.cluster_step",            None),
+    "suggest":  ("suggest",  "memall.pipeline.suggest.suggest_step",            None),
+    "bridge":   ("bridge",   "memall.pipeline.bridge.bridge_analysis_step",      None),
+}
+
+
+def _load_step_fn(module_path: str, func_name: str):
+    mod = importlib.import_module(module_path)
+    return getattr(mod, func_name)
 
 
 def run_pipeline(
@@ -340,25 +342,17 @@ def run_pipeline(
         return {"status": "dry_run", "results": results, "elapsed": 0}
 
     run_id = _create_pipeline_run()
+    pipeline_conn = get_conn()
 
     try:
         # ── Core pipeline steps (always run) ──
-        for step_name, step_fn, gate in _PIPELINE_STEPS:
-            # Conditional skips based on arguments
-            if step_name == "reflect" and not include_reflect:
+        for step_name, mod_path, func_name, gate in _PIPELINE_STEPS:
+            skip_flag = _SKIP_WHEN.get(step_name)
+            if skip_flag and not locals().get(skip_flag, True):
                 continue
-            if step_name == "distill" and not include_distill:
-                continue
-            if step_name == "integrate" and not include_integrate:
-                continue
-            if step_name == "improve" and not include_improve:
-                continue
-            if step_name == "embed_index" and not include_embed_index:
-                continue
-            if step_name == "identity" and not include_identity:
-                continue
+            step_fn = _load_step_fn(mod_path, func_name)
 
-            entry = _run_step(step_name, step_fn, results, quality_gate=gate)
+            entry = _run_step(step_name, step_fn, results, quality_gate=gate, conn=pipeline_conn)
             entries.append(entry)
             # Persist after every few steps so mid-run crashes are visible
             if len(entries) % 5 == 0:
@@ -367,34 +361,34 @@ def run_pipeline(
         # ── Optional steps ──
         if include_persona:
             try:
-                from .persona import persona_step
-                entries.append(_run_step("persona", persona_step, results))
+                step_fn = _load_step_fn("memall.pipeline.persona", "persona_step")
+                entries.append(_run_step("persona", step_fn, results, conn=pipeline_conn))
             except Exception as e:
                 entries.append({"step": "persona", "status": "failed", "error": str(e)[:200]})
             if len(entries) % 5 == 0:
                 _update_pipeline_run(run_id, entries)
         if include_cluster:
             try:
-                from .cluster import cluster_step
-                entries.append(_run_step("cluster", lambda: cluster_step(method=cluster_method), results))
+                step_fn = _load_step_fn("memall.pipeline.cluster", "cluster_step")
+                entries.append(_run_step("cluster", lambda: step_fn(method=cluster_method), results, conn=pipeline_conn))
             except Exception as e:
                 entries.append({"step": "cluster", "status": "failed", "error": str(e)[:200]})
         if include_narrative:
             try:
-                from .narrative import narrative_step
-                entries.append(_run_step("narrative", narrative_step, results))
+                step_fn = _load_step_fn("memall.pipeline.narrative", "narrative_step")
+                entries.append(_run_step("narrative", step_fn, results, conn=pipeline_conn))
             except Exception as e:
                 entries.append({"step": "narrative", "status": "failed", "error": str(e)[:200]})
         if include_suggest:
             try:
-                from .suggest import suggest_step
-                entries.append(_run_step("suggest", suggest_step, results))
+                step_fn = _load_step_fn("memall.pipeline.suggest", "suggest_step")
+                entries.append(_run_step("suggest", step_fn, results, conn=pipeline_conn))
             except Exception as e:
                 entries.append({"step": "suggest", "status": "failed", "error": str(e)[:200]})
         if include_bridge:
             try:
-                from .bridge import bridge_analysis_step
-                entries.append(_run_step("bridge", bridge_analysis_step, results))
+                step_fn = _load_step_fn("memall.pipeline.bridge", "bridge_analysis_step")
+                entries.append(_run_step("bridge", step_fn, results, conn=pipeline_conn))
             except Exception as e:
                 entries.append({"step": "bridge", "status": "failed", "error": str(e)[:200]})
 
@@ -415,6 +409,11 @@ def run_pipeline(
         elapsed = time.time() - _pipeline_start_time
         _finalize_pipeline_run(run_id, entries, results, error=str(e))
         return {"status": "error", "error": str(e), "elapsed": elapsed}
+    finally:
+        try:
+            pipeline_conn.close()
+        except Exception:
+            pass
 
     elapsed = time.time() - _pipeline_start_time
     HookRegistry.dispatch(HOOK_STOP, arguments={"results": results, "elapsed": elapsed})

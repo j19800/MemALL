@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from memall.lark.credentials import get, load_all
+from memall.lark.credentials import load_all
 
 logger = logging.getLogger("memall.lark.consumer")
 

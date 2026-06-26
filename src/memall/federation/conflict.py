@@ -1,16 +1,12 @@
-import json
-import re
 import math
 import numpy as np
-from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from itertools import combinations
-from pathlib import Path
 import sqlite3
 
-from memall.federation.family import get_family_db_path, init_family_db
+from memall.federation.family import get_family_db_path
 from memall.core.nlp import (
-    tokenize, STOPWORDS_CJK_EN, cosine_sim, compute_tfidf, tfidf_svd_embed,
+    cosine_sim, compute_tfidf, tfidf_svd_embed,
 )
 
 CONTRADICTION_PAIRS = [

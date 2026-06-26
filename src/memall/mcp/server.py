@@ -1,7 +1,6 @@
 import json
 import logging
 import sys
-from datetime import datetime, timezone
 from memall.mcp.adapter import TOOL_DEFINITIONS, handle_call, _intercept, consume_session_note
 
 _initialized = False

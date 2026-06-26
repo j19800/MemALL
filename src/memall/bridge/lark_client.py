@@ -146,26 +146,33 @@ class LarkClient:
         """
         profile = _PROFILES_DIR / self.agent_name
         env = {**os.environ, "USERPROFILE": str(profile)}
-        proc = subprocess.Popen(
-            [self._lark_path, "event", "consume", "im.message.receive_v1"],
-            env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            encoding="utf-8", errors="replace",
-        )
+        try:
+            proc = subprocess.Popen(
+                [self._lark_path, "event", "consume", "im.message.receive_v1"],
+                env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                encoding="utf-8", errors="replace",
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            logger.error("lark(%s) failed to start event consumer: %s",
+                         self.agent_name, e)
+            return
         logger.info("lark(%s) event consumer started (pid=%d)",
                      self.agent_name, proc.pid)
-        for line in proc.stdout:
-            if stop_event.is_set():
-                proc.terminate()
-                break
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-                handler(event)
-            except json.JSONDecodeError:
-                logger.warning("lark(%s) non-JSON event line: %s",
-                               self.agent_name, line[:80])
-        proc.wait()
+        try:
+            for line in proc.stdout:
+                if stop_event.is_set():
+                    proc.terminate()
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                    handler(event)
+                except json.JSONDecodeError:
+                    logger.warning("lark(%s) non-JSON event line: %s",
+                                   self.agent_name, line[:80])
+        finally:
+            proc.wait()
         logger.info("lark(%s) event consumer stopped", self.agent_name)

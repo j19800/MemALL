@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 from datetime import datetime, timezone
 
@@ -46,5 +46,4 @@ class MemoryInput:
     confidence: float = 0.5
     visibility: str = "private"
     metadata: str = "{}"
-    tags: list = field(default_factory=list)
     thread_id: Optional[int] = None

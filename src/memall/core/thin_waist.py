@@ -6,14 +6,15 @@ from datetime import datetime, timezone
 from typing import Optional
 from .db import get_pool, content_hash
 from .models import Memory, MemoryInput
+from .nlp import tfidf_svd_embed, cosine_sim, compute_tfidf
+from memall.graph.embeddings import EMBED_DIM
 
-logger = logging.getLogger(__name__)
 logger = logging.getLogger(__name__)
 
 
 # Valid agent_name pattern: simple identifiers (alphanumeric, underscore, hyphen, dot, @, CJK)
 _VALID_AGENT_RE = re.compile(r'^[a-z0-9_@.\u4e00-\u9fff-]+$')
-_CJK_RE = re.compile(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]')
+_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u2e80-\u2eff\u2f00-\u2fdf]+")
 _AGENT_TAG_RE = re.compile(r'(\d{4}-\d{2}-\d{2}|\d{10,})')
 _AGENT_BLACKLIST = frozenset({
     "architecture", "brainstorm", "unknown", "session_active",
@@ -697,12 +698,6 @@ def _fetch_visibility(memory_id: int, viewer: str) -> str:
 _VIS_CACHE: dict[int, str] = {}
 
 
-import re
-
-
-_CJK_RE = re.compile(r"[一-鿿㐀-䶿豈-﫿⺀-⻿⼀-⿟]+")
-
-
 def _split_cjk(text: str) -> str:
     """Insert spaces between CJK characters so FTS5's unicode61 tokenizer
     treats each CJK character as a separate token.
@@ -876,8 +871,6 @@ def smart_store(content: str, owner: str = "", agent_name: str = "",
     """Store memory with content_hash dedup + optional semantic similarity check.
 
     Returns {"id": memory_id, "status": "new"|"duplicate"}."""
-    from memall.core.nlp import tfidf_svd_embed, cosine_sim, compute_tfidf
-    from memall.graph.embeddings import EMBED_DIM
 
     # Check exact hash first
     h = content_hash(content)

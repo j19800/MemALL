@@ -19,7 +19,6 @@ import json
 import logging
 import urllib.request
 import urllib.error
-from typing import Any
 
 HUB_BASE = "http://127.0.0.1:12431"
 _HUB_TIMEOUT = 5  # seconds (default)

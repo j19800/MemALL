@@ -6,7 +6,6 @@ but no human-readable narrative summary. This tool lets LLMs find and fill them.
 
 import json
 import logging
-from collections import Counter
 from memall.core.db import get_conn
 
 logger = logging.getLogger(__name__)

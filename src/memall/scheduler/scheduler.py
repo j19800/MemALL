@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from memall.core.db import pool_conn, init_db
 from memall.pipeline import run_pipeline
 from memall.pipeline.forget import forget_step
-from memall.pipeline.security import audit_sensitive, security_score
+from memall.pipeline.security import security_score
 from memall.scheduler.agent_round import agent_round
 from memall.config import get_config
 

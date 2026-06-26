@@ -13,12 +13,10 @@ Usage::
 
 import json
 import logging
-from datetime import datetime, timezone
 from typing import Optional
 
 from memall.core.models import MemoryInput
-from memall.core.thin_waist import capture as _capture, retrieve, connect, traverse
-from memall.config import get_config
+from memall.core.thin_waist import capture as _capture, retrieve
 
 logger = logging.getLogger(__name__)
 

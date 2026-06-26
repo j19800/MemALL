@@ -1,10 +1,6 @@
 import logging
-import sqlite3
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
-
-
-from memall.core.db import DB_PATH
 
 _AUTO_START_CACHE: dict[str, str] = {}
 _AUTO_START_COOLDOWN = 1800

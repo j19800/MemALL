@@ -22,8 +22,9 @@ from memall.core.db import get_conn
 from memall.pipeline.util import _smart_subject
 
 _MIN_L9_COUNT = 2
-_MIN_L9_ACCESS_TOTAL = 5
 _L10_PREFIX_RE = re.compile(r'^\[(L10|L10\s.*?)\]', re.DOTALL)
+
+
 # Semantic dedup: skip if Jaccard similarity ≥ this threshold vs any recent L10
 _SIMILARITY_THRESHOLD = 0.7
 
@@ -83,10 +84,7 @@ def _recent_l10_similar(conn, merged_content: str, agent: str,
     return None
 
 
-def integrate_step(access_total_threshold: int = _MIN_L9_ACCESS_TOTAL,
-                   min_categories: int = 2) -> dict:
-    if access_total_threshold < 2:
-        access_total_threshold = _MIN_L9_ACCESS_TOTAL
+def integrate_step(min_categories: int = 2) -> dict:
     if min_categories < 2:
         min_categories = 2
 
@@ -124,27 +122,15 @@ def integrate_step(access_total_threshold: int = _MIN_L9_ACCESS_TOTAL,
                 continue
 
             candidate_cats = sorted(
-                [
-                    cat
-                    for cat, cat_mems in by_cat.items()
-                    if sum(
-                        cm["access_count"] if cm["access_count"] is not None else 0
-                        for cm in cat_mems
-                    )
-                    >= access_total_threshold
-                ],
-                key=lambda c: len(by_cat[c]),
+                by_cat.keys(),
+                key=lambda c: sum(
+                    cm["access_count"] if cm["access_count"] is not None else 0
+                    for cm in by_cat[c]
+                ),
                 reverse=True,
-            )
+            )[:2]
             if len(candidate_cats) < 2:
-                # Fallback: pick the two largest categories
-                fallback = sorted(by_cat.keys(), key=lambda c: len(by_cat[c]), reverse=True)[:2]
-                if len(fallback) < 2:
-                    continue
-                # Verify they're genuinely different (not variant of same domain)
-                if len(set(fallback)) < 2:
-                    continue
-                candidate_cats = fallback
+                continue
 
             targets = []
             seen_ids = set()

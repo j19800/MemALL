@@ -4,12 +4,8 @@ Stores 512-dim float32 vectors in memory_embeddings table + vec0 virtual table.
 """
 
 import hashlib
-import json
 import logging
-import re
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional
 
 import numpy as np
 

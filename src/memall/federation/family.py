@@ -5,14 +5,13 @@ Enhances family.db with family_circle table for member management,
 supports memall family init / invite / search, and trust-level-aware publishing.
 """
 
-import json
 import logging
 import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from memall.core.db import get_conn, get_db_path
+from memall.core.db import get_db_path
 
 
 logger = logging.getLogger("memall.federation.family")

@@ -6,16 +6,14 @@ All endpoints (except /docs, /redoc, /openapi.json) require
 in config (auto-generated on first start if empty).
 """
 
-import json
-import os
 import uvicorn
 from pathlib import Path
 from fastapi import FastAPI, Query, Request, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional
 
 from memall.core.thin_waist import (
@@ -553,8 +551,7 @@ def api_dedup_check(agent_name: str = "", threshold: float = 0.85):
 def api_gateway(req: GatewayRequest):
     """Gateway operations — start/stop/export/import/discover/pair/peers/federated."""
     from memall.gateway import (
-        export_bundle, import_bundle, start_discovery, stop_discovery,
-        discover_peers, pair_with_peer, list_peers, federated_retrieve,
+        export_bundle, discover_peers, list_peers, federated_retrieve,
     )
     actions = {
         "export": lambda: export_bundle(req.agent_name),

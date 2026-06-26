@@ -23,16 +23,16 @@ def reflect_step() -> dict:
 
         # Cold-start: skip agents with < 50 total memories (长期 第7点)
         cold_start_agents = set()
-        for r in rows:
-            ag = r["agent_name"] or ""
-            if ag and ag not in cold_start_agents:
-                cnt = conn.execute(
-                    "SELECT COUNT(*) FROM memories WHERE LOWER(agent_name) = LOWER(?)",
-                    (ag,),
-                ).fetchone()[0]
-                if cnt < 50:
-                    cold_start_agents.add(ag)
-        rows = [r for r in rows if (r["agent_name"] or "") not in cold_start_agents]
+        agent_names = list(set(r["agent_name"] for r in rows if r["agent_name"]))
+        if agent_names:
+            ph = ",".join("?" * len(agent_names))
+            for r in conn.execute(
+                f"SELECT LOWER(agent_name) as ag, COUNT(*) as cnt FROM memories WHERE LOWER(agent_name) IN ({ph}) GROUP BY LOWER(agent_name)",
+                [a.lower() for a in agent_names],
+            ):
+                if r["cnt"] < 50:
+                    cold_start_agents.add(r["ag"])
+        rows = [r for r in rows if (r["agent_name"] or "").lower() not in cold_start_agents]
         if not rows:
             return {"upgraded_to_l6": 0, "scanned": 0, "positive_triggers": 0, "aggregated_groups": 0, "cold_skipped": len(cold_start_agents)}
 
@@ -143,7 +143,8 @@ def _build_reflection_chain(conn, new_l6_id: int, agent_name: str, is_correction
     new_text = new_row["content"] or ""
     prev_text = prev["content"] or ""
 
-    overlap = len(set(new_text.split()) & set(prev_text.split()))
+    tokens = lambda t: set(re.findall(r'[\u4e00-\u9fff]|[a-zA-Z0-9_]+', t))
+    overlap = len(tokens(new_text) & tokens(prev_text))
     if is_correction and overlap > _CHAIN_OVERLAP_THRESHOLD:
         rel = "contradicts"
     else:
