@@ -264,12 +264,16 @@ def family_list(circle_name: str = "") -> list:
 
 def publish_memory(memory_id: int, scope: str = "family",
                    trust_level: str = "",
-                   enforce_trust: bool = True) -> dict:
+                   enforce_trust: bool = True,
+                   redact: bool = False) -> dict:
     """Publish a memory to the family library.
 
     If enforce_trust is True, only memories with visibility in
     FAMILY_TRUST_LEVELS (trusted/family/shared/public) can be published.
     Private memories are rejected unless enforce_trust is False.
+
+    If redact is True, content is processed through _log_sql_warning
+    (truncation to 500 chars + non-printable char stripping).
 
     Usage: memall publish <id> [--scope family] [--trust-level family]
     """
@@ -320,23 +324,26 @@ def publish_memory(memory_id: int, scope: str = "family",
 # ══════════════════════════════════════════════════════════════════
 # Search (cross-member — already exists, enhanced for GAP-8)
 # ══════════════════════════════════════════════════════════════════
-
 def search_family(query: str, limit: int = 20, trust_level: str = "",
-                  member_filter: str = "") -> list:
+                  member_filter: str = "",
+                  content_length: int = 200) -> list:
     """Search family shared_memories (cross-member search).
 
     Supports optional trust_level and member filtering (GAP-8).
 
     Usage: memall family search <query> [--trust-level family] [--member NAME]
+
+    Args:
+        content_length: Max chars of content to return (default 200, MCP can request 500).
     """
     init_family_db()
     db_path = get_family_db_path()
     conn = sqlite3.connect(str(db_path), timeout=10)
     conn.row_factory = sqlite3.Row
     try:
-        # Escape SQL LIKE wildcards (% and _) to prevent unintended pattern matching
         safe_query = query.replace("%", "\\%").replace("_", "\\_")
         like = f"%{safe_query}%"
+
         conditions = ["(content LIKE ? ESCAPE '\\' OR category LIKE ? ESCAPE '\\')"]
         params = [like, like]
 
@@ -361,7 +368,7 @@ def search_family(query: str, limit: int = 20, trust_level: str = "",
                 "original_id": r["original_id"],
                 "source_agent": r["source_agent"],
                 "source_db": r["source_db"],
-                "content": r["content"][:200],
+                "content": r["content"][:content_length],
                 "category": r["category"],
                 "level": r["level"],
                 "trust_level": r["trust_level"],

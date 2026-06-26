@@ -497,7 +497,7 @@
 | S3-04 | Gateway 安全治理 | scope token + Pydantic 校验 + rate limit | 3 天 | ✅ |
 | S3-05 | Federation 主动推 | HubClient 事件投递 | 1 周 | ✅ |
 | S3-06 | 可观测性 | JSON 日志 + metrics + tracing | 3 天 | ✅ |
-| S3-07 | CLI ↔ MCP 合并 | 消除 6,800 行重复 | 1 周 |
+| S3-07 | CLI ↔ MCP 合并 | 消除 6,800 行重复 → 实际约 76 行 | 1 周 | 🔄 |
 | S3-08 | 命名规范统一 | [Lx 标签] prefix 标准化 | 2 天 | ✅ |
 | S3-09 | 嵌入依赖声明化 | 消除静默失败 | 半天 | ✅ |
 | S3-10 | 会话 overhead 优化 | 模板化 L6 精简存储 | 1 天 | ✅ |
