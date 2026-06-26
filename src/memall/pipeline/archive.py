@@ -58,9 +58,9 @@ def archive_step(days: int = _ARCHIVE_STEP_SCALE) -> dict:
 
             ph = ",".join("?" * len(ids))
 
-            # Copy memories to archive
+            # Copy memories to archive (skip if already archived — rowid reuse guard)
             conn.execute(f"""
-                INSERT OR IGNORE INTO archive_db.archived_memories
+                INSERT INTO archive_db.archived_memories
                 (id, content, content_hash, level, owner, agent_name, subject,
                  project, category, summary, occurred_at, created_at, updated_at,
                  supersedes, trust_level, access_count, metadata, arc_status,
@@ -71,12 +71,23 @@ def archive_step(days: int = _ARCHIVE_STEP_SCALE) -> dict:
                        m.trust_level, m.access_count, m.metadata, m.arc_status,
                        m.thread_id, m.agent_name_locked, datetime('now')
                 FROM memories m WHERE m.id IN ({ph})
+                AND NOT EXISTS (SELECT 1 FROM archive_db.archived_memories a WHERE a.id = m.id)
             """, ids)
+            actually_archived = conn.execute(
+                f"SELECT id FROM archive_db.archived_memories WHERE id IN ({ph})"
+                f" AND archived_at = (SELECT MAX(archived_at) FROM archive_db.archived_memories)",
+                ids,
+            ).fetchall()
+            actual_ids = [r["id"] for r in actually_archived]
+            if not actual_ids:
+                by_level[level] = 0
+                continue
+            a_ph = ",".join("?" * len(actual_ids))
 
             # Copy edges to archive (both directions)
             edge_ids = conn.execute(
-                f"SELECT id FROM edges WHERE source_id IN ({ph}) OR target_id IN ({ph})",
-                ids * 2,
+                f"SELECT id FROM edges WHERE source_id IN ({a_ph}) OR target_id IN ({a_ph})",
+                actual_ids * 2,
             ).fetchall()
             eids = [r["id"] for r in edge_ids]
 
@@ -94,25 +105,25 @@ def archive_step(days: int = _ARCHIVE_STEP_SCALE) -> dict:
 
             # Delete edges from hot DB first (both directions)
             conn.execute(
-                f"DELETE FROM edges WHERE source_id IN ({ph}) OR target_id IN ({ph})",
-                ids * 2,
+                f"DELETE FROM edges WHERE source_id IN ({a_ph}) OR target_id IN ({a_ph})",
+                actual_ids * 2,
             )
 
             # Delete memories from hot DB
             conn.execute(
-                f"DELETE FROM memories WHERE id IN ({ph})", ids
+                f"DELETE FROM memories WHERE id IN ({a_ph})", actual_ids
             )
 
             # Clean up orphan vec0 entries
             conn.execute(
-                f"DELETE FROM mem_vec WHERE rowid IN ({ph})", ids
+                f"DELETE FROM mem_vec WHERE rowid IN ({a_ph})", actual_ids
             )
 
-            archived_memories += len(ids)
-            by_level[level] = len(ids)
+            archived_memories += len(actual_ids)
+            by_level[level] = len(actual_ids)
 
-        conn.execute("DETACH DATABASE archive_db")
         conn.commit()
+        conn.execute("DETACH DATABASE archive_db")
 
         return {
             "archived_memories": archived_memories,

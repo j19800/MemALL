@@ -646,6 +646,7 @@ def api_run_pipeline(
     include_distill: bool = True,
     include_integrate: bool = True,
     include_persona: bool = True,
+    include_archive: bool = True,
 ):
     """Run the full memory pipeline."""
     from memall.pipeline.pipeline import run_pipeline
@@ -654,6 +655,7 @@ def api_run_pipeline(
         include_distill=include_distill,
         include_integrate=include_integrate,
         include_persona=include_persona,
+        include_archive=include_archive,
     )
     return result
 
