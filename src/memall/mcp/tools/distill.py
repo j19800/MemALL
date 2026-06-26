@@ -171,7 +171,7 @@ def _do_summarize(conn, group_id: int, summary: str, analysis: dict = None) -> s
         body_start = i + 1
         if line.startswith("•") or line.startswith("关键词") or line.strip() == "":
             continue
-        if i > 0 and lines[i-1].startswith("[L9") or lines[i-1].startswith("[L10"):
+        if i > 0 and (lines[i-1].startswith("[L9 ") or lines[i-1].startswith("[L10 ")):
             continue
         break
 

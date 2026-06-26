@@ -30,7 +30,15 @@
 
 ### Fixed
 
+- **S3-08**: 命名规范统一 — ① `reflect.py` 修复 `focus_tag` 嵌套方括号问题（`[L6 反思 [工程实践]]` → `[L6 反思 工程实践]`）；② `thin_waist.py` `_LEVEL_SUBJECT_PREFIX` 补充 L6/L9 子类型变体（`L6-聚合/周反思/月反思`、`L9-聚合`）；③ `federation_tools.py` 修复 `startswith('[L7')` → `startswith('[L7 ')` 防止误匹配；④ `mcp/tools/distill.py` 修复 `startswith("[L9")` 缺少闭合括号 + 操作符优先级 bug（`i > 0 ... or ...` 无括号时 i=0 也会触发 L10 检查）。 (`pipeline/reflect.py`, `core/thin_waist.py`, `mcp/federation_tools.py`, `mcp/tools/distill.py`)
+
+- **S3-10**: 会话 overhead 优化 — 3 项优化：① `session.py` L6 harvest 去重键从 content_hash 改为 `session_id`（JSON metadata），避免每轮 pipeline 创建重复 L6；② `reflect.py` 添加每日每 agent 最多 15 条 L6 升级的频率上限（`_MAX_L6_PER_AGENT_PER_DAY`），防止 reflect 步骤 L6 爆涨；③ `session.py` L6 summary/subject 去重（原两字段相同值），summary 改为空字符串。 (`pipeline/session.py`, `pipeline/reflect.py`)
+
 - **S3-09**: 嵌入依赖声明化 — embeddings.py 模块级检测 `sentence_transformers` 存在性（`_HAS_ST` 标志），缺失时 log 明确提示安装命令；`_get_model()` 提前 raise ImportError 给出清晰错误；thin_waist.py 两处 embedding 失败日志从 `"silent error"` 改为描述性消息。 (`graph/embeddings.py`, `core/thin_waist.py`)
+
+### Chores
+
+- **S3-13**: git/CHANGELOG 自动化 — 新增 `scripts/post_commit_hook.py`（自动检测 CHANGELOG 版本号创建 git tag + 警告未更新 CHANGELOG）；`.git/hooks/post-commit.bat` 作为 hook 入口。 (`scripts/post_commit_hook.py`, `.git/hooks/post-commit.bat`)
 
 ### Docs
 

@@ -8,6 +8,8 @@ import os
 import shutil
 import subprocess
 import sys
+
+from memall.cli.handle_call import mcp_call
 from datetime import datetime
 from pathlib import Path
 
@@ -712,12 +714,11 @@ def cmd_graph_visualize(args):
 
 def cmd_index(args):
     if args.action == "build":
-        from memall.graph.embeddings import build_index
-        result = build_index(batch_size=args.batch)
-        if "error" in result:
-            print(f"Index build failed: {result['error']}", file=sys.stderr)
-            sys.exit(1)
-        print(f"Index build: {result.get('new', 0)} new embeddings ({result['embedded']}/{result['total']} total)")
+        result = mcp_call("memall_index_rebuild", force=False)
+        if not result.ok:
+            print(f"Index build failed: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        print(f"Index build: {d.get('new', 0)} new embeddings ({d['embedded']}/{d['total']} total)")
     elif args.action == "status":
         from memall.graph.embeddings import index_status
         result = index_status()
@@ -732,20 +733,17 @@ def cmd_index(args):
 # ──────────────────────────────────────────────
 
 def cmd_retrieve(args):
-    from memall.graph.retrieve import retrieve
-    result = retrieve(args.query, mode=args.mode, top_k=args.top)
-    if "error" in result:
-        print(f"Retrieve failed: {result['error']}", file=sys.stderr)
-        sys.exit(1)
-    if not result.get("results"):
+    result = mcp_call("memall_vector_search", query=args.query, top_k=args.top)
+    if not result.ok:
+        print(f"Retrieve failed: {result.error}", file=sys.stderr); sys.exit(1)
+    d = result.data
+    if not d.get("results"):
         print("No results found.")
         return
-    print(f"Mode: {result['mode']} | Total candidates: {result.get('total', 0)}")
-    for r in result["results"]:
+    print(f"Mode: vector | Total candidates: {d.get('total', 0)}")
+    for r in d["results"]:
         print(f"  #{r['memory_id']} [{r.get('source','?')}] score={r['score']:.4f}")
         print(f"    {r['content'][:120]}")
-    if result.get("graph_expansions"):
-        print(f"  Graph expansions: {result['graph_expansions']}")
 
 
 # ──────────────────────────────────────────────
@@ -753,26 +751,38 @@ def cmd_retrieve(args):
 # ──────────────────────────────────────────────
 
 def cmd_onboarding(args):
-    from memall.onboarding import start, status, reset, complete
-
     if args.action == "start":
-        result = start(step=args.step)
-        if result.get("status") == "already_completed":
-            print(result["message"])
+        result = mcp_call("memall_onboarding", action="start", step=args.step)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr)
+            return
+        d = result.data
+        if d.get("status") == "already_completed":
+            print(d.get("message", "already completed"))
     elif args.action == "status":
-        s = status()
-        if s["completed"]:
-            print(f"新手引导：已完成（{s.get('completed_at','?')}）")
+        result = mcp_call("memall_onboarding", action="status")
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr)
+            return
+        d = result.data
+        if d.get("completed"):
+            print(f"新手引导：已完成（{d.get('completed_at','?')}）")
         else:
-            print(f"新手引导：步骤 {s['current_step']}/5（未完成）")
-            print(f"  Agent: {s.get('agent_name','未设置')}")
-            print(f"  开始时间: {s.get('started_at','?')}")
+            print(f"新手引导：步骤 {d['current_step']}/5（未完成）")
+            print(f"  Agent: {d.get('agent_name','未设置')}")
+            print(f"  开始时间: {d.get('started_at','?')}")
     elif args.action == "reset":
-        result = reset()
-        print(result["message"])
+        result = mcp_call("memall_onboarding", action="reset")
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr)
+            return
+        print(result.data.get("message", "reset"))
     elif args.action == "complete":
-        result = complete()
-        print(result["message"])
+        result = mcp_call("memall_onboarding", action="complete")
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr)
+            return
+        print(result.data.get("message", "completed"))
 
 
 # ──────────────────────────────────────────────
@@ -794,31 +804,37 @@ def cmd_serve(args):
 
 def cmd_db(args):
     """CLI handler for `memall db` — database maintenance (Phase 21)."""
-    from memall.core.db import optimize_db, db_stats, vacuum_db
-
     action = getattr(args, "action", None)
 
     if action == "optimize":
-        result = optimize_db()
-        v = result["vacuumed"]
+        result = mcp_call("memall_db", action="optimize")
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
         print(f"ANALYZE:  done")
-        print(f"VACUUM:   {v['before_mb']} MB -> {v['after_mb']} MB (reclaimed {v['reclaimed_mb']} MB)")
+        print(f"VACUUM:   {d['vacuumed']['before_mb']} MB -> {d['vacuumed']['after_mb']} MB (reclaimed {d['vacuumed']['reclaimed_mb']} MB)")
         print(f"OPTIMIZE: done")
 
     elif action == "stats":
-        stats = db_stats()
-        print(f"Database: {stats['db_path']}")
-        print(f"File size: {stats['file_size_mb']} MB")
-        print(f"WAL size:  {stats['wal_size_mb']} MB")
+        result = mcp_call("memall_db", action="stats")
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        print(f"Database: {d['db_path']}")
+        print(f"File size: {d['file_size_mb']} MB")
+        print(f"WAL size:  {d['wal_size_mb']} MB")
         print(f"Tables:")
-        for name, cnt in stats["tables"].items():
+        for name, cnt in d["tables"].items():
             print(f"  {name}: {cnt} rows")
 
     elif action == "vacuum":
-        result = vacuum_db()
-        print(f"Before:  {result['before_mb']} MB")
-        print(f"After:   {result['after_mb']} MB")
-        print(f"Reclaimed: {result['reclaimed_mb']} MB")
+        result = mcp_call("memall_db", action="vacuum")
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        print(f"Before:  {d['before_mb']} MB")
+        print(f"After:   {d['after_mb']} MB")
+        print(f"Reclaimed: {d['reclaimed_mb']} MB")
 
     else:
         print("Usage: memall db {optimize|stats|vacuum}")

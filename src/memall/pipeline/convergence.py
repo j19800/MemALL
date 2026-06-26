@@ -73,11 +73,11 @@ def create_discussion(
       == 解决方案 ==   ← options list
       == 建议 ==       ← recommendation field
 
-    Simplified: no participants/convergence_rule/timeout — a single
-    confirm_discussion() call converges it.  Extra kwargs are silently
-    accepted for backward compat (callers that still pass participants=).
+    Simplified: a single confirm_discussion() call converges it.
     """
     creator = normalize_agent_name(creator)
+    participants_list = [normalize_agent_name(p) for p in kwargs.get("participants", [])]
+    timeout_hours = kwargs.get("timeout_hours", 24)
     conn = get_conn()
     try:
         now = _now()
@@ -100,6 +100,7 @@ def create_discussion(
 
         meta = json.dumps({
             "status": "active",
+            "participants": participants_list,
             "options": options or [],
             "open_questions": open_questions or [],
             "action_items": action_items or [],
@@ -125,8 +126,8 @@ def create_discussion(
             from memall.lark_notify import notify_discussion_created
             notify_discussion_created(
                 title=title, memory_id=memory_id, creator=creator,
-                participants=[], options=options or [],
-                timeout_hours=0,
+                participants=participants_list, options=options or [],
+                timeout_hours=timeout_hours,
             )
         except Exception:
             logger.warning("convergence.py: silent error", exc_info=True)
@@ -138,6 +139,7 @@ def create_discussion(
             "title": title,
             "background": background,
             "status": "active",
+            "participants": participants_list,
             "action_items": action_items or [],
             "open_questions": open_questions or [],
             "recommendation": recommendation,

@@ -184,7 +184,7 @@ def auto_inject(agent_name: str) -> dict:
             ).fetchall()
             for r in rows:
                 lesson_text = (r["content"] or "")[:200]
-                if lesson_text.startswith('[L7'):
+                if lesson_text.startswith('[L7 '):
                     lesson_text = lesson_text.split(']', 1)[-1].strip()
                 l7_lessons.append({
                     "id": r["id"],

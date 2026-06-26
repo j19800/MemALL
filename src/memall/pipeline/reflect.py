@@ -80,8 +80,8 @@ def reflect_step() -> dict:
                 quality = "low"
 
             # First-person tone (第二刀 第5点)
-            agent_focus = focus_map.get(r["agent_name"] or "", "")
-            focus_tag = f" [{agent_focus}]" if agent_focus else ""
+            agent_focus = focus_map.get(ag, "")
+            focus_tag = f" {agent_focus}" if agent_focus else ""
             if is_correction:
                 new_summary = f"[L6 反思{focus_tag}] 我注意到之前有个地方需要调整：{context_snippet[:150]}"
             else:

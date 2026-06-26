@@ -23,6 +23,7 @@ class RetrieveInput(BaseModel):
     agent_name: Optional[str] = Field(None, max_length=200)
     category: Optional[str] = Field(None, max_length=100)
     project: Optional[str] = Field(None, max_length=500)
+    level: Optional[str] = Field(None, max_length=20)
     limit: int = Field(20, ge=1, le=500)
 
 

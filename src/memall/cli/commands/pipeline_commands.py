@@ -5,14 +5,11 @@ import json
 import sys
 from pathlib import Path
 
+from memall.cli.handle_call import mcp_call
 from memall.core.db import get_conn
 from memall.core.thin_waist import retrieve
 from memall.pipeline import run_pipeline
-from memall.pipeline.adaptive import adaptive_clean, adaptive_index, adaptive_distill, adaptive_step, adaptive_report
-from memall.pipeline.forget import forget_stats, forget_review, forget_expired, forget_low_value, forget_step
-from memall.pipeline.ops import merge_memories, split_memory, tag_memory, batch_tag, batch_archive, batch_restore, deduplicate
 from memall.pipeline.persona import generate_persona, persona_step, generate_profile_3layer
-from memall.pipeline.security import audit_sensitive, set_permission, check_access, security_score, list_agents_by_permission
 
 
 # ──────────────────────────────────────────────
@@ -287,47 +284,62 @@ def cmd_pipeline_status(args):
 def cmd_forget(args):
     """CLI handler for `memall forget` — Phase 11 automatic forgetting."""
     if args.expired:
-        result = forget_expired(days=args.days or 90, agent_name=args.agent or None)
-        print(f"Expired cleanup: {result['deleted_memories']} memories, {result['deleted_edges']} edges deleted")
+        result = mcp_call("memall_forget", action="expired", days=args.days or 90, agent_name=args.agent or None)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        print(f"Expired cleanup: {d['deleted_memories']} memories, {d['deleted_edges']} edges deleted")
 
     elif args.low_value:
-        result = forget_low_value(agent_name=args.agent or None)
-        print(f"Low-value cleanup: {result['deleted_memories']}/{result['candidate_count']} candidates deleted")
+        result = mcp_call("memall_forget", action="low_value", agent_name=args.agent or None)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        print(f"Low-value cleanup: {d['deleted_memories']}/{d['candidate_count']} candidates deleted")
 
     elif args.review:
-        result = forget_review(days=args.days or 90, agent_name=args.agent or None)
-        print(f"Review — expired: {result['expired_candidates']}, low-value: {result['low_value_candidates']}")
-        if result["details"]:
+        result = mcp_call("memall_forget", action="review", days=args.days or 90, agent_name=args.agent or None)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        print(f"Review — expired: {d['expired_candidates']}, low-value: {d['low_value_candidates']}")
+        if d.get("details"):
             print("Top candidates:")
-            for d in result["details"]:
-                print(f"  [{d['type']:10s}] #{d['id']} | {d['content_preview'][:50]} | {d['created_at']} | {d['agent_name']}")
+            for item in d["details"]:
+                print(f"  [{item['type']:10s}] #{item['id']} | {item['content_preview'][:50]} | {item['created_at']} | {item['agent_name']}")
 
     elif args.stats:
-        result = forget_stats()
+        result = mcp_call("memall_forget", action="stats")
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
         print(f"Database stats:")
-        print(f"  Total:        {result['total_memories']} memories, {result['total_edges']} edges")
-        print(f"  Expired:      {result['expired_count']} (>{args.days or 90}d)")
-        print(f"  Low-value:    {result['low_value_count']}")
-        print(f"  Orphan edges: {result['orphaned_edge_count']}")
-        if result["oldest_memory_date"]:
-            print(f"  Span:         {result['oldest_memory_date']} .. {result['newest_memory_date']}")
-        print(f"  Avg length:   {result['avg_content_length']} chars")
-        print(f"  Est size:     {result['size_estimate_mb']} MB")
+        print(f"  Total:        {d['total_memories']} memories, {d['total_edges']} edges")
+        print(f"  Expired:      {d['expired_count']} (>{args.days or 90}d)")
+        print(f"  Low-value:    {d['low_value_count']}")
+        print(f"  Orphan edges: {d['orphaned_edge_count']}")
+        if d.get("oldest_memory_date"):
+            print(f"  Span:         {d['oldest_memory_date']} .. {d['newest_memory_date']}")
+        print(f"  Avg length:   {d['avg_content_length']} chars")
+        print(f"  Est size:     {d['size_estimate_mb']} MB")
 
     elif args.all:
-        result = forget_step(days=args.days or 90, agent_name=args.agent or None)
-        exp = result["expired"]
-        low = result["low_value"]
+        result = mcp_call("memall_forget", action="all", days=args.days or 90, agent_name=args.agent or None)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
         print(f"Forget step complete:")
-        print(f"  Expired:   {exp['deleted_memories']} memories, {exp['deleted_edges']} edges")
-        print(f"  Low-value: {low['deleted_memories']}/{low['candidate_count']} candidates")
-        print(f"  Total:     {result['total_deleted_memories']} memories, {result['total_deleted_edges']} edges")
+        print(f"  Expired:   {d['expired']['deleted_memories']} memories, {d['expired']['deleted_edges']} edges")
+        print(f"  Low-value: {d['low_value']['deleted_memories']}/{d['low_value']['candidate_count']} candidates")
+        print(f"  Total:     {d['total_deleted_memories']} memories, {d['total_deleted_edges']} edges")
 
     else:
-        # Default: show stats
-        result = forget_stats()
+        result = mcp_call("memall_forget", action="stats")
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
         print(f"memall forget — Phase 11")
-        print(f"  {result['total_memories']} total | {result['expired_count']} expired | {result['low_value_count']} low-value")
+        print(f"  {d['total_memories']} total | {d['expired_count']} expired | {d['low_value_count']} low-value")
         print(f"  Use --review to preview, --expired / --low-value / --all to execute")
 
 
@@ -671,43 +683,33 @@ def cmd_adaptive(args):
     agent = args.agent or None
 
     if args.report:
-        result = adaptive_report()
+        result = mcp_call("memall_adaptive", action="report", agent_name=agent)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
         print("=== Adaptive Subsystem Report ===")
-        print(f"  Total memories:       {result['total_memories']}")
-        print(f"  Recent 7d memories:   {result['recent_7d_memories']}")
-        print(f"  Growth rate (7d):     {result['growth_rate_7d']:.2%}")
-        print(f"  Mode suggestion:      {result['mode_suggestion']}")
-        print(f"  Query log entries:    {result['query_log_total']}")
-        print(f"  Acceleration tables:  {result['accel_table_count']}")
+        print(f"  Total memories:       {d['total_memories']}")
+        print(f"  Recent 7d memories:   {d['recent_7d_memories']}")
+        print(f"  Growth rate (7d):     {d['growth_rate_7d']:.2%}")
+        print(f"  Mode suggestion:      {d['mode_suggestion']}")
+        print(f"  Query log entries:    {d['query_log_total']}")
+        print(f"  Acceleration tables:  {d['accel_table_count']}")
         print(f"  Distill history (last 5):")
-        for h in result.get("distill_history_recent", []):
+        for h in d.get("distill_history_recent", []):
             print(f"    #{h['id']} {h['agent_name']:12s} {h['mode']:10s} "
                   f"{h['memory_before']}->{h['memory_after']} mems  {h['triggered_at'][:19]}")
         return
 
-    if args.all:
-        result = adaptive_step(agent_name=agent)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return
+    action = "report"
+    if args.all: action = "all"
+    elif args.clean: action = "clean"
+    elif args.index: action = "index"
+    elif args.distill: action = "distill"
 
-    if args.clean:
-        result = adaptive_clean(agent_name=agent)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return
-
-    if args.index:
-        result = adaptive_index(agent_name=agent)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return
-
-    if args.distill:
-        result = adaptive_distill(agent_name=agent)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return
-
-    # Default: show report
-    result = adaptive_report()
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    result = mcp_call("memall_adaptive", action=action, agent_name=agent)
+    if not result.ok:
+        print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+    print(json.dumps(result.data, ensure_ascii=False, indent=2))
 
 
 # ──────────────────────────────────────────────
@@ -719,48 +721,61 @@ def cmd_security(args):
     action = getattr(args, "action", None)
 
     if action == "audit":
-        result = audit_sensitive(agent_name=args.agent or None)
-        print(f"Security Audit — scanned {result['total_scanned']} memories")
-        print(f"  Findings: {result['findings']} | Risk: {result['risk_level']}")
-        print(f"  By type: {json.dumps(result['by_type'], ensure_ascii=False)}")
-        if result["details"]:
+        result = mcp_call("memall_security", action="audit", agent_name=args.agent or None)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        print(f"Security Audit — scanned {d['total_scanned']} memories")
+        print(f"  Findings: {d['findings']} | Risk: {d['risk_level']}")
+        print(f"  By type: {json.dumps(d['by_type'], ensure_ascii=False)}")
+        if d.get("details"):
             print(f"\n  Top findings:")
-            for d in result["details"][:10]:
-                print(f"    #{d['memory_id']} [{d['match_type']:7s}] {d['agent_name']:12s}  {d['match_preview'][:80]}")
+            for item in d["details"][:10]:
+                print(f"    #{item['memory_id']} [{item['match_type']:7s}] {item['agent_name']:12s}  {item['match_preview'][:80]}")
 
     elif action == "permit":
         if not args.agent_name or not args.level:
             print("error: --agent and --level are required", file=sys.stderr)
             sys.exit(1)
-        result = set_permission(args.agent_name, args.level)
-        if "error" in result:
-            print(f"error: {result['error']}", file=sys.stderr)
-            sys.exit(1)
-        print(f"Permission set: {result['agent_name']} -> {result['level']}")
+        result = mcp_call("memall_security", action="permit", agent_name=args.agent_name, level=args.level)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        print(f"Permission set: {d['agent_name']} -> {d['level']}")
 
     elif action == "check":
         if not args.requester or not args.target:
             print("error: --from and --to are required", file=sys.stderr)
             sys.exit(1)
-        result = check_access(args.requester, args.target)
-        status = "ALLOWED" if result["allowed"] else "DENIED"
+        result = mcp_call("memall_security", action="check", requester=args.requester, target=args.target)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        status = "ALLOWED" if d["allowed"] else "DENIED"
         print(f"Access check: {status}")
-        print(f"  {result['reason']}")
+        print(f"  {d['reason']}")
 
     elif action == "score":
-        result = security_score()
-        print(f"Security Score: {result['score']:.1f} / 100  Grade: {result['grade']}")
+        result = mcp_call("memall_security", action="score")
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        print(f"Security Score: {d['score']:.1f} / 100  Grade: {d['grade']}")
         print(f"  Breakdown:")
-        for k, v in result["breakdown"].items():
+        for k, v in d["breakdown"].items():
             print(f"    {k}: {v}")
-        if result["recommendations"]:
+        if d.get("recommendations"):
             print(f"\n  Recommendations:")
-            for r in result["recommendations"]:
+            for r in d["recommendations"]:
                 print(f"    - {r}")
 
     elif action == "list":
         level = getattr(args, "level", "private")
-        agents = list_agents_by_permission(level)
+        result = mcp_call("memall_security", action="list", level=level)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        agents = d.get("agents", [])
         if not agents:
             print(f"No agents with permission level '{level}'.")
         else:
@@ -787,70 +802,82 @@ def cmd_ops(args):
 
     if action == "merge":
         if not args.source_id or not args.target_id:
-            print("error: --from and --to are required", file=sys.stderr)
-            sys.exit(1)
-        result = merge_memories(args.source_id, args.target_id)
+            print("error: --from and --to are required", file=sys.stderr); sys.exit(1)
+        result = mcp_call("memall_ops", action="merge", source_id=args.source_id, target_id=args.target_id)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
         print(f"Merged memory #{args.source_id} into #{args.target_id}")
-        print(f"  Edges redirected: {result['edges_redirected']}")
+        print(f"  Edges redirected: {d['edges_redirected']}")
 
     elif action == "split":
         if not args.split_id:
-            print("error: --id is required", file=sys.stderr)
-            sys.exit(1)
+            print("error: --id is required", file=sys.stderr); sys.exit(1)
         delim = args.delimiter or "\n\n"
-        # Support literal "\n" in CLI args
         if delim.startswith("\\"):
             delim = delim.encode().decode("unicode_escape")
-        result = split_memory(args.split_id, delimiter=delim)
-        print(f"Split memory #{result['original_id']} -> {result['split_count']} new memories")
-        if result.get("new_ids"):
-            print(f"  New IDs: {result['new_ids']}")
+        result = mcp_call("memall_ops", action="split", memory_id=args.split_id, delimiter=delim)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        print(f"Split memory #{d['original_id']} -> {d['split_count']} new memories")
+        if d.get("new_ids"):
+            print(f"  New IDs: {d['new_ids']}")
 
     elif action == "tag":
         if not args.tag_id:
-            print("error: --id is required", file=sys.stderr)
-            sys.exit(1)
+            print("error: --id is required", file=sys.stderr); sys.exit(1)
         tag_list = [t.strip() for t in (args.tags or "").split(",") if t.strip()]
         if not tag_list:
-            print("error: --tags is required (comma-separated)", file=sys.stderr)
-            sys.exit(1)
+            print("error: --tags is required (comma-separated)", file=sys.stderr); sys.exit(1)
         mode = args.mode or "add"
-        result = tag_memory(args.tag_id, tag_list, mode=mode)
-        print(f"Tagged #{result['memory_id']} ({result['mode']}): {result['tags']}")
+        result = mcp_call("memall_ops", action="tag", memory_id=args.tag_id, tags=tag_list, mode=mode)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        print(f"Tagged #{d['memory_id']} ({d['mode']}): {d['tags']}")
 
     elif action == "batch-tag":
         if not args.agent or not args.category:
-            print("error: --agent and --category are required", file=sys.stderr)
-            sys.exit(1)
+            print("error: --agent and --category are required", file=sys.stderr); sys.exit(1)
         tag_list = [t.strip() for t in (args.tags or "").split(",") if t.strip()]
         if not tag_list:
-            print("error: --tags is required", file=sys.stderr)
-            sys.exit(1)
+            print("error: --tags is required", file=sys.stderr); sys.exit(1)
         mode = args.mode or "add"
-        result = batch_tag(args.agent, args.category, tag_list, mode=mode)
-        print(f"Batch tagged: {result['updated']}/{result['matched']} memories updated")
+        result = mcp_call("memall_ops", action="batch_tag", agent_name=args.agent, category=args.category, tags=tag_list, mode=mode)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        print(f"Batch tagged: {d['updated']}/{d['matched']} memories updated")
 
     elif action == "archive":
         if not args.agent:
-            print("error: --agent is required", file=sys.stderr)
-            sys.exit(1)
+            print("error: --agent is required", file=sys.stderr); sys.exit(1)
         days = args.days or 30
-        result = batch_archive(args.agent, days=days)
-        print(f"Archived {result['archived']} memories for agent '{args.agent}' (>{days} days old)")
+        result = mcp_call("memall_ops", action="archive", agent_name=args.agent, days=days)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        print(f"Archived {d['archived']} memories for agent '{args.agent}' (>{days} days old)")
 
     elif action == "restore":
         if not args.agent:
-            print("error: --agent is required", file=sys.stderr)
-            sys.exit(1)
-        result = batch_restore(args.agent)
-        print(f"Restored {result['restored']} archived memories for agent '{args.agent}'")
+            print("error: --agent is required", file=sys.stderr); sys.exit(1)
+        result = mcp_call("memall_ops", action="restore", agent_name=args.agent)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        print(f"Restored {d['restored']} archived memories for agent '{args.agent}'")
 
     elif action == "dedup":
         agent = args.agent or None
         threshold = args.threshold or 0.9
-        result = deduplicate(agent_name=agent, threshold=threshold)
-        print(f"Dedup: {result['duplicates_found']} duplicates found, {result['merged']} merged")
-        for pair in result.get("pairs", [])[:10]:
+        result = mcp_call("memall_ops", action="dedup", agent_name=agent, threshold=threshold)
+        if not result.ok:
+            print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
+        d = result.data
+        print(f"Dedup: {d['duplicates_found']} duplicates found, {d['merged']} merged")
+        for pair in d.get("pairs", [])[:10]:
             print(f"  #{pair['removed']} -> #{pair['kept']}  (sim={pair['similarity']:.3f})")
 
     else:
@@ -862,61 +889,3 @@ def cmd_ops(args):
         print("  archive --agent X [--days 30]")
         print("  restore --agent X")
         print("  dedup [--agent X] [--threshold 0.9]")
-
-
-# ──────────────────────────────────────────────
-# cmd_dream — Dynamic Dreaming status
-# ──────────────────────────────────────────────
-
-def cmd_dream(args):
-    """CLI handler for ``memall dream status`` — active contradiction network."""
-    action = getattr(args, "dream_action", "status")
-
-    if action == "status":
-        conn = get_conn()
-        try:
-            total = conn.execute(
-                "SELECT COUNT(*) as c FROM edges WHERE relation_type = 'contradicts'"
-            ).fetchone()["c"]
-            resolved = conn.execute(
-                "SELECT COUNT(*) as c FROM edges WHERE relation_type = 'contradicts' AND json_extract(metadata, '$.resolved_by') IS NOT NULL"
-            ).fetchone()["c"]
-            recent = conn.execute(
-                "SELECT e.id, e.source_id, e.target_id, e.weight, e.created_at, "
-                "m1.content as src_content, m2.content as tgt_content, "
-                "m1.agent_name as src_agent, m2.agent_name as tgt_agent, "
-                "e.metadata "
-                "FROM edges e "
-                "JOIN memories m1 ON e.source_id = m1.id "
-                "JOIN memories m2 ON e.target_id = m2.id "
-                "WHERE e.relation_type = 'contradicts' "
-                "ORDER BY e.created_at DESC LIMIT 15"
-            ).fetchall()
-
-            print(f"=== Dynamic Dreaming ===")
-            print(f"  Total contradiction edges: {total}")
-            print(f"  Resolved by timestamp:     {resolved}")
-            print(f"  Resolution rate:           {resolved/max(total,1)*100:.1f}%")
-            print()
-            if recent:
-                print(f"  Recent contradictions (last {len(recent)}):")
-                for r in recent:
-                    meta = {}
-                    try:
-                        raw = r["metadata"]
-                        meta = json.loads(raw) if raw and raw.strip() else {}
-                    except Exception:
-                        pass
-                    verdict = meta.get("verdict", "undecided")
-                    badge = {"newer_wins": "✓", "older_wins": "←", "undecided": "?"}.get(verdict, "?")
-                    src_snip = (r["src_content"] or "")[:60].replace("\n", " ")
-                    tgt_snip = (r["tgt_content"] or "")[:60].replace("\n", " ")
-                    created = (r["created_at"] or "")[:19]
-                    print(f"    {badge} [#{r['source_id']}] {src_snip}")
-                    print(f"      ↔ [#{r['target_id']}] {tgt_snip}")
-                    print(f"      at {created}  wt={r['weight']:.2f}  verdict={verdict}")
-                    print()
-            else:
-                print("  No contradiction edges found.")
-        finally:
-            conn.close()
