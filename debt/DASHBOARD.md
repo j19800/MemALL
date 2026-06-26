@@ -18,11 +18,11 @@ pie title 技术负债按等级分布（83 项）
 
 | 指标 | 值 |
 |------|-----|
-| 总负债项 | **83** |
-| 预估总工时 | **~60 小时** |
-| 当前修复率 | **0%** |
+| 总负债项 | **75** |
+| 预估总工时 | **~50 小时** |
+| 当前修复率 | **62%（S0）** |
 | 代码总行数 | 28,057 |
-| 负债密度 | 2.96 项/千行 |
+| 负债密度 | 2.67 项/千行 |
 
 ---
 
@@ -53,18 +53,18 @@ bridge/      0   1   1   0    2      631  3.17 ⚠️
 │ ID       │ 问题                             │ 模块   │ 工时   │ 状态 │
 ├──────────┼──────────────────────────────────┼────────┼────────┼──────┤
 │ S0-001   │ session_project NameError        │ PL     │ 15m    │ ⏳   │
-│ S0-002   │ PRAGMA foreign_keys=OFF          │ PL     │ 10m    │ ⏳   │
-│ S0-003   │ /api/* auth bypass               │ GW     │ 30m    │ ⏳   │
-│ S0-004   │ /pair token leak                 │ GW     │ 1h     │ ⏳   │
-│ S0-005   │ int() cras                       │ GW     │ 30m    │ ⏳   │
-│ S0-006   │ MCP HTTP no auth                 │ MCP    │ 1h     │ ⏳   │
+│ S0-002   │ PRAGMA foreign_keys=OFF          │ PL     │ 10m    │ ✅   │
+│ S0-003   │ /api/* auth bypass               │ GW     │ 30m    │ ✅   │
+│ S0-004   │ /pair token leak                 │ GW     │ 1h     │ ✅   │
+│ S0-005   │ int() crash                      │ GW     │ 30m    │ ✅   │
+│ S0-006   │ MCP HTTP no auth                 │ MCP    │ 1h     │ ✅   │
 │ S0-007   │ UUID truncated to 32 bits        │ PL     │ 5m     │ ⏳   │
-│ S0-008   │ O(n²) link.py                    │ PL     │ 2h     │ ⏳   │
+│ S0-008   │ O(n²) link.py                    │ PL     │ 2h     │ ✅   │
 │ S0-009   │ N+1 edge count                   │ PL     │ 1h     │ ⏳   │
-│ S0-010   │ enrich.py no LIMIT               │ PL     │ 1h     │ ⏳   │
+│ S0-010   │ enrich.py no LIMIT               │ PL     │ 1h     │ ✅   │
 │ S0-011   │ O(n²) adaptive.py                │ PL     │ 2h     │ ⏳   │
 │ S0-012   │ Memory dataclass mismatch        │ CORE   │ 15m    │ ⏳   │
-│ S0-013   │ embedding silent fail            │ GRP    │ 30m    │ ⏳   │
+│ S0-013   │ embedding silent fail            │ GRP    │ 30m    │ ✅   │
 └──────────┴──────────────────────────────────┴────────┴────────┴──────┘
 ```
 
@@ -76,6 +76,7 @@ bridge/      0   1   1   0    2      631  3.17 ⚠️
 日期        S0修复数   S1修复数   修复率    备注
 ──────────────────────────────────────────────
 2026-06-26    0/13      0/33      0%       初始扫描
+2026-06-26    8/13      0/33     62%       v0.1.11~v0.1.12 安全+性能修复
 ```
 
 ---

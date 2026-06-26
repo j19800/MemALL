@@ -141,39 +141,39 @@
   <!-- 顶部摘要卡片 -->
   <div class="cards" style="margin-top:24px;">
     <div class="card card-s0">
-      <div class="num" style="color:var(--s0);">13</div>
-      <div class="label">🔴 S0 Critical</div>
-      <div class="bar" style="width:16%;"></div>
+      <div class="num" style="color:var(--s0);">5</div>
+      <div class="label">🔴 S0 Critical (8 已修复)</div>
+      <div class="bar" style="width:10%;"></div>
     </div>
     <div class="card card-s1">
       <div class="num" style="color:var(--s1);">33</div>
       <div class="label">🟠 S1 Major</div>
-      <div class="bar" style="width:40%;"></div>
+      <div class="bar" style="width:44%;"></div>
     </div>
     <div class="card card-s2">
       <div class="num" style="color:var(--s2);">24</div>
       <div class="label">🟡 S2 Minor</div>
-      <div class="bar" style="width:29%;"></div>
+      <div class="bar" style="width:32%;"></div>
     </div>
     <div class="card card-s3">
       <div class="num" style="color:var(--s3);">13</div>
       <div class="label">🔵 S3 Architecture</div>
-      <div class="bar" style="width:16%;"></div>
+      <div class="bar" style="width:17%;"></div>
     </div>
     <div class="card card-total">
-      <div class="num">83</div>
+      <div class="num">75</div>
       <div class="label">📦 负债总数</div>
       <div class="bar" style="width:100%;"></div>
     </div>
     <div class="card card-rate">
-      <div class="num">0%</div>
-      <div class="label">✅ 修复率</div>
-      <div class="bar" style="width:0%;"></div>
+      <div class="num">62%</div>
+      <div class="label">✅ S0 修复率</div>
+      <div class="bar" style="width:62%;"></div>
     </div>
     <div class="card card-hours">
-      <div class="num">~60h</div>
+      <div class="num">~50h</div>
       <div class="label">⏱ 预估总工时</div>
-      <div class="bar" style="width:60%;"></div>
+      <div class="bar" style="width:50%;"></div>
     </div>
   </div>
 
@@ -183,24 +183,24 @@
       <h2>分布概览</h2>
       <div class="pie-wrap">
         <svg class="pie-chart" viewBox="0 0 100 100">
-          <!-- S0 13/83 = 15.66% => 56.4° -->
+          <!-- S0 5/75 = 6.67% => 24° -->
           <circle cx="50" cy="50" r="40" fill="none" stroke="#ff4444" stroke-width="20"
-            stroke-dasharray="15.66 84.34" stroke-dashoffset="25" transform="rotate(-90,50,50)"/>
-          <!-- S1 33/83 = 39.76% => 143.1° -->
+            stroke-dasharray="6.67 93.33" stroke-dashoffset="25" transform="rotate(-90,50,50)"/>
+          <!-- S1 33/75 = 44% => 158° -->
           <circle cx="50" cy="50" r="40" fill="none" stroke="#ff8800" stroke-width="20"
-            stroke-dasharray="39.76 60.24" stroke-dashoffset="-34.66" transform="rotate(-90,50,50)"/>
-          <!-- S2 24/83 = 28.92% => 104.1° -->
+            stroke-dasharray="44 56" stroke-dashoffset="-6.33" transform="rotate(-90,50,50)"/>
+          <!-- S2 24/75 = 32% => 115° -->
           <circle cx="50" cy="50" r="40" fill="none" stroke="#f0c000" stroke-width="20"
-            stroke-dasharray="28.92 71.08" stroke-dashoffset="-74.42" transform="rotate(-90,50,50)"/>
-          <!-- S3 13/83 = 15.66% => 56.4° -->
+            stroke-dasharray="32 68" stroke-dashoffset="-50.33" transform="rotate(-90,50,50)"/>
+          <!-- S3 13/75 = 17.33% => 62° -->
           <circle cx="50" cy="50" r="40" fill="none" stroke="#4488ff" stroke-width="20"
-            stroke-dasharray="15.66 84.34" stroke-dashoffset="-103.34" transform="rotate(-90,50,50)"/>
+            stroke-dasharray="17.33 82.67" stroke-dashoffset="-82.33" transform="rotate(-90,50,50)"/>
           <circle cx="50" cy="50" r="28" fill="#0d1117"/>
-          <text x="50" y="48" text-anchor="middle" fill="#e6edf3" font-size="14" font-weight="700">83</text>
+          <text x="50" y="48" text-anchor="middle" fill="#e6edf3" font-size="14" font-weight="700">75</text>
           <text x="50" y="60" text-anchor="middle" fill="#8b949e" font-size="8">项</text>
         </svg>
         <div class="pie-legend">
-          <div class="item"><div class="dot" style="background:var(--s0);"></div>S0 Critical<span class="val">13</span></div>
+          <div class="item"><div class="dot" style="background:var(--s0);"></div>S0 Critical<span class="val">5</span></div>
           <div class="item"><div class="dot" style="background:var(--s1);"></div>S1 Major<span class="val">33</span></div>
           <div class="item"><div class="dot" style="background:var(--s2);"></div>S2 Minor<span class="val">24</span></div>
           <div class="item"><div class="dot" style="background:var(--s3);"></div>S3 Architecture<span class="val">13</span></div>
@@ -212,33 +212,83 @@
       <h2>模块热力图 <span style="font-size:12px;color:var(--muted);font-weight:400;">负债密度 (项/KLOC)</span></h2>
       <table class="hm-table">
         <tr><th>模块</th><th>S0</th><th>S1</th><th>S2</th><th>S3</th><th>总计</th><th>行数</th><th>密度</th></tr>
-        <tr><td>pipeline/</td><td><span class="sev sev-s0">5</span></td><td>13</td><td>6</td><td>4</td><td><b>28</b></td><td>11,528</td><td>2.43</td></tr>
-        <tr><td>mcp/</td><td><span class="sev sev-s0">3</span></td><td>4</td><td>3</td><td>1</td><td><b>11</b></td><td>4,193</td><td>2.62</td></tr>
-        <tr><td>gateway</td><td><span class="sev sev-s0">3</span></td><td>3</td><td>2</td><td>1</td><td><b>9</b></td><td>2,500</td><td class="warn">3.60</td></tr>
-        <tr><td>core/</td><td><span class="sev sev-s0">2</span></td><td>7</td><td>4</td><td>2</td><td><b>15</b></td><td>2,465</td><td class="crit">6.09</td></tr>
+        <tr><td>pipeline/</td><td><span class="sev sev-s0">3</span></td><td>13</td><td>6</td><td>4</td><td><b>28</b></td><td>11,528</td><td>2.43</td></tr>
+        <tr><td>mcp/</td><td><span class="sev sev-s0">0</span></td><td>4</td><td>3</td><td>1</td><td><b>11</b></td><td>4,193</td><td>2.62</td></tr>
+        <tr><td>gateway</td><td><span class="sev sev-s0">0</span></td><td>3</td><td>2</td><td>1</td><td><b>9</b></td><td>2,500</td><td class="warn">3.60</td></tr>
+        <tr><td>core/</td><td><span class="sev sev-s0">1</span></td><td>7</td><td>4</td><td>2</td><td><b>15</b></td><td>2,465</td><td class="crit">6.09</td></tr>
         <tr><td>cli/</td><td>0</td><td>1</td><td>2</td><td>2</td><td><b>5</b></td><td>6,800</td><td>0.74</td></tr>
         <tr><td>tests/</td><td>0</td><td>2</td><td>4</td><td>0</td><td><b>6</b></td><td>3,000</td><td>2.00</td></tr>
         <tr><td>search/</td><td>0</td><td>2</td><td>1</td><td>2</td><td><b>5</b></td><td>401</td><td class="crit">12.47</td></tr>
-        <tr><td>graph/</td><td><span class="sev sev-s0">1</span></td><td>1</td><td>1</td><td>1</td><td><b>4</b></td><td>753</td><td class="warn">5.31</td></tr>
+        <tr><td>graph/</td><td><span class="sev sev-s0">0</span></td><td>1</td><td>1</td><td>1</td><td><b>4</b></td><td>753</td><td class="warn">5.31</td></tr>
         <tr><td>bridge/</td><td>0</td><td>1</td><td>1</td><td>0</td><td><b>2</b></td><td>631</td><td class="warn">3.17</td></tr>
       </table>
     </div>
   </div>
 
-  <!-- S0 修复看板 -->
+    <!-- S0 修复看板 -->
   <div class="panel">
-    <h2>🔴 S0 Critical 修复看板 <span style="font-size:12px;color:var(--muted);font-weight:400;">13 项待修复 | 预估 10 小时</span></h2>
+    <h2>🔴 S0 Critical 修复看板 <span style="font-size:12px;color:var(--muted);font-weight:400;">5 项待修复（8/13 已修复）| 预估 5 小时</span></h2>
     <div class="kanban">
       <div class="kanban-col">
-        <h3>安全漏洞 <span class="cnt">5 项</span></h3>
+        <h3>待修复 <span class="cnt">5 项</span></h3>
         <div class="kanban-item">
-          <span>S0-003 <span class="badge badge-sec">sec</span> /api/* auth bypass</span>
-          <span class="tag">30m</span>
+          <span>S0-001 <span class="badge badge-data">bug</span> session_project NameError</span>
+          <span class="tag">15m</span>
         </div>
         <div class="kanban-item">
-          <span>S0-004 <span class="badge badge-sec">sec</span> /pair token leak</span>
+          <span>S0-007 <span class="badge badge-data">data</span> UUID truncated</span>
+          <span class="tag">5m</span>
+        </div>
+        <div class="kanban-item">
+          <span>S0-009 <span class="badge badge-perf">perf</span> N+1 edge count</span>
           <span class="tag">1h</span>
         </div>
+        <div class="kanban-item">
+          <span>S0-011 <span class="badge badge-perf">perf</span> O(n²) adaptive.py</span>
+          <span class="tag">2h</span>
+        </div>
+        <div class="kanban-item">
+          <span>S0-012 <span class="badge badge-data">data</span> Memory dataclass mismatch</span>
+          <span class="tag">15m</span>
+        </div>
+      </div>
+      <div class="kanban-col">
+        <h3>✅ 已修复 <span class="cnt">8 项</span></h3>
+        <div class="kanban-item" style="opacity:0.6;">
+          <span>S0-002 <span class="badge badge-data">data</span> PRAGMA FK OFF</span>
+          <span class="tag">v0.1.11</span>
+        </div>
+        <div class="kanban-item" style="opacity:0.6;">
+          <span>S0-003 <span class="badge badge-sec">sec</span> /api/* auth bypass</span>
+          <span class="tag">v0.1.11</span>
+        </div>
+        <div class="kanban-item" style="opacity:0.6;">
+          <span>S0-004 <span class="badge badge-auth">auth</span> /pair token leak</span>
+          <span class="tag">v0.1.11</span>
+        </div>
+        <div class="kanban-item" style="opacity:0.6;">
+          <span>S0-005 <span class="badge badge-sec">sec</span> int() crash</span>
+          <span class="tag">v0.1.11</span>
+        </div>
+        <div class="kanban-item" style="opacity:0.6;">
+          <span>S0-006 <span class="badge badge-sec">sec</span> MCP HTTP no auth</span>
+          <span class="tag">v0.1.11</span>
+        </div>
+        <div class="kanban-item" style="opacity:0.6;">
+          <span>S0-008 <span class="badge badge-perf">perf</span> O(n²) link.py</span>
+          <span class="tag">v0.1.12</span>
+        </div>
+        <div class="kanban-item" style="opacity:0.6;">
+          <span>S0-010 <span class="badge badge-perf">perf</span> enrich.py no LIMIT</span>
+          <span class="tag">v0.1.12</span>
+        </div>
+        <div class="kanban-item" style="opacity:0.6;">
+          <span>S0-013 <span class="badge badge-perf">perf</span> embedding silent fail</span>
+          <span class="tag">v0.1.12</span>
+        </div>
+      </div>
+    </div>
+  </div>
         <div class="kanban-item">
           <span>S0-005 <span class="badge badge-sec">sec</span> int() crash (×5)</span>
           <span class="tag">30m</span>
@@ -291,44 +341,42 @@
 
   <!-- 推荐修复冲刺 -->
   <div class="panel">
-    <h2>⚡ 本周推荐修复计划 <span style="font-size:12px;color:var(--muted);font-weight:400;">预估 3 小时，清除 6 项 S0</span></h2>
+        <h2>⚡ 下一轮推荐修复 <span style="font-size:12px;color:var(--muted);font-weight:400;">5 项 S0 剩余 | 预估 5 小时</span></h2>
     <table class="sprint-table">
       <tr><th>优先级</th><th>ID</th><th>问题</th><th>模块</th><th>类型</th><th>工时</th><th>影响</th></tr>
-      <tr><td>🅿1</td><td>S0-003</td><td>/api/* auth bypass</td><td>gateway.py:239</td><td>安全</td><td>30m</td><td>任意写操作</td></tr>
-      <tr><td>🅿2</td><td>S0-004</td><td>/pair token leak</td><td>gateway.py:1998</td><td>安全</td><td>1h</td><td>主令牌泄露</td></tr>
-      <tr><td>🅿3</td><td>S0-005</td><td>int() crash (×5)</td><td>gateway.py</td><td>安全</td><td>30m</td><td>多处 500</td></tr>
-      <tr><td>🅿4</td><td>S0-001</td><td>session_project NameError</td><td>session.py:770</td><td>崩溃</td><td>15m</td><td>L6 静默丢失</td></tr>
-      <tr><td>🅿5</td><td>S0-002</td><td>PRAGMA foreign_keys OFF</td><td>distill.py:15</td><td>数据</td><td>10m</td><td>孤立 edge</td></tr>
-      <tr><td>🅿6</td><td>S0-007</td><td>UUID truncation</td><td>session.py:353</td><td>数据</td><td>5m</td><td>碰撞风险</td></tr>
+      <tr><td>🅿1</td><td>S0-009</td><td>N+1 edge count</td><td>classify.py:203</td><td>性能</td><td>1h</td><td>classify 逐条 COUNT</td></tr>
+      <tr><td>🅿2</td><td>S0-011</td><td>O(n²) adaptive.py</td><td>adaptive.py:118</td><td>性能</td><td>2h</td><td>去重全表对比</td></tr>
+      <tr><td>🅿3</td><td>S0-001</td><td>session_project NameError</td><td>session.py:770</td><td>崩溃</td><td>15m</td><td>L6 静默丢失</td></tr>
+      <tr><td>🅿4</td><td>S0-012</td><td>Memory dataclass mismatch</td><td>models.py</td><td>数据</td><td>15m</td><td>对象字段缺失</td></tr>
+      <tr><td>🅿5</td><td>S0-007</td><td>UUID truncation</td><td>session.py:353</td><td>数据</td><td>5m</td><td>碰撞风险</td></tr>
     </table>
-    <div class="progress-bar"><div class="progress-fill" style="width:0%;"></div></div>
-    <div style="margin-top:8px;font-size:13px;color:var(--muted);">修复进度：0 / 6（0%）</div>
-    <div style="margin-top:12px;">
-      <pre style="background:var(--bg);padding:10px;border-radius:6px;font-size:12px;color:var(--muted);overflow-x:auto;">
-冲刺 1 命令序列：
-  python -c "from memall import capture; capture(level='P0', category='fix', summary='S0-003~007 hotfix...')"
-  改 gateway.py:239     → 删除 /api/* bypass
-  改 gateway.py:1998    → 一次性配对码
-  改 gateway.py:980...  → int() try/except 包装
-  改 session.py:770     → 传 session_project
-  改 distill.py:15      → try/finally 恢复外键
-  改 session.py:353     → 完整 uuid4
-  git add -A && git commit -m "fix: S0 security hotfix (003~007,001,002)" && git push
-      </pre>
-    </div>
+    <div class="progress-bar"><div class="progress-fill" style="width:65%;"></div></div>
+    <div style="margin-top:8px;font-size:13px;color:var(--muted);">整体 S0 修复进度：8 / 13（62%）— 剩余 5 项</div>
   </div>
 
   <!-- 趋势追踪 -->
   <div class="panel">
     <h2>📈 修复趋势</h2>
-    <div style="height:100px;display:flex;align-items:flex-end;gap:8px;">
+            <div style="height:100px;display:flex;align-items:flex-end;gap:8px;">
       <div style="flex:1;text-align:center;">
-        <div style="height:4px;background:var(--accent);border-radius:2px;width:100%;"></div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px;">06-26</div>
+        <div style="height:50px;background:var(--accent);border-radius:2px 2px 0 0;width:100%;"></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">06-26 初扫</div>
         <div style="font-size:12px;font-weight:600;">0%</div>
+      </div>
+      <div style="flex:1;text-align:center;">
+        <div style="height:62px;background:var(--green);border-radius:2px 2px 0 0;width:100%;"></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">06-26 修复</div>
+        <div style="font-size:12px;font-weight:600;">62%</div>
       </div>
       <div style="flex:1;text-align:center;opacity:0.3;">
         <div style="height:4px;background:var(--border);border-radius:2px;width:100%;"></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">下一轮</div>
+        <div style="font-size:12px;font-weight:600;">—</div>
+      </div>
+    </div>
+    <div style="margin-top:12px;font-size:13px;color:var(--muted);">
+      8/13 S0 已修复（v0.1.11~v0.1.12）。已修复：安全漏洞（S0-003~006）、数据完整性（S0-002）、性能（S0-008,010）、静默失败（S0-013）。
+    </div>
         <div style="font-size:11px;color:var(--muted);margin-top:4px;">—</div>
         <div style="font-size:12px;font-weight:600;">—</div>
       </div>
