@@ -17,16 +17,15 @@
 
 | 前缀 | 模块 | 文件数 | 行数 | S0 | S1 | S2 | S3 |
 |------|------|--------|------|----|----|----|-----|
-| CORE | core/ | 7 | 2,473 | 0 | 3 | 4 | 2 |
-| PL | pipeline/ | 40 | 11,518 | 0 | 13 | 6 | 4 |
-| MCP | mcp/ | 30 | 4,243 | 0 | 6 | 3 | 1 |
-| GW | gateway | 1 | 2,642 | 0 | 2 | 2 | 1 |
+| CORE | core/ | 7 | 2,473 | 0 | 0 | 4 | 2 |
+| PL | pipeline/ | 40 | 11,518 | 0 | 11 | 6 | 4 |
+| MCP+GW | mcp+gateway | 31 | 6,885 | 0 | 2 | 5 | 2 |
 | CLI | cli/ | 13 | 4,338 | 0 | 1 | 2 | 2 |
 | TST | tests/ | 116 | 11,476 | 0 | 2 | 4 | 0 |
 | SRH | search/ | 4 | 401 | 0 | 2 | 1 | 2 |
 | GRP | graph/ | 5 | 750 | 0 | 1 | 1 | 1 |
 | BRG | bridge/ | 7 | 631 | 0 | 1 | 1 | 0 |
-| **合计** | | **223** | **38,472** | **0** | **32** | **24** | **13** |
+| **合计** | | **223** | **38,472** | **0** | **20** | **24** | **13** |
 
 ---
 
@@ -138,9 +137,9 @@
 
 ---
 
-# 🟠 S1 — Major（32 项）
+# 🟠 S1 — Major（26 项）
 
-## CORE 层（7 项）
+## CORE 层（0 项 — 全部已修复）
 
 ### S1-CORE-01 配置写入非原子 ✅
 - **文件：** config.py:288-290
@@ -158,10 +157,13 @@
 - **预估工时：** 10 分钟
 - **状态：** ✅ 已修复
 
-### S1-CORE-03 LOWER() 阻止索引
+### S1-CORE-03 LOWER() 阻止索引 ✅
 - **文件：** context_assembler.py:10,33,48
 - **描述：** `WHERE LOWER(agent_name)=LOWER(?)` 使 `idx_memories_agent` 索引失效。
+- **修复方式：** 添加 `idx_memories_agent_lower` 函数索引 `ON memories(LOWER(agent_name))`。
+- **修复时间：** v0.1.14
 - **预估工时：** 30 分钟
+- **状态：** ✅ 已修复
 
 ### S1-CORE-04 硬编码日期 ✅
 - **文件：** thin_waist.py:1064
@@ -171,10 +173,13 @@
 - **预估工时：** 5 分钟
 - **状态：** ✅ 已修复
 
-### S1-CORE-05 冷启动 N+1
+### S1-CORE-05 冷启动 N+1 ✅
 - **文件：** context_assembler.py:38-39,52
-- **描述：** contradictions 循环内逐条查 DB。
+- **描述：** contradictions 循环内逐条查 DB（N+1），insights 循环同理。
+- **修复方式：** 收集所有 ID 后 `WHERE id IN (...)` 批量查询，内存 map 回填。
+- **修复时间：** v0.1.14
 - **预估工时：** 30 分钟
+- **状态：** ✅ 已修复
 
 ### S1-CORE-06 health.py 模块级 NOW 冻结 ✅
 - **文件：** health.py:16
@@ -184,12 +189,15 @@
 - **预估工时：** 5 分钟
 - **状态：** ✅ 已修复
 
-### S1-CORE-07 nlp.py 丢弃单字 CJK
+### S1-CORE-07 nlp.py 丢弃单字 CJK ✅
 - **文件：** nlp.py:41
 - **描述：** `len(t) > 1` 过滤掉如"大""高""新"等有意义的单字 CJK 词，降低 TF-IDF 质量。
+- **修复方式：** 添加 `or bool(re.match(r'[一-鿿]', t))` 保留单字 CJK。
+- **修复时间：** v0.1.13（同 INVENTORY 创建提交）
 - **预估工时：** 10 分钟
+- **状态：** ✅ 已修复
 
-## PL 层（13 项）
+## PL 层（11 项）
 
 ### S1-PL-01 classify 阈值形同虚设
 - **文件：** classify.py:56
@@ -200,10 +208,13 @@
 - **文件：** distill.py:15
 - **描述：** 同 S0-002，重复列出以确保追踪。
 
-### S1-PL-03 distill 无 LIMIT
+### S1-PL-03 distill 无 LIMIT ✅
 - **文件：** distill.py:18
 - **描述：** `ORDER BY agent_name, category, created_at` 无 LIMIT，全表扫描。
+- **修复方式：** 改为 `ORDER BY id DESC LIMIT 5000`，cleanup_l9 也加 `LIMIT 1000`。
+- **修复时间：** v0.1.13
 - **预估工时：** 15 分钟
+- **状态：** ✅ 已修复
 
 ### S1-PL-04 echo OFFSET 分页漂移
 - **文件：** echo.py:122-176
@@ -250,12 +261,15 @@
 - **描述：** 每 agent 单独 COUNT，50 agents = 50 次查询。
 - **预估工时：** 30 分钟
 
-### S1-PL-13 forget_l5_archive 无 LIMIT
+### S1-PL-13 forget_l5_archive 无 LIMIT ✅
 - **文件：** forget.py:318
 - **描述：** `SELECT ... WHERE level='L5'` 无 LIMIT，全表加载。
+- **修复方式：** 添加 `ORDER BY id DESC LIMIT 2000`。
+- **修复时间：** v0.1.14
 - **预估工时：** 15 分钟
+- **状态：** ✅ 已修复
 
-## MCP/Gateway 层（7 项）
+## MCP/Gateway 层（2 项）
 
 ### S1-MCP-01 Hub 消息内容未清理
 - **文件：** federation_tools.py:632-638
@@ -270,30 +284,41 @@
 - **预估工时：** 10 分钟
 - **状态：** ✅ 已修复
 
-### S1-MCP-03 ThreadPool 永不 shutdown
+### S1-MCP-03 ThreadPool 永不 shutdown ✅
 - **文件：** http_transport.py:21-23,43-46
 - **描述：** 模块级 executor 在 shutdown 时不清理。
+- **验证结论：** `_on_shutdown` 已定义并注册 `app.on_shutdown.append`，INVENTORY 误报。
 - **预估工时：** 15 分钟
+- **状态：** ✅ 已修复（v0.1.13 已实现）
 
 ### S1-MCP-04 工具输入验证不一致
 - **文件：** adapter.py, gateway.py 多处
 - **描述：** MCP tool 有 Pydantic 校验但 gateway REST 没有，重复实现。
 - **预估工时：** 3 小时
 
-### S1-MCP-05 遍历 depth 无上限
+### S1-MCP-05 遍历 depth 无上限 ✅
 - **文件：** gateway.py:1915-1923
 - **描述：** 用户可传 `depth: 9999` 导致 BFS 爆炸。
+- **修复方式：** `depth = min(int(...), 5)` clamp 上限。
+- **修复时间：** v0.1.14
 - **预估工时：** 5 分钟
+- **状态：** ✅ 已修复
 
-### S1-MCP-06 client_max_size 未显式设置
+### S1-MCP-06 client_max_size 未显式设置 ✅
 - **文件：** gateway.py:209, http_transport.py:313
 - **描述：** 依赖 aiohttp 默认值（不同版本不一致）。
+- **修复方式：** `web.Application(..., client_max_size=10 * 1024 * 1024)` 两处统一。
+- **修复时间：** v0.1.14
 - **预估工时：** 5 分钟
+- **状态：** ✅ 已修复
 
-### S1-MCP-07 导入路径不安全
+### S1-MCP-07 导入路径不安全 ✅
 - **文件：** gateway.py:2237
 - **描述：** import_bundle 路径校验在 Windows 上大小写敏感。
+- **修复方式：** Windows 路径比较使用 `.lower()` 忽略大小写。
+- **修复时间：** v0.1.14
 - **预估工时：** 15 分钟
+- **状态：** ✅ 已修复
 
 ## CLI/Tests 层（3 项）
 
@@ -416,10 +441,10 @@
 # 当前负债指标
 
 ```
-总负债项：     62（0 S0 + 32 S1 + 24 S2 + 13 S3）
-预估修复工时： ~40 小时（S1: 10h + S2: 5h + S3: 25h）
+总负债项：     49（0 S0 + 20 S1 + 24 S2 + 13 S3）
+预估修复工时： ~30 小时（S1: 3h + S2: 5h + S3: 25h）
 S0 修复率：    13/13（100%）
-S1 修复率：    5/37（13.5%）
+S1 修复率：    17/37（45.9%）
 上次负债扫描： 2026-06-26
 所有 S0 已修复：v0.1.11~v0.1.13（13 项全部关闭）
-Phase A（S1 批量）：v0.1.14（5 项修复：CORE-01/02/04/06, MCP-02）
+Phase A+B（S1 批量）：v0.1.14（17 项修复 — CORE 层 7/7 全部清零, MCP+GW 5/7）

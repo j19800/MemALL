@@ -215,7 +215,7 @@ class MemAllGateway:
     def _run_async(self) -> None:
         """在新线程中运行异步事件循环"""
         asyncio.set_event_loop(self._loop)
-        self._app = web.Application(middlewares=[self._auth_middleware])
+        self._app = web.Application(middlewares=[self._auth_middleware], client_max_size=10 * 1024 * 1024)
         self._setup_routes(self._app)
         self._runner = web.AppRunner(self._app)
         self._loop.run_until_complete(self._runner.setup())
@@ -1926,8 +1926,8 @@ class MemAllGateway:
                     status=400,
                     headers=_cors_headers(request),
                 )
-            depth = data.get("depth", 1)
-            result = traverse(int(mid), depth=int(depth))
+            depth = min(int(data.get("depth", 1)), 5)  # clamp to prevent BFS explosion
+            result = traverse(int(mid), depth=depth)
             return web.json_response(result, headers=_cors_headers(request))
         except Exception as exc:
             return web.json_response(
@@ -2240,7 +2240,13 @@ def import_bundle(bundle_or_path) -> Dict[str, Any]:
         # Security: restrict import to the exports directory
         allowed_dir = (_PROJECT_DIR / "exports").resolve()
         resolved = path.resolve()
-        if not str(resolved).startswith(str(allowed_dir)):
+        import os as _os
+        if _os.name == "nt":
+            if not str(resolved).lower().startswith(str(allowed_dir).lower()):
+                raise PermissionError(
+                    f"Import rejected: {resolved} is outside allowed directory {allowed_dir}"
+                )
+        elif not str(resolved).startswith(str(allowed_dir)):
             raise PermissionError(
                 f"Import rejected: {resolved} is outside allowed directory {allowed_dir}"
             )

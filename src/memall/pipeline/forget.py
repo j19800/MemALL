@@ -315,7 +315,7 @@ def forget_l5_archive(days: int = 30) -> Dict[str, Any]:
     try:
         cutoff = _ttl_cutoff(days)
         rows = conn.execute(
-            "SELECT id, metadata FROM memories WHERE level = 'L5'"
+            "SELECT id, metadata FROM memories WHERE level = 'L5' ORDER BY id DESC LIMIT 2000"
         ).fetchall()
         archived = 0
         for r in rows:

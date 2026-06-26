@@ -330,7 +330,7 @@ _start_time = None  # set in _startup
 
 
 def create_app() -> web.Application:
-    app = web.Application(middlewares=[_error_middleware])
+    app = web.Application(middlewares=[_error_middleware], client_max_size=10 * 1024 * 1024)
     app.router.add_get("/health", handle_info)
     app.router.add_post("/mcp", handle_mcp_post)
     app.router.add_get("/mcp", handle_sse)
