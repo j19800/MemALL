@@ -74,7 +74,7 @@ def run_pipeline_stream(
     from memall.pipeline.arc_status import arc_status_step
     from memall.pipeline.echo import echo_step
     from memall.pipeline.epoch import epoch_step
-    from memall.pipeline.convergence import convergence_step, resolve_pending_deliberations
+    from memall.pipeline.convergence import resolve_pending_deliberations
     from memall.pipeline.improve import improve_step
     from memall.pipeline.persona import persona_step
 

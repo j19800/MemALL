@@ -1,6 +1,5 @@
 import logging
 import re
-from datetime import datetime, timezone
 from memall.core.db import get_conn, content_hash
 from memall.core.thin_waist import capture
 

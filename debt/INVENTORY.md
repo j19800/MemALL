@@ -25,7 +25,7 @@
 | SRH | search/ | 4 | 401 | 0 | 0 | 1 | 2 |
 | GRP | graph/ | 5 | 750 | 0 | 0 | 1 | 1 |
 | BRG | bridge/ | 7 | 631 | 0 | 0 | 1 | 0 |
-| **合计** | | **223** | **38,472** | **0** | **2** | **24** | **13** |
+| **合计** | | **223** | **38,472** | **0** | **1** | **24** | **13** |
 
 ---
 
@@ -415,7 +415,7 @@
 
 ---
 
-# 🟡 S2 — Minor（24 项，14✅，10 剩余）
+# 🟡 S2 — Minor（24 项，24✅ 全部完成）
 
 | ID | 文件 | 描述 | 预估工时 | 状态 |
 |----|------|------|---------|------|
@@ -432,9 +432,50 @@
 | S2-11 | pipeline.py:59-60 | records_in 语义误导 | 2 分钟 | ✅ |
 | S2-12 | adaptive.py:376,520 | distill_history 表 3 处定义 | 5 分钟 | ✅ |
 | S2-13 | convergence.py:406 | 函数内 import re（已模块级） | 1 分钟 | ✅ |
-| S2-14 | thin_waist.py:388 | `"[]"` 字符串 vs list 不一致 | 5 分钟 | ❌ |
+| S2-14 | thin_waist.py:388 | `"[]"` 字符串 vs list 不一致 | 5 分钟 | ✅ |
 | S2-15 | nlp.py:163 | `if np is None` 死代码 | 2 分钟 | ✅ |
-| S2-16-24 | 各处 | 其他命名/注释/死 import | 总计 30 分钟 | ⬜
+| S2-16~24 | 各处 | 其他命名/注释/死 import | 总计 30 分钟 | ✅ |
+
+**S2-16~24 死 import 清理明细（batch 修复）：**
+- agent_memory.py: datetime, timezone, connect, traverse, get_config
+- api/server.py: json, os, RedirectResponse, Field, import_bundle, pair_with_peer, start_discovery, stop_discovery
+- bridge/main.py: Path
+- bridge/config.py: json（已清理）
+- core/context_assembler.py: datetime, timezone
+- core/db.py: datetime
+- core/nlp.py: numpy
+- federation/conflict.py: json, re, Counter, defaultdict, Path, init_family_db, STOPWORDS_CJK_EN, tokenize
+- federation/family.py: json, get_conn
+- federation/health.py: json, math, re, Path, tokenize
+- gateway.py: os
+- graph/embeddings.py: json, re, Path, Optional（已清理）
+- graph/retrieve.py: tfidf_svd_embed, _load_embeddings_matrix
+- lark/consumer.py: get (credentials)
+- lark_notify.py: sys, Optional
+- mcp/hooks.py: field
+- mcp/hooks_builtin.py: datetime, timezone
+- mcp/http_transport.py: sys, Any
+- mcp/hub_client.py: Any
+- mcp/registry.py: json, datetime, timezone
+- mcp/server.py: datetime, timezone
+- mcp/shared.py: sqlite3, timedelta, DB_PATH
+- mcp/tools/capture.py: add
+- mcp/tools/distill.py: Counter
+- migrations/004_normalize_supersedes.py: re
+- pipeline/ask.py: re, Counter, defaultdict, datetime, timezone
+- pipeline/behavior.py: json
+- pipeline/bridge.py: math, defaultdict（已清理）
+- pipeline/cleanup.py: timedelta
+- pipeline/cluster.py: json, init_db, defaultdict（已清理）
+- pipeline/distill_l7.py: datetime, timezone
+- pipeline/dream.py: pool_conn（已清理）
+- pipeline/improve.py: Counter
+- pipeline/observe.py: Path（已清理）
+- pipeline/session.py: collect_health
+- pipeline/stream.py: convergence_step
+- pipeline/time_slice.py: date
+- scheduler/scheduler.py: audit_sensitive
+- search/faiss_provider.py: time, Path
 
 ---
 
@@ -452,7 +493,7 @@
 | S3-06 | 可观测性 | JSON 日志 + metrics + tracing | 3 天 |
 | S3-07 | CLI ↔ MCP 合并 | 消除 6,800 行重复 | 1 周 |
 | S3-08 | 命名规范统一 | [Lx 标签] prefix 标准化 | 2 天 |
-| S3-09 | 嵌入依赖声明化 | 消除静默失败 | 半天 |
+| S3-09 | 嵌入依赖声明化 | 消除静默失败 | 半天 | ✅ |
 | S3-10 | 会话 overhead 优化 | 模板化 L6 精简存储 | 1 天 |
 | S3-11 | 跨 agent 路由 | 讨论自动 dispatch | 2 天 |
 | S3-12 | 异步 pipeline | 生产者/消费者模型 | 1 周 |
@@ -460,30 +501,16 @@
 
 ---
 
-# 修复优先级建议
+# 修复进度
 
-## 冲刺 1（第 1 天）：安全 + 崩溃
 ```
-优先级：S0-003 > S0-004 > S0-005 > S0-006 > S0-001
-耗时：约 3 小时
-```
+S0: 13/13 ✅ 全部关闭 (v0.1.11~v0.1.13)
+S1: 32/33 ✅ 97% (v0.1.13~v0.1.14)
+S2: 按需处理
+S3: 迭代规划
 
-## 冲刺 2（第 2-3 天）：数据完整性
-```
-优先级：S0-002 > S0-012 > S0-007 > S1-CORE-01 > S1-CORE-02
-耗时：约 1 小时
-```
-
-## 冲刺 3（第 4-5 天）：性能设限
-```
-优先级：S0-008 > S0-009 > S0-010 > S0-011 > S0-013
-耗时：约 6 小时
-```
-
-## 冲刺 4（第 6-7 天）：S1 批量
-```
-优先级：S1-CORE-04 > S1-CORE-06 > S1-MCP-02 > S1-MCP-05 > 其余 S1
-耗时：约 1 天
+唯一剩余 S1:
+  S1-CLI-03 — CLI (6,800 行) 与 MCP tool 重复实现，预估 1 周架构级重构
 ```
 
 ---

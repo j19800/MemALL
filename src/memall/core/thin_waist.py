@@ -387,7 +387,7 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
             data.visibility = _get_allowed_write_visibility(conn, data.agent_name, data.visibility)
 
         occurred = data.occurred_at or now
-        supersedes = data.supersedes if data.supersedes not in (None, "[]") else None
+        supersedes = data.supersedes if data.supersedes and data.supersedes != "[]" else None
         cur = conn.execute(
             """INSERT INTO memories
                (content, content_hash, level, owner, agent_name, subject,
@@ -417,7 +417,7 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
             _auto_embed(conn, mem_id, data.content, h)
             conn.commit()
         except Exception:
-            logger.warning("thin_waist.py: silent error", exc_info=True)
+            logger.warning("embedding auto-embed failed (install sentence-transformers for vector search)", exc_info=True)
 
         # Dynamic Dream: active contradiction detection (best-effort, never blocks)
         try:
@@ -535,7 +535,7 @@ def update(memory_id: int, **fields) -> bool:
                 _auto_embed(conn, memory_id, new_content, h)
                 conn.commit()
             except Exception:
-                logger.warning("thin_waist.py: silent error", exc_info=True)
+                logger.warning("embedding re-embed failed (install sentence-transformers for vector search)", exc_info=True)
 
         return True
 

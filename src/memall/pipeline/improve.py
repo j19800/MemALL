@@ -8,7 +8,7 @@ new L6 no longer exhibit the same pattern.
 """
 
 import json
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Set
 from memall.core.db import get_conn

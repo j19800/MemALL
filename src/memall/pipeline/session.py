@@ -17,7 +17,6 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from memall.core.db import get_conn
-from memall.core.health import collect as collect_health
 from memall.pipeline.util import _smart_subject
 
 
@@ -191,13 +190,12 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
         if continuation_note:
             l6_parts.append(f"后续关注：{continuation_note}")
         l6_content = "。".join(l6_parts) + "。"
-        l6_ch = hashlib.sha256(l6_content.encode()).hexdigest()
-
         existing_l6 = conn.execute(
-            "SELECT id FROM memories WHERE content_hash = ?", (l6_ch,)
+            "SELECT id FROM memories WHERE level = 'L6' AND "
+            "json_extract(metadata, '$.session_id') = ?",
+            (session_id,)
         ).fetchone()
         if not existing_l6:
-            # Generate meaningful subject
             l6_subject = _smart_subject(l6_content)
             conn.execute(
                 "INSERT OR IGNORE INTO memories "
@@ -205,7 +203,7 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
                 "occurred_at, created_at, updated_at, confidence, visibility, metadata) "
                 "VALUES (?, ?, 'L6', 'system', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (l6_content[:2000], l6_ch, agent_name, session_project,
-                 l6_subject, l6_subject, now, now, now, 0.6, "private",
+                 l6_subject, "", now, now, now, 0.6, "private",
                  json.dumps({"session_id": session_id, "source": "pipeline_harvest"})),
             )
             result["l6_created"] = True

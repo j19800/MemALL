@@ -20,9 +20,25 @@ MAX_TEXT_LEN = 512
 _MODEL = None
 _MODEL_NAME = "BAAI/bge-small-zh-v1.5"
 
+# Declare optional dependency: sentence-transformers for text embedding
+try:
+    import sentence_transformers  # noqa: F401 — lightweight existence check
+    _HAS_ST = True
+except ImportError:
+    _HAS_ST = False
+    logger.info(
+        "sentence-transformers not installed; vector search unavailable. "
+        "Install with: pip install sentence-transformers"
+    )
+
 
 def _get_model():
     """Lazy-load the SentenceTransformer model (cached after first call)."""
+    if not _HAS_ST:
+        raise ImportError(
+            "sentence-transformers is required for embedding. "
+            "Install with: pip install sentence-transformers"
+        )
     global _MODEL
     if _MODEL is None:
         from sentence_transformers import SentenceTransformer

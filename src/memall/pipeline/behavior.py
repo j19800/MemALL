@@ -7,7 +7,6 @@ Each memory gets tagged with zero or more behavioral stages under
 metadata → behavior → stages, plus a human-readable summary.
 """
 
-import json
 import re
 from collections import Counter
 from dataclasses import dataclass, field

@@ -22,6 +22,16 @@
 
 - **S1 进度 32/33 (97.0%)**: 唯一剩余 CLI-03（CLI/MCP 重复，约 1 周重构量）。git push 因端口 443 不可达暂缓。
 
+### Chores
+
+- **Dead imports batch (S2-16~24)**: 批量清理 40+ 处死 import，涉及 30 个文件 — agent_memory, api/server, bridge/main+config, core/context_assembler+db+nlp, federation/conflict+family+health, gateway, graph/embeddings+retrieve, lark/consumer, lark_notify, mcp/hooks+hooks_builtin+http_transport+hub_client+registry+server+shared+tools/*, migrations/004, pipeline/ask+behavior+bridge+cleanup+cluster+distill_l7+dream+improve+observe+session+stream+time_slice, scheduler, search/faiss_provider. 测试全绿。
+
+- **S2-12**: adaptive.py 移除 `_get_adaptive_snapshot()` 中重复的 distill_history CREATE TABLE（由 adaptive_distill() 先创建）。
+
+### Fixed
+
+- **S3-09**: 嵌入依赖声明化 — embeddings.py 模块级检测 `sentence_transformers` 存在性（`_HAS_ST` 标志），缺失时 log 明确提示安装命令；`_get_model()` 提前 raise ImportError 给出清晰错误；thin_waist.py 两处 embedding 失败日志从 `"silent error"` 改为描述性消息。 (`graph/embeddings.py`, `core/thin_waist.py`)
+
 ### Docs
 
 - **技术负债看板审计修复**: 基于逐文件行数统计校准 cli/ (6,800→4,338) 和 tests/ (3,000→11,476) 行数；验证 13 项 S0 代码级存在性（S0-003/S0-006 本轮修复，其余 11 项已核实）；Kanban 合并为单列"13/13 全部已修复"；Sprint 表替换为 S1 批量计划（5 项 ~45m）；饼图移除 S0 段重算（S1 47%/S2 34%/S3 19%）；热力图 85 项计数不一致修复。 (`frontend/index.html`, `src/memall/api/frontend/index.html`, `debt/INVENTORY.md`, `debt/DASHBOARD.md`)

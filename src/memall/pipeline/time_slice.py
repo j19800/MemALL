@@ -46,7 +46,6 @@ def _get_slice_key(dt: datetime, granularity: str) -> str:
 
 def _get_window_bounds(slice_key: str, granularity: str) -> tuple[str, str]:
     """Return (window_start, window_end) ISO timestamps for a slice_key."""
-    from datetime import date
     if granularity == "day":
         d = datetime.strptime(slice_key, "%Y-%m-%d")
         end = d + timedelta(days=1)
