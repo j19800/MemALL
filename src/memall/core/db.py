@@ -219,6 +219,14 @@ CREATE TABLE IF NOT EXISTS pipeline_state (
     metadata TEXT NOT NULL DEFAULT '{}'
 );
 
+CREATE TABLE IF NOT EXISTS pipeline_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_id INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    processed_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS pipeline_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at TEXT NOT NULL,

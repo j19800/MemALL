@@ -418,6 +418,16 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
         )
         mem_id = cur.lastrowid
 
+        # Publish pipeline event for new memory
+        try:
+            conn.execute(
+                "INSERT INTO pipeline_events (memory_id, event_type, created_at) VALUES (?, 'new_memory', datetime('now'))",
+                (mem_id,),
+            )
+            conn.commit()
+        except Exception:
+            logger.warning("pipeline_events insert failed", exc_info=True)
+
         # Decision Arc: L4 memories start as 'open'
         if data.level == "L4":
             conn.execute("UPDATE memories SET arc_status = 'open' WHERE id = ?", (mem_id,))

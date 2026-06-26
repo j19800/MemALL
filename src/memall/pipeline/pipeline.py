@@ -273,7 +273,8 @@ def check_level_discipline() -> dict:
 # The function is loaded via importlib at runtime — adding a step only
 # requires appending one tuple here.
 _PIPELINE_STEPS = [
-    ("enrich",          "memall.pipeline.enrich",          "enrich_step",                     QUALITY_GATES.get("enrich")),
+    ("event_processor", "memall.pipeline.event_processor", "process_events",              None),
+    ("enrich",          "memall.pipeline.enrich",          "enrich_step",                  QUALITY_GATES.get("enrich")),
     ("cleanup",         "memall.pipeline.cleanup",         "cleanup_step",                    None),
     ("classify",        "memall.pipeline.classify",        "classify_step",                   QUALITY_GATES.get("classify")),
     ("time_slice",      "memall.pipeline.time_slice",      "time_slice_step",                 None),
