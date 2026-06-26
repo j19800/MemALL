@@ -889,3 +889,56 @@ def cmd_ops(args):
         print("  archive --agent X [--days 30]")
         print("  restore --agent X")
         print("  dedup [--agent X] [--threshold 0.9]")
+
+def cmd_dream(args):
+    """CLI handler for ``memall dream status`` — active contradiction network."""
+    action = getattr(args, "dream_action", "status")
+
+    if action == "status":
+        conn = get_conn()
+        try:
+            total = conn.execute(
+                "SELECT COUNT(*) as c FROM edges WHERE relation_type = 'contradicts'"
+            ).fetchone()["c"]
+            resolved = conn.execute(
+                "SELECT COUNT(*) as c FROM edges WHERE relation_type = 'contradicts' AND json_extract(metadata, '$.resolved_by') IS NOT NULL"
+            ).fetchone()["c"]
+            recent = conn.execute(
+                "SELECT e.id, e.source_id, e.target_id, e.weight, e.created_at, "
+                "m1.content as src_content, m2.content as tgt_content, "
+                "m1.agent_name as src_agent, m2.agent_name as tgt_agent, "
+                "e.metadata "
+                "FROM edges e "
+                "JOIN memories m1 ON e.source_id = m1.id "
+                "JOIN memories m2 ON e.target_id = m2.id "
+                "WHERE e.relation_type = 'contradicts' "
+                "ORDER BY e.created_at DESC LIMIT 15"
+            ).fetchall()
+
+            print(f"=== Dynamic Dreaming ===")
+            print(f"  Total contradiction edges: {total}")
+            print(f"  Resolved by timestamp:     {resolved}")
+            print(f"  Resolution rate:           {resolved/max(total,1)*100:.1f}%")
+            print()
+            if recent:
+                print(f"  Recent contradictions (last {len(recent)}):")
+                for r in recent:
+                    meta = {}
+                    try:
+                        raw = r["metadata"]
+                        meta = json.loads(raw) if raw and raw.strip() else {}
+                    except Exception:
+                        pass
+                    verdict = meta.get("verdict", "undecided")
+                    badge = {"newer_wins": "✓", "older_wins": "←", "undecided": "?"}.get(verdict, "?")
+                    src_snip = (r["src_content"] or "")[:60].replace("\n", " ")
+                    tgt_snip = (r["tgt_content"] or "")[:60].replace("\n", " ")
+                    created = (r["created_at"] or "")[:19]
+                    print(f"    {badge} [#{r['source_id']}] {src_snip}")
+                    print(f"      ↔ [#{r['target_id']}] {tgt_snip}")
+                    print(f"      at {created}  wt={r['weight']:.2f}  verdict={verdict}")
+                    print()
+            else:
+                print("  No contradiction edges found.")
+        finally:
+            conn.close()
