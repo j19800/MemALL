@@ -6,7 +6,11 @@
 
 ### Fixed
 
-- **S1-CLI-01 tests/archive/ 残留调试脚本**: 删除 78 个一次性调试脚本（无 pytest 隔离、无断言、有死代码）。 (`tests/archive/`)
+- **S1-CLI-03 CLI 与 MCP 重复消除**: 创建 `memall.cli.handle_call.mcp_call()` 包装器，所有 CRUD 和 pipeline 命令改走 `adapter.handle_call()` 而非直调 thin_waist；MCP 成为唯一业务入口，CLI 退化为纯视图层；保留基础设施命令 CLI-only（init/start/stop/doctor/serve 等 19 个）。 (`cli/handle_call.py`, `cli/commands/base.py`, `cli/commands/pipeline_commands.py`, `cli/commands/management_commands.py`, `mcp/models.py`)
+
+### Note
+
+- **S1 全部清零 33/33 (100%)** 🎉 46 项（13 S0 + 33 S1）技术负债全部修复完毕。剩余 S2(24)/S3(13) 按需/迭代处理。
 
 - **S1-CLI-02 init_temp_db 重复隔离逻辑**: conftest.py 已有 autouse fixture（monkeypatch+tmp_path）做每测试隔离，init_temp_db() 额外做 tempfile+patch+init_db 造成重复开销 → 改为返回 (None,None) 空操作桩，26 个测试文件无需修改。 (`tests/test_helpers.py`)
 
