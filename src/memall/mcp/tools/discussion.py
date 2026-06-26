@@ -11,6 +11,8 @@ def handle_create(arguments: dict) -> str:
         action_items=arguments.get("action_items"),
         recommendation=arguments.get("recommendation", ""),
         creator=arguments.get("agent_name", "system"),
+        participants=arguments.get("participants", []),
+        timeout_hours=arguments.get("timeout_hours", 24),
     )
     return json.dumps(result, ensure_ascii=False, default=str)
 

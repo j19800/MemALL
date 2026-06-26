@@ -56,6 +56,7 @@ os.environ.setdefault("MEMALL_DB_PATH", _fixed_path)
 
 from memall.mcp.adapter import TOOL_DEFINITIONS, handle_call, _intercept, consume_session_note
 from memall.core.db import init_db
+from memall.core.rate_limiter import get_rate_limiter
 
 _log = logging.getLogger("memall.mcp.http")
 
@@ -69,9 +70,13 @@ if not _MCP_TOKEN:
 async def _check_auth(request: web.Request) -> bool:
     """Return True if request is authorized (token not configured = always OK)."""
     if not _MCP_TOKEN:
+        _log.warning("MCP HTTP auth disabled — set MEMALL_MCP_TOKEN or MEMALL_AUTH_TOKEN for production")
         return True
     auth = request.headers.get("Authorization", "")
-    return auth == f"Bearer {_MCP_TOKEN}"
+    ok = auth == f"Bearer {_MCP_TOKEN}"
+    if not ok:
+        _log.warning("Auth failed for %s %s from %s", request.method, request.path, request.remote)
+    return ok
 
 
 async def handle_mcp_post(request: web.Request) -> web.Response:
@@ -80,6 +85,14 @@ async def handle_mcp_post(request: web.Request) -> web.Response:
         return web.json_response(
             {"jsonrpc": "2.0", "error": {"code": -32001, "message": "unauthorized"}},
             status=401,
+        )
+
+    # Rate limit: 60 JSON-RPC requests per minute per IP
+    client_ip = request.remote or "unknown"
+    if not get_rate_limiter().allow(client_ip, limit=60):
+        return web.json_response(
+            {"jsonrpc": "2.0", "error": {"code": -32029, "message": "rate limit exceeded"}},
+            status=429,
         )
     try:
         body = await request.json()
@@ -324,12 +337,15 @@ def _uptime() -> str:
     return "unknown"
 
 
-_start_time = None  # set in _startup
+async def handle_metrics(request: web.Request) -> web.Response:
+    """Return process metrics as JSON."""
+    return web.json_response(get_metrics().snapshot())
 
 
 def create_app() -> web.Application:
     app = web.Application(middlewares=[_error_middleware], client_max_size=10 * 1024 * 1024)
     app.router.add_get("/health", handle_info)
+    app.router.add_get("/metrics", handle_metrics)
     app.router.add_post("/mcp", handle_mcp_post)
     app.router.add_get("/mcp", handle_sse)
     app.router.add_get("/", handle_info)
@@ -364,11 +380,7 @@ def serve_http_forever(port: int = 9876, max_retries: int = 0):
     retries = 0
     while True:
         try:
-            logging.basicConfig(
-                level=logging.INFO,
-                format="[MCP-HTTP %(asctime)s] %(levelname)s %(message)s",
-                datefmt="%H:%M:%S",
-            )
+            from memall.core.log_setup import configure as configure_logging; configure_logging()
             app = create_app()
             _log.info("MCP HTTP server starting on http://127.0.0.1:%d/mcp", port)
             web.run_app(app, host="127.0.0.1", port=port, print=lambda _: None)

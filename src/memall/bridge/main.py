@@ -259,12 +259,7 @@ class AgentBridge:
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-        stream=sys.stdout,
-        force=True,
-    )
+    from memall.core.log_setup import configure as configure_logging; configure_logging()
 
     agent_name = sys.argv[1] if len(sys.argv) > 1 else None
 

@@ -1,5 +1,15 @@
 ## [v0.1.15] - 2026-06-26
 
+### Added
+
+- **S3-03**: 搜索向量化升级 — 意图路由 + 双引擎：① 新增 `search/intent_router.py` `IntentRouter`；② 新增 `memall_search` MCP 工具（统一入口，mode=auto 自动路由）；③ `thin_waist.py` `fts_query()` 集成 jieba 分词；④ 默认提供者从幽灵 `"tfidf"` 改为 `"faiss"`。 (`search/intent_router.py`, `search/__init__.py`, `mcp/tools/__init__.py`, `mcp/tools/retrieve.py`, `core/thin_waist.py`, `search/registry.py`)
+
+- **S3-05**: Federation 主动推 — Hub → MemALL push 机制：① `federation_tools.py` 新增 `fed_deliver()`（Hub → MemALL 事件投递，写入本地 DB）；② `hub_client.py` 新增 `hub_deliver_event()`（MemALL → Hub REST POST `/api/deliver`）+ `start_websocket_listener()`（aiohttp 异步 WebSocket 背景监听器，自动重连）；③ `mcp/tools/federation.py` 新增 `handle_deliver()` + 注册 `memall_fed_deliver` MCP 工具；④ `gateway.py` 新增 `POST /federation/events` 端点（Hub 调用 MemALL 的 push receiver）。 (`mcp/federation_tools.py`, `mcp/hub_client.py`, `mcp/tools/federation.py`, `mcp/tools/__init__.py`, `gateway.py`)
+
+- **S3-04**: Gateway 安全治理：① 新增 `core/rate_limiter.py` `SlidingWindowRateLimiter`（内存滑动窗口，线程安全，默认 POST 30/min、GET 100/min、MCP 60/min）；② gateway.py 和 http_transport.py 注入限流中间件；③ `gateway.py` `/api/discussions/create` 和 `/api/discussions/respond` 从手动 `data.get()` 改为 Pydantic `DiscussionCreateInput`/`DiscussionRespondInput` 校验；④ `http_transport.py` 添加 auth 失败日志、强化安全检查。 (`core/rate_limiter.py`, `gateway.py`, `mcp/http_transport.py`)
+
+- **S3-06**: 可观测性：① 新增 `core/log_setup.py` 统一日志配置（JSON 单行输出，6 个入口点统一调用 `configure()`，`MEMALL_PLAIN_LOG` 环境变量切回明文）；② 新增 `core/metrics.py` `MetricsCollector`（线程安全计数器 + 直方图，`GET /metrics` 端点暴露）；③ 新增 `core/tracer.py` `span()` 上下文管理器（写入 `tracing_spans` SQLite 表）；④ `mcp/adapter.py` `handle_call()` 注入 metrics（计数器 + latency）+ tracing（span）；⑤ `pipeline/pipeline.py` pipeline step span 包裹 + 7 天 trace retention cleanup。 (`core/log_setup.py`, `core/metrics.py`, `core/tracer.py`, `mcp/adapter.py`, `pipeline/pipeline.py`, `core/db.py`, `cli/main.py`, `bridge/main.py`, `bridge/run_bridge.py`, `mcp/http_transport.py`, `scheduler/scheduler.py`, `lark/consumer.py`)
+
 ### Chores
 
 - **Dead imports**: Removed 13 unused imports across 9 MCP Python files (`hooks.py`, `hooks_builtin.py`, `http_transport.py`, `hub_client.py`, `registry.py`, `server.py`, `shared.py`, `tools/capture.py`, `tools/distill.py`).
@@ -34,11 +44,9 @@
 
 ### Fixed
 
-- **S3-08**: 命名规范统一 — ① `reflect.py` 修复 `focus_tag` 嵌套方括号问题（`[L6 反思 [工程实践]]` → `[L6 反思 工程实践]`）；② `thin_waist.py` `_LEVEL_SUBJECT_PREFIX` 补充 L6/L9 子类型变体（`L6-聚合/周反思/月反思`、`L9-聚合`）；③ `federation_tools.py` 修复 `startswith('[L7')` → `startswith('[L7 ')` 防止误匹配；④ `mcp/tools/distill.py` 修复 `startswith("[L9")` 缺少闭合括号 + 操作符优先级 bug（`i > 0 ... or ...` 无括号时 i=0 也会触发 L10 检查）。 (`pipeline/reflect.py`, `core/thin_waist.py`, `mcp/federation_tools.py`, `mcp/tools/distill.py`)
+- **S3-08**: 命名规范统一 — ① `reflect.py` 修复 `focus_tag` 嵌套方括号问题（`[L6 反思 [工程实践]]` → `[L6 反思 工程实践]`）；② `thin_waist.py` `_LEVEL_SUBJECT_PREFIX` 补充 L6/L9 子类型变体（`L6-聚合/周反思/月反思`、`L9-聚合`）；③ `federation_tools.py` 修复 `startswith('[L7')` → `startswith('[L7 ')` 防止误匹配；④ `mcp/tools/distill.py` 修复 `startswith("[L9")` 缺少闭合括号 + 操作符优先级 bug。 (`pipeline/reflect.py`, `core/thin_waist.py`, `mcp/federation_tools.py`, `mcp/tools/distill.py`)
 
-- **S3-10**: 会话 overhead 优化 — 3 项优化：① `session.py` L6 harvest 去重键从 content_hash 改为 `session_id`（JSON metadata），避免每轮 pipeline 创建重复 L6；② `reflect.py` 添加每日每 agent 最多 15 条 L6 升级的频率上限（`_MAX_L6_PER_AGENT_PER_DAY`），防止 reflect 步骤 L6 爆涨；③ `session.py` L6 summary/subject 去重（原两字段相同值），summary 改为空字符串。 (`pipeline/session.py`, `pipeline/reflect.py`)
-
-- **S3-09**: 嵌入依赖声明化 — embeddings.py 模块级检测 `sentence_transformers` 存在性（`_HAS_ST` 标志），缺失时 log 明确提示安装命令；`_get_model()` 提前 raise ImportError 给出清晰错误；thin_waist.py 两处 embedding 失败日志从 `"silent error"` 改为描述性消息。 (`graph/embeddings.py`, `core/thin_waist.py`)
+- **S3-11**: 跨 agent 路由 — 讨论自动 dispatch 修复：① `convergence.py` `create_discussion()` 存储 `participants` 到 metadata，修复查询全部依赖参与者过滤的断链；② `convergence.py` Lark 通知改用真实 participants/timeout_hours；③ `convergence.py` `check_pending_discussions()` 按 participants LIKE 过滤（不再广播给所有活跃 agent）；④ `mcp/tools/discussion.py` `handle_create()` 转发 `participants` 和 `timeout_hours`。 (`pipeline/convergence.py`, `mcp/tools/discussion.py`)
 
 ### Chores
 

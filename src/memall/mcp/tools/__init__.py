@@ -219,6 +219,25 @@ registry.register(ToolDef(
     intercept_category="query",
 ))
 
+# ── Unified Search (intent-routed) ──
+registry.register(ToolDef(
+    name="memall_search",
+    description="Intent-routed search: auto-classifies query and routes to FTS5, vector, or hybrid RRF engine.",
+    input_schema={"type": "object", "properties": {
+        "query": {"type": "string", "description": "Search query"},
+        "mode": {"type": "string", "enum": ["auto", "direct", "fts5", "vector", "hybrid"], "default": "auto"},
+        "top_k": {"type": "integer", "default": 10},
+        "rrf_k": {"type": "integer", "default": 60},
+        "category": {"type": "string"},
+        "level": {"type": "string"},
+        "owner": {"type": "string"},
+        "rerank": {"type": "boolean", "default": False},
+    }, "required": ["query"]},
+    handler=retrieve.handle_unified_search,
+    annotations={"readOnlyHint": True, "idempotentHint": True},
+    intercept_category="query",
+))
+
 # ── Session Start ──
 registry.register(ToolDef(
     name="memall_session_start",
@@ -345,6 +364,22 @@ registry.register(ToolDef(
     }, "required": ["session_id"]},
     handler=federation.handle_extract,
     annotations={"readOnlyHint": False, "idempotentHint": False},
+))
+
+# ── Federation Deliver ──
+registry.register(ToolDef(
+    name="memall_fed_deliver",
+    description="Deliver a push event from Hub directly to a MemALL agent's inbox (S3-05 active push)",
+    input_schema={"type": "object", "properties": {
+        "target_agent": {"type": "string", "description": "Recipient agent name"},
+        "content": {"type": "string", "description": "Event content"},
+        "event_type": {"type": "string", "default": "hub_push", "description": "Event type label"},
+        "category": {"type": "string", "default": "reflection", "description": "Memory category"},
+        "source": {"type": "string", "default": "hub", "description": "Source identifier"},
+    }, "required": ["target_agent", "content"]},
+    handler=federation.handle_deliver,
+    annotations={"readOnlyHint": False, "idempotentHint": False},
+    intercept_category="federation",
 ))
 
 # ── Hub Connect ──

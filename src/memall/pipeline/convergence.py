@@ -609,9 +609,12 @@ def check_pending_discussions(agent_name: str) -> list[dict]:
     agent_name = normalize_agent_name(agent_name)
     conn = get_conn()
     try:
+        # Only fetch discussions where this agent is a participant
         rows = conn.execute(
             "SELECT * FROM memories WHERE level='L5' AND category='discussion' "
-            "AND json_extract(metadata, '$.status') = 'active'",
+            "AND json_extract(metadata, '$.status') = 'active' "
+            "AND json_extract(metadata, '$.participants') LIKE ?",
+            (f'%"{agent_name}"%',),
         ).fetchall()
 
         pending = []

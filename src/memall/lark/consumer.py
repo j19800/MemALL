@@ -399,10 +399,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-        stream=sys.stdout,
-        force=True,
-    )
+    from memall.core.log_setup import configure as configure_logging; configure_logging()
     main()

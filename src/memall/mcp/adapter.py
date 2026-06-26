@@ -1,10 +1,13 @@
 import json
 import logging
+import time
 
 from memall.mcp.validator import validate_tool_input, format_validation_error
 from memall.mcp.shared import ensure_session_started, consume_session_note, run_intercept
 from memall.mcp.registry import registry
 from memall.mcp.hooks import HookRegistry, HOOK_PRE_TOOL_USE, HOOK_POST_TOOL_USE, HOOK_POST_TOOL_USE_FAILURE
+from memall.core.metrics import get_metrics
+from memall.core.tracer import span, reset_trace
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +25,16 @@ TOOL_DEFINITIONS = registry.list_definitions()
 
 
 def handle_call(tool_name: str, arguments: dict) -> str:
+    reset_trace()
+    m = get_metrics()
+    m.incr("tool_call_total")
+    m.incr(f"tool_call.{tool_name}")
+    _t0 = time.time()
+
     is_valid, validated_data, err_msg = validate_tool_input(tool_name, arguments)
     if not is_valid:
+        m.incr("tool_call_validation_error")
+        m.record_latency(f"tool.{tool_name}", (time.time() - _t0) * 1000)
         return format_validation_error(tool_name, err_msg)
     arguments = validated_data
 
@@ -43,17 +54,25 @@ def handle_call(tool_name: str, arguments: dict) -> str:
     pre_results = HookRegistry.dispatch(HOOK_PRE_TOOL_USE, tool_name, arguments)
     if False in pre_results:
         logger.info("Tool call blocked by hook: %s", tool_name)
+        m.incr("tool_call_blocked")
+        m.record_latency(f"tool.{tool_name}", (time.time() - _t0) * 1000)
         return json.dumps({"status": "blocked", "tool": tool_name, "reason": "blocked by pre_tool_use hook"})
 
-    # Execute
+    # Execute (wrapped in tracing span)
+    attrs = {"tool_name": tool_name, "arg_keys": list(arguments.keys())[:5]}
     try:
-        result = registry.dispatch(tool_name, arguments)
+        with span(f"tool.{tool_name}", "tool_call", attrs):
+            result = registry.dispatch(tool_name, arguments)
     except Exception as e:
         logger.exception("Tool call failed: %s", tool_name)
+        m.incr("tool_call_error")
+        m.incr(f"tool_error.{tool_name}")
+        m.record_latency(f"tool.{tool_name}", (time.time() - _t0) * 1000)
         error_result = json.dumps({"status": "error", "error": str(e), "tool": tool_name})
         HookRegistry.dispatch(HOOK_POST_TOOL_USE_FAILURE, tool_name, arguments, error=str(e))
         return error_result
 
+    m.record_latency(f"tool.{tool_name}", (time.time() - _t0) * 1000)
     run_intercept(tool_name, arguments)
 
     # Post-tool-use hooks

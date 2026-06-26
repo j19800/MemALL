@@ -1,6 +1,6 @@
 import json
 from memall.mcp.federation_tools import (
-    fed_query, fed_publish, fed_conflicts,
+    fed_query, fed_publish, fed_conflicts, fed_deliver,
     auto_inject, auto_extract,
 )
 
@@ -38,4 +38,15 @@ def handle_inject(arguments: dict) -> str:
 
 def handle_extract(arguments: dict) -> str:
     result = auto_extract(session_id=arguments["session_id"])
+    return json.dumps(result, ensure_ascii=False, default=str)
+
+
+def handle_deliver(arguments: dict) -> str:
+    result = fed_deliver(
+        target_agent=arguments["target_agent"],
+        content=arguments["content"],
+        event_type=arguments.get("event_type", "hub_push"),
+        category=arguments.get("category", "reflection"),
+        source=arguments.get("source", "hub"),
+    )
     return json.dumps(result, ensure_ascii=False, default=str)

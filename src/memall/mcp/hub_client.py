@@ -169,13 +169,40 @@ def hub_get_stats() -> dict:
 # Convenience: verify connectivity + return summary
 # ════════════════════════════════════════════════════════════════
 
+def hub_deliver_event(target_agent: str, content: str,
+                      event_type: str = "hub_push",
+                      category: str = "reflection",
+                      source: str = "memall") -> dict:
+    """Send an event from MemALL to a specific agent via Hub.
+
+    This is the MemALL → Hub push direction (Hub broadcasts to target agent).
+
+    Args:
+        target_agent: Recipient agent name on the Hub.
+        content: Event content.
+        event_type: Event type label.
+        category: Category hint for the Hub.
+        source: Source identifier (default "memall").
+
+    Returns:
+        Hub API response dict, or {"error": ...} on failure.
+    """
+    body = {
+        "target_agent": target_agent,
+        "content": content,
+        "event_type": event_type,
+        "category": category,
+        "source": source,
+    }
+    return _hub_request("POST", "/api/deliver", body)
+
+
 def hub_status() -> dict:
     """Full connectivity check — health + agent count + group count."""
     health = hub_health()
     if isinstance(health, dict) and health.get("error"):
         return {"connected": False, "error": health["error"]}
     if not isinstance(health, dict):
-        # healthz returns "ok" as plain text — that means connected
         pass
 
     agents = hub_list_agents()
@@ -193,3 +220,64 @@ def hub_status() -> dict:
         ],
         "stats": stats if isinstance(stats, dict) else {},
     }
+
+
+# ════════════════════════════════════════════════════════════════
+# Phase 8: WebSocket listener (aiohttp-based, runs in background thread)
+# ════════════════════════════════════════════════════════════════
+
+def start_websocket_listener(on_event_callback, ws_url: str | None = None):
+    """Start a background thread that connects to Hub WebSocket and dispatches events.
+
+    Uses ``aiohttp`` (already a dependency) for the WebSocket client.
+    Each received message is parsed as JSON and passed to ``on_event_callback(event_dict)``.
+
+    Args:
+        on_event_callback: Callable accepting a single dict argument (the event payload).
+        ws_url: Optional override for the WebSocket URL.
+    """
+    import asyncio
+    import threading
+
+    base = ws_url or HUB_BASE.replace("http://", "ws://").replace("https://", "wss://")
+    url = f"{base}/ws/events"
+    _log_ws = logging.getLogger("memall.mcp.hub_client.websocket")
+
+    async def _listen():
+        backoff = 5
+        while True:
+            try:
+                import aiohttp
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+                    ws = None
+                    try:
+                        ws = await session.ws_connect(url, heartbeat=30)
+                        _log_ws.info("WS connected to %s", url)
+                        backoff = 5
+                        async for msg in ws:
+                            if msg.type == aiohttp.WSMsgType.TEXT:
+                                try:
+                                    event = json.loads(msg.data)
+                                    _log_ws.debug("WS event: %s", event.get("event_type", "unknown"))
+                                    on_event_callback(event)
+                                except json.JSONDecodeError:
+                                    _log_ws.warning("WS: non-JSON ignored: %s", msg.data[:100])
+                            elif msg.type == aiohttp.WSMsgType.ERROR:
+                                _log_ws.warning("WS error: %s", ws.exception())
+                    finally:
+                        if ws:
+                            await ws.close()
+            except Exception as e:
+                _log_ws.warning("WS reconnect in %ds: %s", backoff, e)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60)
+
+    def _run():
+        try:
+            asyncio.run(_listen())
+        except Exception as e:
+            _log_ws.error("WS listener fatal: %s", e)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return t

@@ -11,5 +11,9 @@ Use ``get_provider()`` to obtain the active provider based on config.
 """
 from memall.search.registry import get_provider, register_provider, list_providers
 from memall.search.base import SearchProvider
+from memall.search.intent_router import classify, resolve_mode, SearchIntent
 
-__all__ = ["SearchProvider", "get_provider", "register_provider", "list_providers"]
+__all__ = [
+    "SearchProvider", "get_provider", "register_provider", "list_providers",
+    "classify", "resolve_mode", "SearchIntent",
+]

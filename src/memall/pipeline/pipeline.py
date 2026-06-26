@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timezone
 from .metrics import collect_metrics, append_metrics
 from memall.core.db import get_conn
+from memall.core.tracer import span as trace_span
 from memall.mcp.hooks import HookRegistry, HOOK_STOP
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,8 @@ def _run_step(step_name: str, step_fn, step_results: dict,
     start = time.time()
     records_before = _count_memories(conn)
     try:
-        result = step_fn()
+        with trace_span(f"pipeline.{step_name}", "pipeline_step", {"step": step_name}):
+            result = step_fn()
         elapsed_ms = int((time.time() - start) * 1000)
         records_after = _count_memories(conn)
 
@@ -391,6 +393,16 @@ def run_pipeline(
                 entries.append(_run_step("bridge", step_fn, results, conn=pipeline_conn))
             except Exception as e:
                 entries.append({"step": "bridge", "status": "failed", "error": str(e)[:200]})
+
+        # ── Trace retention (keep spans ≤ 7 days) ──
+        try:
+            from memall.core.db import get_conn
+            _tc = get_conn()
+            _tc.execute("DELETE FROM tracing_spans WHERE created_at < datetime('now', '-7 days')")
+            _tc.commit()
+            _tc.close()
+        except Exception:
+            pass
 
         # ── Metrics ──
         metrics = collect_metrics()

@@ -38,6 +38,7 @@ from memall.core.thin_waist import (
     MemoryInput,
     normalize_agent_name,
 )
+from memall.core.rate_limiter import get_rate_limiter
 from memall.pipeline.persona import generate_profile_3layer
 from memall.mcp.models import (
     CaptureInput,
@@ -45,6 +46,8 @@ from memall.mcp.models import (
     TraverseInput,
     TimelineInput,
     PersonaProfileInput,
+    DiscussionCreateInput,
+    DiscussionRespondInput,
 )
 
 
@@ -254,6 +257,25 @@ class MemAllGateway:
         err = _require_auth(request, self._auth_token)
         if err is not None:
             return err
+
+        # Rate limit: 30/min for POST, 100/min for GET
+        client_ip = request.remote or "unknown"
+        rl = get_rate_limiter()
+        if request.method == "POST":
+            limit = getattr(self, "_rate_limit_post", 30)
+            if not rl.allow(client_ip, limit=limit):
+                return web.json_response(
+                    {"error": "rate limit exceeded"}, status=429,
+                    headers={"Retry-After": "60", **_cors_headers(request)},
+                )
+        else:
+            limit = getattr(self, "_rate_limit_get", 100)
+            if not rl.allow(client_ip, limit=limit):
+                return web.json_response(
+                    {"error": "rate limit exceeded"}, status=429,
+                    headers={"Retry-After": "60", **_cors_headers(request)},
+                )
+
         return await handler(request)
 
     def _setup_routes(self, app: web.Application) -> None:
@@ -285,6 +307,7 @@ class MemAllGateway:
         app.router.add_post("/traverse", self._handle_traverse)
         app.router.add_post("/timeline", self._handle_timeline)
         app.router.add_post("/profile", self._handle_profile)
+        app.router.add_post("/federation/events", self._handle_federation_event)
         app.router.add_post("/pair", self._handle_pair)
         # Catch-all OPTIONS for CORS preflight
         app.router.add_route("OPTIONS", "/{tail:.*}", self._handle_options)
@@ -1603,14 +1626,19 @@ class MemAllGateway:
         data = await self._read_json(request)
         if not data:
             return web.json_response({"error": "invalid JSON"}, status=400, headers=_cors_headers(request))
+        validated, err = self._validate(data, DiscussionCreateInput)
+        if err:
+            return web.json_response({"error": err}, status=400, headers=_cors_headers(request))
         from memall.pipeline.convergence import create_discussion
         result = create_discussion(
-            title=data.get("title", ""),
-            background=data.get("background", ""),
-            options=data.get("options"),
-            open_questions=data.get("open_questions"),
-            recommendation=data.get("recommendation", ""),
-            action_items=data.get("action_items"),
+            title=validated["title"],
+            background=validated.get("background", ""),
+            options=validated.get("options"),
+            open_questions=validated.get("open_questions"),
+            recommendation=validated.get("recommendation", ""),
+            action_items=validated.get("action_items"),
+            participants=validated.get("participants", []),
+            timeout_hours=validated.get("timeout_hours", 24),
         )
         return web.json_response(result, headers=_cors_headers(request))
 
@@ -1619,13 +1647,15 @@ class MemAllGateway:
         data = await self._read_json(request)
         if not data:
             return web.json_response({"error": "invalid JSON"}, status=400, headers=_cors_headers(request))
+        validated, err = self._validate(data, DiscussionRespondInput)
+        if err:
+            return web.json_response({"error": err}, status=400, headers=_cors_headers(request))
         from memall.pipeline.convergence import confirm_discussion
-        topic_id = data.get("topic_id", "")
         result = confirm_discussion(
-            discussion_id=int(topic_id) if topic_id else 0,
-            agent_name=data.get("agent_name", ""),
-            stance=data.get("stance", "pass"),
-            note=data.get("arguments", ""),
+            discussion_id=validated["discussion_id"],
+            agent_name=validated["agent_name"],
+            stance=validated["stance"],
+            note=validated.get("arguments", ""),
         )
         return web.json_response(result, headers=_cors_headers(request))
 
@@ -2007,6 +2037,32 @@ class MemAllGateway:
             return web.json_response(
                 {"error": str(exc)}, status=500, headers=_cors_headers(request)
             )
+
+
+async def _handle_federation_event(self, request: web.Request) -> web.Response:
+        """POST /federation/events — receive push events from Agent Hub (S3-05).
+
+        Hub → MemALL active push endpoint.
+        Calls fed_deliver() to write the event as a memory for the target agent.
+        """
+        data = await self._read_json(request)
+        if data is None:
+            return web.json_response({"error": "invalid JSON body"}, status=400, headers=_cors_headers(request))
+
+        target_agent = data.get("target_agent", "")
+        content = data.get("content", "")
+        if not target_agent or not content:
+            return web.json_response({"error": "target_agent and content are required"}, status=400, headers=_cors_headers(request))
+
+        from memall.mcp.federation_tools import fed_deliver
+        result = fed_deliver(
+            target_agent=target_agent,
+            content=content,
+            event_type=data.get("event_type", "hub_push"),
+            category=data.get("category", "reflection"),
+            source=data.get("source", "hub"),
+        )
+        return web.json_response({"status": "ok", "result": result}, headers=_cors_headers(request))
 
 
 # ══════════════════════════════════════════════════════════════════

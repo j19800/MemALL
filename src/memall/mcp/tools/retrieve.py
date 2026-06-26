@@ -2,6 +2,7 @@ import logging
 import json
 from memall.core.thin_waist import retrieve, vector_search, hybrid_search
 from memall.core.db import get_conn
+from memall.search.intent_router import classify, resolve_mode, SearchIntent
 logger = logging.getLogger(__name__)
 
 
@@ -42,6 +43,59 @@ def handle_hybrid_search(arguments: dict) -> str:
         owner=arguments.get("owner"),
         rerank=arguments.get("rerank", False),
     )
+    return json.dumps(result, ensure_ascii=False, default=str)
+
+
+def handle_unified_search(arguments: dict) -> str:
+    """Unified search — auto-routes between FTS5, vector, and hybrid engines."""
+    query = arguments.get("query", "").strip()
+    top_k = arguments.get("top_k", 10)
+    mode = arguments.get("mode", "auto")
+
+    if not query:
+        return json.dumps({"error": "query is required"})
+
+    if mode == "auto":
+        intent = classify(query)
+        mode = resolve_mode(intent)
+
+    if mode == "direct":
+        result = retrieve(query=query)
+        if result is None:
+            return json.dumps({"query": query, "mode": "direct", "results": [], "total": 0})
+        if isinstance(result, list):
+            items = [{"memory_id": r.id, "content": r.content[:200], "subject": r.subject,
+                       "category": r.category, "level": r.level} for r in result]
+        else:
+            items = [{"memory_id": result.id, "content": result.content[:200], "subject": result.subject,
+                       "category": result.category, "level": result.level}]
+        return json.dumps({"query": query, "mode": "direct", "results": items, "total": len(items)},
+                          ensure_ascii=False)
+
+    if mode == "fts5":
+        result = retrieve(query=query)
+        if result is None:
+            return json.dumps({"query": query, "mode": "fts5", "results": [], "total": 0})
+        items = []
+        for r in (result if isinstance(result, list) else [result]):
+            items.append({"memory_id": r.id, "content": r.content[:200], "subject": r.subject,
+                           "category": r.category, "level": r.level, "owner": r.owner, "agent_name": r.agent_name})
+        return json.dumps({"query": query, "mode": "fts5", "results": items, "total": len(items)},
+                          ensure_ascii=False)
+
+    if mode == "vector":
+        result = vector_search(query=query, top_k=top_k)
+        return json.dumps(result, ensure_ascii=False, default=str)
+
+    result = hybrid_search(
+        query=query, top_k=top_k,
+        rrf_k=arguments.get("rrf_k", 60),
+        category=arguments.get("category"),
+        level=arguments.get("level"),
+        owner=arguments.get("owner"),
+        rerank=arguments.get("rerank", False),
+    )
+    result["mode"] = mode if mode != "auto" else result.get("mode", "hybrid_rrf")
     return json.dumps(result, ensure_ascii=False, default=str)
 
 

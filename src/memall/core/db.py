@@ -228,6 +228,21 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     error TEXT,
     steps TEXT NOT NULL DEFAULT '[]'
 );
+
+CREATE TABLE IF NOT EXISTS tracing_spans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trace_id TEXT NOT NULL,
+    parent_span_id TEXT,
+    span_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    span_type TEXT,
+    start_time TEXT NOT NULL,
+    duration_ms REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ok',
+    attributes TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tracing_trace ON tracing_spans(trace_id);
 """
 
 FTS5_TRIGGERS = """

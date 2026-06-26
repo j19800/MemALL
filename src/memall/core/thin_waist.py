@@ -15,6 +15,14 @@ logger = logging.getLogger(__name__)
 # Valid agent_name pattern: simple identifiers (alphanumeric, underscore, hyphen, dot, @, CJK)
 _VALID_AGENT_RE = re.compile(r'^[a-z0-9_@.\u4e00-\u9fff-]+$')
 _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u2e80-\u2eff\u2f00-\u2fdf]+")
+_CJK_STOP: set[str] = {"的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一", "个", "上", "也", "很", "到", "说", "要", "去", "你", "会", "着", "没有", "看", "好", "自己", "这", "那", "哪", "什么", "怎么", "如何", "为什么"}
+
+_HAS_JIEBA = False
+try:
+    import jieba
+    _HAS_JIEBA = True
+except ImportError:
+    pass
 _AGENT_TAG_RE = re.compile(r'(\d{4}-\d{2}-\d{2}|\d{10,})')
 _AGENT_BLACKLIST = frozenset({
     "architecture", "brainstorm", "unknown", "session_active",
@@ -723,16 +731,27 @@ def _split_cjk(text: str) -> str:
 def fts_query(raw: str) -> str:
     """Build an FTS5 MATCH query string from a raw user query.
 
-    CJK characters are split into individual tokens so that ``unicode61``
-    tokenizer can index them correctly::
-
-        "胡八一 南海归墟 1983"
-        -> ''"胡 八 一" AND "南 海 归 墟" AND "1983"''
+    Uses jieba for CJK tokenization when available (much better recall than
+    character-level splitting), falling back to char-level _split_cjk.
     """
     terms = raw.strip().split()
     if not terms:
         return ""
-    return " AND ".join(f'"{_split_cjk(t)}"' for t in terms)
+    tokenized: list[str] = []
+    for t in terms:
+        if _HAS_JIEBA and _CJK_RE.search(t):
+            words = [w for w in jieba.cut(t, cut_all=False) if len(w.strip()) > 0 and w not in _CJK_STOP]
+            if len(words) >= 2:
+                tokenized.append(f'({" ".join(words)})')
+            elif words:
+                tokenized.append(f'"{words[0]}"')
+            else:
+                tokenized.append(f'"{_split_cjk(t)}"')
+        elif _CJK_RE.search(t):
+            tokenized.append(f'"{_split_cjk(t)}"')
+        else:
+            tokenized.append(f'"{t}"')
+    return " AND ".join(tokenized)
 
 
 VALID_RELATIONS = [
@@ -1088,11 +1107,11 @@ def _context_rerank(results: list[dict], query: str, top_k: int,
 def vector_search(query: str, top_k: int = 10, provider: Optional[str] = None) -> dict:
     """Semantic vector search.
 
-    Uses the configured search provider (default TF-IDF+SVD).
-    Set ``provider="faiss"`` to use FAISS (Phase 2).
+    Uses the configured search provider (default vec0 KNN via bge-small-zh-v1.5).
+    Set ``provider="faiss"`` to use FAISS.
     """
     from memall.config import get_config
-    active = provider or get_config("search.provider", "tfidf")
+    active = provider or get_config("search.provider", "faiss")
     if active == "faiss":
         from memall.search import get_provider
         p = get_provider("faiss")

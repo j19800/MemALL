@@ -3,6 +3,7 @@ import sys
 import logging
 
 from memall import __version__
+from memall.core.log_setup import configure as configure_logging
 
 # Import command handlers from split modules
 from memall.cli.commands.base import (
@@ -32,7 +33,7 @@ from memall.cli.commands.management_commands import (
     cmd_arcs,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+configure_logging()
 logger = logging.getLogger("memall")
 
 

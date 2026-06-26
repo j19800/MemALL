@@ -31,7 +31,7 @@ def get_provider(name: Optional[str] = None) -> Optional[SearchProvider]:
 
     Args:
         name: Provider name.  If None, reads from ``memall.config``
-              key ``search.provider`` (default: ``"tfidf"``).
+              key ``search.provider`` (default: ``"faiss"``).
 
     Returns:
         An instance of the selected ``SearchProvider``, or ``None``
@@ -45,9 +45,9 @@ def get_provider(name: Optional[str] = None) -> Optional[SearchProvider]:
     if name is None:
         try:
             from memall.config import get_config
-            name = get_config("search.provider", "tfidf")
+            name = get_config("search.provider", "faiss")
         except Exception:
-            name = "tfidf"
+            name = "faiss"
 
     cls = _providers.get(name)
     if cls is None:

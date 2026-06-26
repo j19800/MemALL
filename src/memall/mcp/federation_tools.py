@@ -131,6 +131,55 @@ def fed_conflicts(limit: int = 20) -> dict:
     }
 
 
+def fed_deliver(target_agent: str, content: str,
+                event_type: str = "hub_push",
+                category: str = "reflection",
+                source: str = "hub",
+                subject: str | None = None) -> dict:
+    """Deliver a push event from Hub directly to a MemALL agent's inbox.
+
+    This is the Hub → MemALL active push mechanism (S3-05).
+    The event is stored as a local memory via capture(), not written to
+    the shared family DB (that's fed_publish's job).
+
+    Args:
+        target_agent: Recipient agent name.
+        content: Event content.
+        event_type: Type label stored in subject prefix.
+        category: Memory category (default: reflection).
+        source: Source identifier ("hub" or agent name).
+        subject: Optional subject; auto-generated if omitted.
+
+    Returns:
+        {"delivered": bool, "memory_id": int|None, "target_agent": str}
+    """
+    from memall.core.thin_waist import capture
+
+    if not target_agent or not content:
+        return {"delivered": False, "error": "target_agent and content are required"}
+
+    if subject is None:
+        subject = f"[hub:push:{event_type}] {source}"
+
+    result = capture(
+        content=content,
+        agent_name=target_agent,
+        subject=subject,
+        category=category,
+        level="P2",
+        project="agent-hub",
+        metadata_json=json.dumps({"event_type": event_type, "source": source}, ensure_ascii=False),
+    )
+    mem_id = result.get("id") if isinstance(result, dict) else None
+    return {
+        "delivered": True,
+        "memory_id": mem_id,
+        "target_agent": target_agent,
+        "event_type": event_type,
+        "source": source,
+    }
+
+
 # ── Module-level auto_inject cache ──
 _inject_cache: dict[str, dict] = {}
 _INJECT_CACHE_TTL = 300  # seconds

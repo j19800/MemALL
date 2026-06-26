@@ -293,5 +293,5 @@ def daemon_stop():
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    from memall.core.log_setup import configure as configure_logging; configure_logging()
     run_daemon()
