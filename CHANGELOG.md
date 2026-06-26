@@ -1,3 +1,15 @@
+## [v0.1.12] - 2026-06-26
+
+### Fixed
+
+- **Embedding 静默失败**: `_vec0_upsert()` 和 `_auto_embed()` 不再吞没异常，异常正确传播给调用方；`build_index()` 中 `DELETE FROM mem_vec` 失败时记录 warning 而非 bare `pass`。 (`graph/embeddings.py`)
+
+- **NLP CJK 单字过滤**: `nlp.py:41` `len(t) > 1` 原过滤所有单字 token（含 CJK），改为保留单字 CJK 字符（如"猫""狗"）同时仍过滤单英文字母，修复中文搜索无结果问题。 (`core/nlp.py`)
+
+- **link.py O(n²) 无边界**: `SELECT ... ORDER BY id` 无 LIMIT，2000+ 记忆时 O(n²) 全表比较 → 添加 `LIMIT 2000`，防止 pipeline 长时间阻塞。 (`pipeline/link.py`)
+
+- **Pipeline 各步缺失 LIMIT**: `enrich.py`、`distill.py`(x2)、`integrate.py` 均无 LIMIT，大库时全表扫描 — 统一添加 `LIMIT 2000`~`5000`；`observe.py` 合并 3 次冗余 L6 metadata 全表扫描为 1 次；`reflect.py` 已自带 LIMIT 500。 (`pipeline/enrich.py`, `pipeline/distill.py`, `pipeline/integrate.py`, `pipeline/observe.py`)
+
 ## [v0.1.11] - 2026-06-26
 
 ### Security

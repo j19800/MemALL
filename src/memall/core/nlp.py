@@ -38,7 +38,12 @@ def tokenize(text: str) -> list:
     """
     text = text.lower()
     tokens = re.findall(r'[\w\u4e00-\u9fff]+', text)
-    return [t for t in tokens if t not in STOPWORDS_CJK_EN and len(t) > 1]
+    # Keep single CJK characters (e.g. 爱, 好, 大, 小) but drop single ASCII letters.
+    return [
+        t for t in tokens
+        if t not in STOPWORDS_CJK_EN
+        and (len(t) > 1 or bool(re.match(r'[一-鿿]', t)))
+    ]
 
 
 def compute_tfidf(docs: list) -> list:

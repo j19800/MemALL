@@ -32,48 +32,29 @@ def observation_step() -> dict:
         ).fetchall()
         level_dist = {r["level"]: r["cnt"] for r in level_rows}
 
-        # 2. L6 quality breakdown
+        # 2. L6 quality breakdown (fetch once, reuse for 3 stats)
         l6_total = conn.execute(
             "SELECT COUNT(*) FROM memories WHERE level = 'L6'"
         ).fetchone()[0]
         l6_high = 0
+        l6_recent = 0
+        agg_count = 0
         if l6_total > 0:
             l6_rows = conn.execute(
-                "SELECT metadata FROM memories WHERE level = 'L6'"
+                "SELECT metadata FROM memories WHERE level = 'L6' LIMIT 5000"
             ).fetchall()
             for r in l6_rows:
                 try:
                     meta = json.loads(r["metadata"]) if r["metadata"] else {}
                     if meta.get("quality") == "high":
                         l6_high += 1
-                except (json.JSONDecodeError, TypeError):
-                    logger.warning("observe.py: silent error", exc_info=True)
-
-        # 3. Recent L6 count (last 24h)
-        l6_recent = 0
-        recent_rows = conn.execute(
-            "SELECT metadata FROM memories WHERE level = 'L6'"
-        ).fetchall()
-        for r in recent_rows:
-            try:
-                meta = json.loads(r["metadata"]) if r["metadata"] else {}
-                if meta.get("l6_source") in ("reflect_step", "aggregate", "observation"):
-                    l6_recent += 1
-            except (json.JSONDecodeError, TypeError):
-                logger.warning("observe.py: silent error", exc_info=True)
-
-        # 4. Aggregation info
-        agg_count = 0
-        if l6_total > 0:
-            for r in conn.execute(
-                "SELECT metadata FROM memories WHERE level = 'L6'"
-            ).fetchall():
-                try:
-                    meta = json.loads(r["metadata"]) if r["metadata"] else {}
-                    if meta.get("l6_source") == "aggregate":
+                    l6_source = meta.get("l6_source")
+                    if l6_source in ("reflect_step", "aggregate", "observation"):
+                        l6_recent += 1
+                    if l6_source == "aggregate":
                         agg_count += 1
                 except (json.JSONDecodeError, TypeError):
-                    logger.warning("observe.py: silent error", exc_info=True)
+                    logger.warning("observe.py: metadata parse error", exc_info=True)
 
         # 5. Anomalies
         l9_ratio = level_dist.get("L9", 0) / max(1, sum(level_dist.values())) * 100
@@ -382,7 +363,7 @@ def reflection_dashboard(days: int = 30) -> dict:
 
         # Quality breakdown
         l6_rows = conn.execute(
-            "SELECT metadata FROM memories WHERE level = 'L6'"
+            "SELECT metadata FROM memories WHERE level = 'L6' LIMIT 5000"
         ).fetchall()
         quality = {"high": 0, "medium": 0, "low": 0}
         for r in l6_rows:

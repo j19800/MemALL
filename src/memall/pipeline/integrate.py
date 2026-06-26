@@ -95,7 +95,7 @@ def integrate_step(access_total_threshold: int = _MIN_L9_ACCESS_TOTAL,
 
         rows = conn.execute(
             "SELECT id, content, agent_name, category, access_count, metadata, created_at "
-            "FROM memories WHERE level = 'L9' AND LENGTH(TRIM(content)) > 20"
+            "FROM memories WHERE level = 'L9' AND LENGTH(TRIM(content)) > 20 ORDER BY id DESC LIMIT 2000"
         ).fetchall()
 
         by_agent: dict = defaultdict(list)

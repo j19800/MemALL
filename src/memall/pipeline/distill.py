@@ -16,7 +16,7 @@ def distill_step() -> dict:
     conn.execute("PRAGMA foreign_keys=OFF")
     try:
         rows = conn.execute(
-            "SELECT id, content, category, agent_name, summary FROM memories WHERE category != '' AND category IS NOT NULL AND LENGTH(TRIM(content)) > 20 AND level NOT IN ('P0', 'P1', 'P2', 'P3', 'P4', 'L6', 'L9', 'L10', 'L11') ORDER BY agent_name, category, created_at"
+            "SELECT id, content, category, agent_name, summary FROM memories WHERE category != '' AND category IS NOT NULL AND LENGTH(TRIM(content)) > 20 AND level NOT IN ('P0', 'P1', 'P2', 'P3', 'P4', 'L6', 'L9', 'L10', 'L11') ORDER BY id DESC LIMIT 5000"
         ).fetchall()
 
         groups = defaultdict(list)
@@ -146,7 +146,7 @@ def cleanup_l9() -> dict:
 
         # Step 1: Find L9 memories and check their source edges
         l9_rows = conn.execute(
-            "SELECT id FROM memories WHERE level = 'L9'"
+            "SELECT id FROM memories WHERE level = 'L9' ORDER BY id DESC LIMIT 1000"
         ).fetchall()
 
         for row in l9_rows:

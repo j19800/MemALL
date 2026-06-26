@@ -56,33 +56,30 @@ def _content_hash(content: str) -> str:
 
 def _vec0_upsert(conn, memory_id: int, vec_bytes: bytes) -> None:
     """Insert or replace a vector row in the vec0 virtual table."""
-    try:
-        conn.execute(
-            "INSERT OR REPLACE INTO mem_vec(rowid, embedding) VALUES (?, ?)",
-            (memory_id, vec_bytes),
-        )
-    except Exception:
-        logger.warning("embeddings.py: silent error", exc_info=True)
+    conn.execute(
+        "INSERT OR REPLACE INTO mem_vec(rowid, embedding) VALUES (?, ?)",
+        (memory_id, vec_bytes),
+    )
 
 
 def _auto_embed(conn, memory_id: int, content: str, content_hash_val: str) -> None:
-    """Compute and persist embedding for a single memory after capture."""
-    try:
-        _ensure_embeddings_table(conn)
-        model = _get_model()
-        vec = model.encode(content[:MAX_TEXT_LEN], normalize_embeddings=True)
-        vec = np.array(vec, dtype=np.float32)
-        now = datetime.now(timezone.utc).isoformat()
-        vec_bytes = vec.tobytes()
-        conn.execute(
-            "INSERT OR REPLACE INTO memory_embeddings "
-            "(memory_id, embedding, model_name, dims, content_hash, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (memory_id, vec_bytes, _MODEL_NAME, EMBED_DIM, content_hash_val, now),
-        )
-        _vec0_upsert(conn, memory_id, vec_bytes)
-    except Exception:
-        logger.warning("embeddings.py: silent error", exc_info=True)
+    """Compute and persist embedding for a single memory after capture.
+
+    Raises on failure so callers can track embedding status.
+    """
+    _ensure_embeddings_table(conn)
+    model = _get_model()
+    vec = model.encode(content[:MAX_TEXT_LEN], normalize_embeddings=True)
+    vec = np.array(vec, dtype=np.float32)
+    now = datetime.now(timezone.utc).isoformat()
+    vec_bytes = vec.tobytes()
+    conn.execute(
+        "INSERT OR REPLACE INTO memory_embeddings "
+        "(memory_id, embedding, model_name, dims, content_hash, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (memory_id, vec_bytes, _MODEL_NAME, EMBED_DIM, content_hash_val, now),
+    )
+    _vec0_upsert(conn, memory_id, vec_bytes)
 
 
 def build_index(batch_size: int = BATCH_SIZE, force: bool = False) -> dict:
@@ -106,7 +103,7 @@ def build_index(batch_size: int = BATCH_SIZE, force: bool = False) -> dict:
             try:
                 conn.execute("DELETE FROM mem_vec")
             except Exception:
-                pass
+                logger.warning("embeddings: failed to clear vec0 index", exc_info=True)
             conn.commit()
         else:
             pending = []

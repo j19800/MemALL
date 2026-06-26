@@ -99,7 +99,7 @@ def link_step() -> int:
             done_pairs.add((e["source_id"], e["target_id"], e["relation_type"]))
 
         rows = conn.execute(
-            "SELECT id, content, category FROM memories WHERE level != 'P0' ORDER BY id"
+            "SELECT id, content, category FROM memories WHERE level != 'P0' ORDER BY id LIMIT 2000"
         ).fetchall()
 
         tokens_map = {r["id"]: set(tokenize(r["content"])) for r in rows}

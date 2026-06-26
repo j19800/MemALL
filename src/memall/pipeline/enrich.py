@@ -81,7 +81,7 @@ def enrich_step() -> int:
     try:
         _ensure_edges_table(conn)
         rows = conn.execute(
-            "SELECT id, content, metadata FROM memories WHERE level != 'P0' ORDER BY id"
+            "SELECT id, content, metadata FROM memories WHERE level != 'P0' ORDER BY id DESC LIMIT 2000"
         ).fetchall()
         count = 0
         for row in rows:
