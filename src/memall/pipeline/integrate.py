@@ -202,14 +202,16 @@ def integrate_step(min_categories: int = 2) -> dict:
             ph = ",".join("?" * len(source_ids))
             proj_row = conn.execute(f"SELECT project, COUNT(*) as cnt FROM memories WHERE id IN ({ph}) AND project IS NOT NULL AND project != '' GROUP BY project ORDER BY cnt DESC LIMIT 1", source_id_params).fetchone()
             l10_project = proj_row["project"] if proj_row else ""
+            # Thread: L10 integration inherits from first source L9 memory
+            l10_thread_id = source_ids[0] if source_ids else None
             conn.execute(
                 "INSERT INTO memories "
-                "(content, content_hash, level, category, agent_name, project, subject, metadata, occurred_at, created_at, updated_at) "
-                "VALUES (?, ?, 'L10', ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(content, content_hash, level, category, agent_name, project, subject, metadata, occurred_at, created_at, updated_at, thread_id) "
+                "VALUES (?, ?, 'L10', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     merged, ch, best_cat, agent, l10_project, l10_subject,
                     json.dumps({"layer_source": {"value": "integrate_auto_v2", "_meta": {"version": 1, "written_at": now}}}, ensure_ascii=False),
-                    now, now, now,
+                    now, now, now, l10_thread_id,
                 ),
             )
             l10_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]

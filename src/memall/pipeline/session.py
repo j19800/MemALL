@@ -160,6 +160,11 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
                              "participants": participants, "continuation_note": continuation_note,
                              "source": "pipeline_harvest"})),
             )
+            # Get L4 id for thread linkage
+            l4_row = conn.execute(
+                "SELECT id FROM memories WHERE content_hash = ?", (ch,)
+            ).fetchone()
+            l4_id = l4_row["id"] if l4_row else None
             result["l4_created"] = True
 
         # L6 auto-reflection with distinctive content
@@ -200,11 +205,12 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
             conn.execute(
                 "INSERT OR IGNORE INTO memories "
                 "(content, content_hash, level, owner, agent_name, category, project, subject, summary, "
-                "occurred_at, created_at, updated_at, confidence, visibility, metadata) "
-                "VALUES (?, ?, 'L6', 'system', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "occurred_at, created_at, updated_at, confidence, visibility, metadata, thread_id) "
+                "VALUES (?, ?, 'L6', 'system', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (l6_content[:2000], l6_ch, agent_name, session_project,
                  l6_subject, "", now, now, now, 0.6, "private",
-                 json.dumps({"session_id": session_id, "source": "pipeline_harvest"})),
+                 json.dumps({"session_id": session_id, "source": "pipeline_harvest"}),
+                 l4_id),
             )
             result["l6_created"] = True
 

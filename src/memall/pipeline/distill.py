@@ -77,9 +77,11 @@ def distill_step() -> dict:
             l9_project = proj_row["project"] if proj_row else ""
 
             ch = hashlib.sha256(merged_content.encode()).hexdigest()
+            # Thread: L9 distillation inherits from first source memory
+            l9_thread_id = source_ids[0] if source_ids else None
             cur = conn.execute(
-                "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, summary, created_at, updated_at, occurred_at, subject, project, trust_level, access_count, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (merged_content, ch, "L9", "", key[0], key[1], l9_subject, now, now, now, l9_subject, l9_project, 0, 0, "{}"),
+                "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, summary, created_at, updated_at, occurred_at, subject, project, trust_level, access_count, metadata, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (merged_content, ch, "L9", "", key[0], key[1], l9_subject, now, now, now, l9_subject, l9_project, 0, 0, "{}", l9_thread_id),
             )
             if cur.rowcount == 0:
                 # Duplicate hash → record already exists, skip
