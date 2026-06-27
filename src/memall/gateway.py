@@ -1965,7 +1965,8 @@ class MemAllGateway:
         if err:
             return web.json_response({"error": err}, status=400, headers=_cors_headers(request))
         try:
-            result = traverse(validated["node_id"], depth=validated["depth"])
+            result = traverse(validated["node_id"], depth=validated["depth"],
+                               thread_aware=validated.get("thread_aware", False))
             return web.json_response(result, headers=_cors_headers(request))
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=500, headers=_cors_headers(request))

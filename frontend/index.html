@@ -701,6 +701,7 @@ pre{font-family:inherit;white-space:pre-wrap;word-break:break-word}
         <div class="graph-controls">
           <div class="form-group"><label>节点ID</label><input type="text" id="graphNodeId" value="1" placeholder="节点ID"></div>
           <div class="form-group"><label>深度</label><select id="graphDepth"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></div>
+          <div class="form-group"><label><input type="checkbox" id="graphThreadAware" checked> 同线程展开</label></div>
           <button class="btn btn-primary" onclick="loadGraph()">加载图谱</button>
           <button class="btn btn-secondary" onclick="fitGraph()">适配视图</button>
         </div>
@@ -1825,10 +1826,14 @@ function loadGraph(){
   }
   var nodeId = document.getElementById('graphNodeId').value.trim() || '1';
   var depth = document.getElementById('graphDepth').value || '2';
+  var threadAware = document.getElementById('graphThreadAware').checked;
   var loading = document.getElementById('graphLoading');
   loading.style.display = 'flex';
 
-  api('GET','/graph/'+encodeURIComponent(nodeId)+'?depth='+depth)
+  var url = '/graph/'+encodeURIComponent(nodeId)+'?depth='+depth;
+  if(threadAware) url += '&thread_aware=true';
+
+  api('GET',url)
     .then(function(data){
       loading.style.display = 'none';
       var g = data.data || data.graph || data || {};
@@ -1860,7 +1865,12 @@ function loadGraph(){
       });
 
       var visEdges = edges.map(function(e){
-        return {from:e.from||e.source||e.source_id, to:e.to||e.target||e.target_id, color:{color:'#2a3050',highlight:'#3b82f6'}, width:1, arrows:'to'};
+        var isThread = e.relation_type === 'same_thread';
+        return {
+          from:e.from||e.source||e.source_id, to:e.to||e.target||e.target_id,
+          color:{color:isThread?'#f59e0b':'#2a3050',highlight:isThread?'#fbbf24':'#3b82f6'},
+          width:isThread?1.5:1, dashes:isThread, arrows:isThread?'' :'to'
+        };
       });
 
       var container = document.getElementById('graphCanvas');

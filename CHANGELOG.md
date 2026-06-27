@@ -1,3 +1,11 @@
+## [v0.1.16] - 2026-06-27
+
+### Added
+
+- **thread_id 继承链**: 全线贯通 L4→L6→L9→L10。`session.py` harvest_step 通过 content_hash 定位 l4_id 传给 L6 INSERT；`distill.py` distill_step L9 thread_id = source_ids[0]；`integrate.py` integrate_step L10 thread_id = source_ids[0]。zombie 字段 thread_id 现被所有 capture 路径填充。 (`session.py`, `distill.py`, `integrate.py`)
+
+- **图谱 thread-aware 展开**: `traverse()` 新增 `thread_aware` 参数，展开时自动查询 thread_id 关联的同线程记忆（父节点 + 兄弟节点 + 子节点），以虚线琥珀色边 `same_thread` 标记，加入 BFS 搜索前沿。支持 FastAPI `/graph/{node_id}` 和 aiohttp gateway `/traverse` 两个入口。 (`thin_waist.py`, `server.py`, `gateway.py`, `mcp/models.py`, `frontend/index.html`, `desktop/index.html`, `api/frontend/index.html`)
+
 ## [v0.1.15] - 2026-06-26
 
 ### Added

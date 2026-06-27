@@ -41,6 +41,7 @@ class TraverseInput(BaseModel):
     node_id: int = Field(..., ge=1)
     depth: int = Field(1, ge=1, le=10)
     relation_filter: Optional[str] = None
+    thread_aware: bool = False
 
 
 class TimelineInput(BaseModel):

@@ -827,13 +827,68 @@ def connect(source_id: int, target_id: int, relation_type: str = "refines", weig
         return eid
 
 
-def traverse(node_id: int, depth: int = 1, relation_filter: Optional[str] = None) -> dict:
+def traverse(node_id: int, depth: int = 1, relation_filter: Optional[str] = None,
+             thread_aware: bool = False) -> dict:
     with _pool_conn() as conn:
         seen = {node_id}
         seen_edges = set()
         nodes = {}
         edges_out = []
         current = [node_id]
+
+        # ── Thread-aware expansion: include thread-linked memories ──
+        if thread_aware:
+            root_thread = conn.execute(
+                "SELECT thread_id FROM memories WHERE id = ?", (node_id,)
+            ).fetchone()
+            related = set()
+            if root_thread and root_thread["thread_id"]:
+                # This node has a thread_id → find siblings (same thread_id) + parent
+                parent_id = root_thread["thread_id"]
+                if parent_id not in seen:
+                    related.add(parent_id)
+                    seen.add(parent_id)
+                sibling_rows = conn.execute(
+                    "SELECT id FROM memories WHERE thread_id = ? AND id != ?",
+                    (parent_id, node_id),
+                ).fetchall()
+                for sr in sibling_rows:
+                    if sr["id"] not in seen:
+                        related.add(sr["id"])
+                        seen.add(sr["id"])
+            else:
+                # This node is a root → find children (memories referencing it as thread_id)
+                child_rows = conn.execute(
+                    "SELECT id FROM memories WHERE thread_id = ? AND id != ?",
+                    (node_id, node_id),
+                ).fetchall()
+                for cr in child_rows:
+                    if cr["id"] not in seen:
+                        related.add(cr["id"])
+                        seen.add(cr["id"])
+            if related:
+                ph = ",".join("?" * len(related))
+                thread_node_rows = conn.execute(
+                    f"SELECT id, content, subject, category, level, summary, confidence FROM memories WHERE id IN ({ph})",
+                    tuple(related),
+                ).fetchall()
+                for nr in thread_node_rows:
+                    nodes[nr["id"]] = {
+                        "id": nr["id"], "content": nr["content"],
+                        "subject": nr["subject"], "category": nr["category"],
+                        "level": nr["level"], "confidence": nr["confidence"],
+                    }
+                # Add same_thread edges from root to all thread-related nodes
+                for rid in related:
+                    ekey = (node_id, rid, "same_thread")
+                    if ekey not in seen_edges:
+                        seen_edges.add(ekey)
+                        edges_out.append({
+                            "id": None, "source_id": node_id, "target_id": rid,
+                            "relation_type": "same_thread", "weight": 0.5,
+                        })
+                # Include thread-related nodes in BFS frontier
+                current = list(set(current) | related)
 
         for _ in range(depth):
             if not current:

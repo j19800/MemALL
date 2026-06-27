@@ -367,11 +367,14 @@ def api_graph_search(node_id: int, depth: int = 1, relation_filter: str = ""):
     return api_traverse(node_id, depth, relation_filter)
 
 @app.get("/graph/{node_id}")
-def api_traverse(node_id: int, depth: int = 1, relation_filter: str = ""):
+def api_traverse(node_id: int, depth: int = 1, relation_filter: str = "",
+                 thread_aware: bool = False):
     """Explore the knowledge graph from a memory."""
     kwargs = {"node_id": node_id, "depth": min(depth, 5)}
     if relation_filter:
         kwargs["relation_filter"] = relation_filter
+    if thread_aware:
+        kwargs["thread_aware"] = True
     return _ok(traverse(**kwargs))
 
 
