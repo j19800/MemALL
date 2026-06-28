@@ -20,6 +20,10 @@
 
 - **classify.py L6 阈值**: 最小内容长度从 40 降到 25，配合 distinct pattern 计数防止误报，允许短真反思正确分类。 (`classify.py`)
 
+- **S3-02 LIMIT 防护**: link.py 新增 `_EDGES_SCAN_LIMIT=50000` / `_PRUNE_GROUP_LIMIT=10000` / `_MEMORY_BATCH_LIMIT=2000`；forget.py 新增 `_L5_SCAN_LIMIT=2000` + 可覆盖参数。 (`link.py`, `forget.py`)
+
+- **测试修复**: 同步 classify 重构后的 return dict（`category_updates` → `scanned`/`changed`/`layer_distribution`）到 5 个 test；修复 distill.py `sqlite3.Row.get()` bug 和 `[L9 蒸馏]` 前缀；修复 test_convergence.py `participants` 断言和 `convergence_rule` 参数；修复 test_adaptive.py `distill_history` 表未创建问题。 (`tests/test_classify.py`, `tests/test_distill.py`, `tests/test_convergence.py`, `src/memall/pipeline/adaptive.py`)
+
 ## [v0.1.16] - 2026-06-27
 
 ### Added

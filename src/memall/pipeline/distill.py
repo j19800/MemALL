@@ -51,7 +51,7 @@ def distill_step() -> dict:
 
             # Build merged content: common themes + key sentences
             content_lines = []
-            subjects = [r["subject"] for r in source_content if r.get("subject")]
+            subjects = [r["subject"] for r in source_content if r["subject"]]
             unique_subjects = list(dict.fromkeys(s for s in subjects if s.strip()))[:3]
             if unique_subjects:
                 content_lines.append("主题：" + " | ".join(unique_subjects))

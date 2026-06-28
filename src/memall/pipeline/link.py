@@ -4,6 +4,9 @@ from memall.core.nlp import tokenize
 
 JACCARD_THRESHOLD = 0.6
 MAX_EDGES_PER_MEMORY = 10
+_EDGES_SCAN_LIMIT = 50000
+_PRUNE_GROUP_LIMIT = 10000
+_MEMORY_BATCH_LIMIT = 2000
 
 
 def _jaccard(a: set, b: set) -> float:
@@ -63,8 +66,8 @@ def _prune_excess_edges(conn) -> int:
     deleted = 0
     for col in ("source_id", "target_id"):
         rows = conn.execute(
-            f"SELECT {col} as mem_id, COUNT(*) as cnt FROM edges GROUP BY {col} HAVING cnt > ?",
-            (MAX_EDGES_PER_MEMORY,),
+            f"SELECT {col} as mem_id, COUNT(*) as cnt FROM edges GROUP BY {col} HAVING cnt > ? LIMIT ?",
+            (MAX_EDGES_PER_MEMORY, _PRUNE_GROUP_LIMIT),
         ).fetchall()
         for r in rows:
             mid = r["mem_id"]
@@ -93,13 +96,15 @@ def link_step() -> int:
 
         done_pairs = set()
         existing = conn.execute(
-            "SELECT source_id, target_id, relation_type FROM edges"
+            "SELECT source_id, target_id, relation_type FROM edges LIMIT ?",
+            (_EDGES_SCAN_LIMIT,),
         ).fetchall()
         for e in existing:
             done_pairs.add((e["source_id"], e["target_id"], e["relation_type"]))
 
         rows = conn.execute(
-            "SELECT id, content, category FROM memories WHERE level != 'P0' ORDER BY id LIMIT 2000"
+            "SELECT id, content, category FROM memories WHERE level != 'P0' ORDER BY id LIMIT ?",
+            (_MEMORY_BATCH_LIMIT,),
         ).fetchall()
 
         tokens_map = {r["id"]: set(tokenize(r["content"])) for r in rows}

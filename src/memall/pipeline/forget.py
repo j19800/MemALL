@@ -307,7 +307,10 @@ def forget_review(days: int = 90, agent_name: Optional[str] = None) -> Dict[str,
 # L5 自动归档：status=done 超过 30 天 → archived
 # ══════════════════════════════════════════════════════════════════
 
-def forget_l5_archive(days: int = 30) -> Dict[str, Any]:
+_L5_SCAN_LIMIT = 2000
+
+
+def forget_l5_archive(days: int = 30, limit: int = None) -> Dict[str, Any]:
     """Archive L5 todos that have been ``status=done`` for longer than ``days``.
 
     These are not deleted — status moves from ``done`` to ``archived`` so
@@ -319,8 +322,10 @@ def forget_l5_archive(days: int = 30) -> Dict[str, Any]:
     conn = get_conn()
     try:
         cutoff = _ttl_cutoff(days)
+        l5_limit = limit if limit is not None else _L5_SCAN_LIMIT
         rows = conn.execute(
-            "SELECT id, metadata FROM memories WHERE level = 'L5' ORDER BY id DESC LIMIT 2000"
+            "SELECT id, metadata FROM memories WHERE level = 'L5' ORDER BY id DESC LIMIT ?",
+            (l5_limit,),
         ).fetchall()
         archived = 0
         for r in rows:

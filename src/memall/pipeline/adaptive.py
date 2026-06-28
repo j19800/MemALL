@@ -524,6 +524,12 @@ def adaptive_report() -> Dict[str, Any]:
             "SELECT COUNT(*) as c FROM idx_meta"
         ).fetchone()["c"]
 
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS distill_history ("
+            "id INTEGER PRIMARY KEY, agent_name TEXT, "
+            "memory_count_before INT, memory_count_after INT, "
+            "triggered_at TEXT, mode TEXT)"
+        )
         distill_rows = conn.execute(
             "SELECT * FROM distill_history ORDER BY triggered_at DESC LIMIT 5"
         ).fetchall()

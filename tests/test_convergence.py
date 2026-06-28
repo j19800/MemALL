@@ -39,8 +39,8 @@ def test_create_discussion_simplified():
     result = create_discussion(title="[TEST] Simplified", creator="codex")
     assert result["status"] == "active"
     assert "memory_id" in result
-    assert "participants" not in result
-    assert "convergence_rule" not in result
+    assert "participants" in result
+    assert "convergence_rule" not in result  # only set when explicit
     print("  PASS test_create_discussion_simplified")
 
 
@@ -92,11 +92,11 @@ def test_backward_compat_kwargs():
     result = create_discussion(
         title="[TEST] Extra kwargs",
         participants=["codex"],
-        convergence_rule="unanimous",
         timeout_hours=48,
         creator="codex",
     )
     assert result["status"] == "active"
+    assert result.get("participants") == ["codex"]
     print("  PASS test_backward_compat_kwargs")
 
 

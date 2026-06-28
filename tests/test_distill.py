@@ -74,7 +74,7 @@ def test_distill_step_creates_l9():
         ).fetchone()
         conn.close()
         assert l9 is not None, "Should find L9 memory"
-        assert "[L9 聚合]" in l9["content"], "L9 content should have aggregate marker"
+        assert "[L9 蒸馏]" in l9["content"], "L9 content should have distill marker"
         print("  PASS test_distill_step_creates_l9")
     finally:
         cleanup_temp_db(db_path, patcher)

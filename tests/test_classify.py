@@ -39,15 +39,20 @@ def test_classify_step_general_unchanged():
         conn.close()
 
         result = classify_step()
-        # Falls back to L2 (no keywords matched) -> 1 category_update
-        assert result.get("category_updates") == 1, f"Expected 1 category_updates, got {result}"
+        # Neutral text matches no rule → stays at P2
+        assert result.get("changed") == 0, f"Expected 0 changed, got {result}"
         print("  PASS test_classify_step_general_unchanged")
     finally:
         cleanup_temp_db(db_path, patcher)
 
 
+def _assert_category(conn, expected_cat: str):
+    row = conn.execute("SELECT category FROM memories").fetchone()
+    assert row["category"] == expected_cat, f"expected {expected_cat} got {row['category']}"
+
+
 def test_classify_step_decision():
-    """Test: classify_step detects decision category."""
+    """Test: classify_step detects decision category + L4 layer."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
     from memall.pipeline.classify import classify_step
     from memall.core.db import get_conn
@@ -55,15 +60,14 @@ def test_classify_step_decision():
     db_path, patcher = init_temp_db()
     try:
         conn = get_conn()
-        insert_memory(conn, "团队决定采用 React 作为前端框架，替代旧的方案", category="general")
+        insert_memory(conn, "本次会话决定采用 React 作为前端框架，替代旧的方案", category="general")
         conn.close()
 
         result = classify_step()
-        assert result.get("category_updates") == 1, f"Expected 1 category_updates, got {result}"
+        assert result.get("scanned") == 1
 
         conn = get_conn()
-        row = conn.execute("SELECT category FROM memories").fetchone()
-        assert row["category"] == "decision", f"Expected 'decision', got '{row['category']}'"
+        _assert_category(conn, "decision")
         conn.close()
         print("  PASS test_classify_step_decision")
     finally:
@@ -83,11 +87,10 @@ def test_classify_step_problem():
         conn.close()
 
         result = classify_step()
-        assert result.get("category_updates") == 1, f"Expected 1 category_updates, got {result}"
+        assert result.get("scanned") == 1
 
         conn = get_conn()
-        row = conn.execute("SELECT category FROM memories").fetchone()
-        assert row["category"] == "problem", f"Expected 'problem', got '{row['category']}'"
+        _assert_category(conn, "problem")
         conn.close()
         print("  PASS test_classify_step_problem")
     finally:
@@ -107,11 +110,10 @@ def test_classify_step_architecture():
         conn.close()
 
         result = classify_step()
-        assert result.get("category_updates") == 1, f"Expected 1 category_updates, got {result}"
+        assert result.get("scanned") == 1
 
         conn = get_conn()
-        row = conn.execute("SELECT category FROM memories").fetchone()
-        assert row["category"] == "architecture", f"Expected 'architecture', got '{row['category']}'"
+        _assert_category(conn, "architecture")
         conn.close()
         print("  PASS test_classify_step_architecture")
     finally:
