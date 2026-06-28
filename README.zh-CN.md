@@ -9,7 +9,7 @@
 <p align="center"><strong>Multi-agent Memory OS</strong> — 本地优先的 AI Agent 持久化记忆系统</p>
 
 <p align="center">
-  <i>38 个 MCP 工具 · 10 层记忆生命周期 · 自进化管线 · 知识图谱 · 多 Agent 共享记忆</i>
+  <i>42 个 MCP 工具 · 11 层记忆生命周期 · 24 步自进化管线 · 知识图谱 · 多 Agent 共享记忆</i>
 </p>
 
 <p align="center">
@@ -55,26 +55,30 @@ memall start                   # 启动服务
 
 ## 🔥 为什么用 MemALL？
 
-### 🧠 10 层记忆生命周期
+### 🧠 11 层记忆生命周期
 
-不只是"存和取"。每条记忆都有语义层级：
+不只是"存和取"。每条记忆都有语义层级，基于 exclusion chain 的优先级分类、epoch 检测和 echo 评分：
 
 | 层级 | 含义 | 示例 |
 |------|------|------|
 | P0/P1/P2 | 规划 | "6月23日前发布 v0.1.0" |
 | L1 | 原始事实 | "用户报告了登录 bug" |
+| L2 | 约定 | "分类器使用 exclusion chain" |
 | L3 | 商业想法 | "MemPort — 跨平台记忆迁移" |
 | L4 | 决策 | "用 FastAPI，不用 Flask" |
 | L5 | 讨论 | 多 Agent 辩论并收敛 |
 | **L6** | **自我反思** | "这次会话做对了什么/做错了什么" |
+| **L7** | **偏好** | "偏好精简回复、英语" |
+| **L8** | **边提升** | 通过知识图谱连通性自动提升 |
 | **L9** | **蒸馏** | "1万条对话 → 200 个知识节点" |
 | **L10** | **系统洞察** | 跨领域模式检测 |
+| **L11** | **领域智能** | 跨项目领域模式 |
 
-**22 步自动管线** 自动完成：丰富 → 分类 → 时间切片 → 反思 → 蒸馏 → 整合。无需手动 CRUD。
+**24 核心步 + 5 可选步** 自动管线：丰富 → 分类 → epoch 检测 → 反思 → 蒸馏 → 整合 → 观察。无需手动 CRUD。
 
 ### 🔗 知识图谱
 
-记忆通过带类型的边（`refines`、`cites`、`contradicts`、`supersedes`）连接。从 "bug #123" 到 "修复 PR #456" 再到 "回顾性 L6 反思" 一步可达。
+记忆通过带类型的边（`refines`、`cites`、`contradicts`、`supersedes`、`extends`）连接。从 "bug #123" 到 "修复 PR #456" 再到 "回顾性 L6 反思" 一步可达。
 
 ```
 /capture "Bug #123：大数据集 OOM"
@@ -85,7 +89,7 @@ memall start                   # 启动服务
 
 ### 🤝 多 Agent 共享记忆
 
-Claude、opencode、Codex、WorkBuddy — 都读写同一个记忆库。跨 Agent 查询只需一次 MCP 调用。
+Claude、opencode、Codex、WorkBuddy — 都读写同一个记忆库。跨 Agent 查询、事实提取和主动推送传递只需一次 MCP 调用。
 
 ```
 /fed_query "上周的架构决策" agent_name="claude"
@@ -97,9 +101,11 @@ Claude、opencode、Codex、WorkBuddy — 都读写同一个记忆库。跨 Agen
 MemALL 不只是存储 — 它**自我改进**：
 
 1. **L6 反思** — 自动审查工作质量，识别模式，纠正错误
-2. **L9 蒸馏** — 将原始对话压缩为结构化知识
-3. **遗忘与自适应** — 基于 TTL 的衰减、低价值清理、自动重索引
-4. **OODA 循环** — 观察 → 定向 → 决策 → 行动，无需人工干预
+2. **L7 偏好提取** — 从交互模式学习用户偏好
+3. **L9 蒸馏** — 将原始对话压缩为结构化知识
+4. **L11 领域智能** — 跨项目模式检测
+5. **遗忘与自适应** — 基于 TTL 的衰减、低价值清理、自动重索引
+6. **OODA 循环** — 观察 → 定向 → 决策 → 行动，无需人工干预
 
 ### 🏠 100% 本地运行
 
@@ -107,20 +113,21 @@ SQLite + FTS5 + 向量搜索。零云端依赖。数据留在你的机器上。
 
 ---
 
-## 🛠️ 38 个 MCP 工具
+## 🛠️ 42 个 MCP 工具
 
 | 分类 | 工具 |
 |------|------|
 | **记忆 CRUD** | `capture`, `retrieve`, `update`, `smart_store`, `store_batch` |
 | **知识图谱** | `connect`, `traverse`, `timeline` |
-| **搜索** | `vector_search`, FTS5 全文搜索, `hybrid_search` (FTS5+vec0 RRF，可选交叉编码器重排[¹]) |
+| **搜索** | `vector_search`, FTS5 全文搜索, `hybrid_search` (FTS5+vec0 RRF，可选交叉编码器重排[¹]), `memall_search` |
 | **会话** | `session_start`, `session_end`, `session_summary` |
-| **身份与人格** | `persona`, `persona_profile`, `identity`, `ask` |
+| **身份与人格** | `persona`, `persona_profile`, `identity`, `ask`, `memall_identity` |
 | **讨论与决策** | `discussion_create`, `discussion_respond`, `discussion_status`, `trace` |
-| **联邦** | `fed_query`, `fed_publish`, `fed_conflicts`, `fed_inject`, `fed_extract` |
+| **蒸馏** | `memall_distill_pending` |
+| **联邦** | `fed_query`, `fed_publish`, `fed_deliver`, `fed_conflicts`, `fed_inject`, `fed_extract` |
 | **Hub 同步** | `hub_connect`, `hub_sync` |
-| **管线与进化** | `run_pipeline`, `reflect_interact`, `forget`, `adaptive`, `index_rebuild` |
-| **安全与运维** | `security`, `ops`, `gateway`, `db` |
+| **管线与进化** | `run_pipeline`, `reflect_interact`, `forget`, `adaptive`, `index_rebuild`, `memall_forget`, `memall_adaptive` |
+| **安全与运维** | `security`, `ops`, `gateway`, `db`, `memall_db` |
 | **引导** | `onboarding` |
 | **导出/导入** | `export`, `import`, `sync` |
 
@@ -163,10 +170,10 @@ pip install -e .
 
 | 特性 | MemALL | Mem0 | Letta | Zep |
 |------|--------|------|-------|-----|
-| **记忆模型** | 10 层 (P0-L10) | 用户/会话 | Agent/记忆块 | 会话/摘要 |
+| **记忆模型** | 11 层 (P0-L11) | 用户/会话 | Agent/记忆块 | 会话/摘要 |
 | **知识图谱** | ✅ 原生 + 遍历 | ❌ | ❌ | ❌ |
-| **自进化管线** | ✅ 22 步自动 | ❌ | ❌ | ❌ |
-| **多 Agent 共享** | ✅ 联邦机制 | ❌ | 仅同 Agent | ❌ |
+| **自进化管线** | ✅ 24 步自动 + 5 可选 | ❌ | ❌ | ❌ |
+| **多 Agent 共享** | ✅ 联邦 + 主动推送 | ❌ | 仅同 Agent | ❌ |
 | **决策追踪** | ✅ Arc 生命周期 | ❌ | ❌ | ❌ |
 | **讨论收敛** | ✅ 多 Agent 自动 | ❌ | ❌ | ❌ |
 | **协议** | **MCP（原生）** | REST API | REST + gRPC | REST API |
@@ -180,13 +187,17 @@ pip install -e .
 ```
 src/memall/
 ├── cli/          # CLI（40+ 命令）
-├── core/         # SQLite / NLP / 向量搜索
+├── core/         # SQLite / NLP / 向量搜索 / 事件处理器 / echo 评分
 ├── api/          # FastAPI REST（35 路由）
-├── mcp/          # MCP 适配器（38 工具）
-├── pipeline/     # 22 步自动管线
-├── graph/        # 知识图谱
-├── federation/   # 跨设备记忆同步
-├── plugins/      # 仪表盘 / 导出 / 调度器
+├── mcp/          # MCP 适配器（42 工具）
+├── pipeline/     # 24 步自动管线 + 5 可选步
+│   ├── observe/  # OODA 观察步
+│   ├── distill/  # L9/L10/L11 蒸馏、L7 偏好、epoch 检测
+│   ├── classify/ # Exclusion 优先级分类
+│   └── forget/   # TTL 衰减、L5 归档、低值衰减
+├── graph/        # 知识图谱 + arc 生命周期管理
+├── federation/   # 跨设备记忆同步 + 主动推送传递
+├── plugins/      # 仪表盘 / guardrails / 限流 / 监控
 └── migrations/   # 数据库迁移
 ```
 
@@ -194,7 +205,7 @@ src/memall/
 
 ## 📝 路线图
 
-- [x] **v0.1.0** — 核心 MCP 服务器、38 工具、CLI、PyPI 包
+- [x] **v0.1.0** — 核心 MCP 服务器、42 工具、CLI、PyPI 包
 - [ ] **v0.2.0** — Web 仪表盘、用户系统、Pro 版
 - [ ] **v0.3.0** — 云同步、团队协作、API 网关
 
