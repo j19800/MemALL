@@ -52,17 +52,18 @@ def _extract_procedure(text: str) -> dict:
     return procedure
 
 
-def procedure_step() -> int:
+def procedure_step() -> dict:
     conn = get_conn()
     try:
         rows = conn.execute("""
             SELECT id, content, level, metadata
             FROM memories
-            WHERE level IN ('L1', 'L2', 'L3', 'L4')
+            WHERE level IN ('L1', 'L2', 'L3', 'L4', 'P1', 'P2')
               AND LENGTH(TRIM(content)) > 20
         """).fetchall()
 
-        count = 0
+        upgraded = 0
+        annotated = 0
         for row in rows:
             existing = json.loads(row["metadata"] or "{}")
             if existing.get("procedure"):
@@ -72,6 +73,7 @@ def procedure_step() -> int:
             if not proc["steps"] and not proc["precondition"] and not proc["outcome"]:
                 continue
 
+            # Annotate metadata with extracted procedure
             existing["procedure"] = {
                 "value": proc,
                 "_meta": {"version": 1, "written_at": datetime.now(timezone.utc).isoformat()},
@@ -80,9 +82,20 @@ def procedure_step() -> int:
                 "UPDATE memories SET metadata = ? WHERE id = ?",
                 (json.dumps(existing, ensure_ascii=False), row["id"]),
             )
-            count += 1
+            annotated += 1
+
+            # Upgrade to L3 if not already at a higher/pipeline level
+            if row["level"] in ("L1", "L2", "P2") and proc.get("step_count", 0) >= 3:
+                conn.execute(
+                    "UPDATE memories SET level = 'L3' WHERE id = ?",
+                    (row["id"],),
+                )
+                upgraded += 1
 
         conn.commit()
-        return count
+        return {
+            "annotated": annotated,
+            "upgraded_to_l3": upgraded,
+        }
     finally:
         conn.close()

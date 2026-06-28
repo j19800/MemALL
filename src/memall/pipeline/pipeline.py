@@ -277,6 +277,7 @@ _PIPELINE_STEPS = [
     ("enrich",          "memall.pipeline.enrich",          "enrich_step",                  QUALITY_GATES.get("enrich")),
     ("cleanup",         "memall.pipeline.cleanup",         "cleanup_step",                    None),
     ("classify",        "memall.pipeline.classify",        "classify_step",                   QUALITY_GATES.get("classify")),
+    ("procedure",       "memall.pipeline.procedure",       "procedure_step",                  None),
     ("time_slice",      "memall.pipeline.time_slice",      "time_slice_step",                 None),
     ("arc_status",      "memall.pipeline.arc_status",      "arc_status_step",                 None),
     ("echo",            "memall.pipeline.echo",            "echo_step",                       None),
@@ -400,7 +401,6 @@ def run_pipeline(
 
         # ── Trace retention (keep spans ≤ 7 days) ──
         try:
-            from memall.core.db import get_conn
             _tc = get_conn()
             _tc.execute("DELETE FROM tracing_spans WHERE created_at < datetime('now', '-7 days')")
             _tc.commit()

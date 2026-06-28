@@ -1,5 +1,13 @@
 ## [v0.1.17] - 2026-06-28
 
+### Added
+
+- **11 层记忆架构重构**: 废除权重竞争，改用互斥优先级链（L6→L11→L7→L3→L5→L1→L4→L2→P2），每层独立准入条件（min_matches 要求不同模式组命中，min_content_len 最小内容长度）。支持降级重分类。 (`classify.py`)
+
+- **L8 边晋升覆盖**: ≥3 条不同关系的边或 module_refs → L8。 (`classify.py`)
+
+- **数据清理脚本**: 模板 L6 摘要降级 L4、薄 L9 删除、L10 近重复合并。 (`cleanup_levels.py`)
+
 ### Fixed
 
 - **FTS5 CJK 召回率修复**: `_row_to_memory()` 中 `row.get("thread_id")` → `row["thread_id"]`（`sqlite3.Row` 无 `.get()` 方法），修复全部 FTS5 `retrieve()` 调用触发 AttributeError 导致 0 结果的 bug。 (`thin_waist.py`)
@@ -7,6 +15,10 @@
 - **FTS5 CJK 分词策略重写**: `fts_query()` 从 jieba AND 模式改为 OR 扩展模式（原始 CJK 短语 + jieba 子词 + 2-char 二元回退），解决 jieba 不拆分的长 CJK 词（如"数据处理"）在 FTS5 unicode61 下 0 匹配的问题。经测试所有 9 类中英文查询均返回 ≥1 结果，FTS5 零结果查询从 2/10 降为 0/10。 (`thin_waist.py`)
 
 - **死代码清理**: 移除 `fts_query()` 中对 `_split_cjk()` 的引用，该函数已不被 CJK 分支使用。 (`thin_waist.py`)
+
+- **pipeline.py 作用域 bug**: `run_pipeline()` 中重复的 `from memall.core.db import get_conn` 导致 `UnboundLocalError`，移除内部 import 修复。 (`pipeline.py`)
+
+- **classify.py L6 阈值**: 最小内容长度从 40 降到 25，配合 distinct pattern 计数防止误报，允许短真反思正确分类。 (`classify.py`)
 
 ## [v0.1.16] - 2026-06-27
 

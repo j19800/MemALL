@@ -35,9 +35,9 @@ def distill_step() -> dict:
             source_ids = mem_ids[:10]
             ph = ",".join("?" * len(source_ids))
 
-            # Extract distinctive keywords from source memories
+            # Extract common topics and merge related sentences
             source_content = conn.execute(
-                f"SELECT content FROM memories WHERE id IN ({ph})", source_ids
+                f"SELECT content, subject FROM memories WHERE id IN ({ph})", source_ids
             ).fetchall()
             all_text = " ".join(r["content"] for r in source_content if r["content"])
             distinctive_topics = ""
@@ -49,22 +49,46 @@ def distill_step() -> dict:
                     if top_words:
                         distinctive_topics = "、".join(top_words)
 
-            # Get latest 2 source memories as samples
-            samples = conn.execute(
-                f"SELECT content FROM memories WHERE id IN ({ph}) ORDER BY id DESC LIMIT 2",
-                source_ids
-            ).fetchall()
-            sample_texts = []
-            for s in samples:
-                line = (s["content"] or "").strip()[:200]
-                if line:
-                    sample_texts.append(line)
+            # Build merged content: common themes + key sentences
+            content_lines = []
+            subjects = [r["subject"] for r in source_content if r.get("subject")]
+            unique_subjects = list(dict.fromkeys(s for s in subjects if s.strip()))[:3]
+            if unique_subjects:
+                content_lines.append("主题：" + " | ".join(unique_subjects))
 
-            header = f"[L9 聚合] {key[0]} 在 {key[1]} 领域共 {len(mems)} 条"
+            # Extract key sentences (first meaningful sentence from each source)
+            key_sentences = []
+            for r in source_content:
+                text = (r["content"] or "").strip()
+                # Take first sentence that's not just a template header
+                first_sentence = text.split("。")[0].split("\n")[0][:150]
+                if first_sentence and len(first_sentence) > 15:
+                    key_sentences.append(first_sentence)
+            # Dedup by first 40 chars
+            seen = set()
+            unique_sentences = []
+            for s in key_sentences:
+                key = s[:40]
+                if key not in seen:
+                    seen.add(key)
+                    unique_sentences.append(s)
+            if unique_sentences:
+                content_lines.append("要点：" + " | ".join(unique_sentences[:3]))
+            else:
+                # Fallback: sample texts from latest sources
+                samples = conn.execute(
+                    f"SELECT content FROM memories WHERE id IN ({ph}) ORDER BY id DESC LIMIT 2",
+                    source_ids
+                ).fetchall()
+                for s in samples:
+                    line = (s["content"] or "").strip()[:200]
+                    if line:
+                        content_lines.append(f"• {line}")
+
+            header = f"[L9 蒸馏] {key[0]} 在 {key[1]} 领域共 {len(mems)} 条"
             if distinctive_topics:
                 header += f"\n关键词：{distinctive_topics}"
-            if sample_texts:
-                header += "\n" + "\n".join(f"• {t}" for t in sample_texts[:2])
+            merged_content = header + "\n" + "\n".join(content_lines)
 
             merged_content = header
             l9_subject = _smart_subject(merged_content)

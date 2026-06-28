@@ -12,31 +12,14 @@ from datetime import datetime, timezone
 
 from memall.core.db import get_conn
 from memall.core.nlp import tokenize
+from memall.pipeline.classify import _detect_layers, CATEGORY_RULES
 
 logger = logging.getLogger(__name__)
 
 _BATCH_SIZE = 500
 
-# Module-level constants for inline classify (avoids re-computing on every call)
-_LAYER_RANK = {
-    "P0": 70, "P1": 60, "P2": 20, "P3": 10, "P4": 5,
-    "L1": 30, "L2": 35, "L3": 40, "L4": 45, "L5": 48,
-    "L6": 80, "L7": 55, "L8": 50, "L9": 90, "L10": 100, "L11": 95,
-}
-_TERMINAL_LAYERS = frozenset({"L6", "L8", "L9", "L10", "L11"})
-_RANK_TO_LEVEL = {v: k for k, v in _LAYER_RANK.items()}
-
-_KEYWORD_RULES = [
-    (70, [r'\b(bug|crash|hotfix|security|vulnerability|数据丢失|安全漏洞|崩溃)\b']),
-    (60, [r'\b(fix|error|fail|issue|缺陷|故障|报错)\b']),
-    (55, [r'\blesson|教训|经验|做错了|不对|修正|更正|纠正\b']),
-    (50, [r'\b(module_ref|edge|graph|图谱|关系|关联)\b']),
-    (48, [r'\b(discussion|讨论|decision|决定|方案选型)\b']),
-    (45, [r'\b(decide|选择|采用|改用|替换|会议|结论)\b']),
-    (40, [r'\b(workflow|流程|step|步骤|阶段)\b']),
-    (35, [r'\b(pipeline|enrich|classify|distill)\b']),
-    (30, [r'\b(identity|profile|persona|agent|角色)\b']),
-]
+# Pipeline-generated layers — never assigned by inline classify
+_PIPELINE_LAYERS = frozenset({"L9", "L10"})
 
 
 def process_events() -> dict:
@@ -150,33 +133,35 @@ def _dispatch_new_memory(conn, memory_id: int) -> None:
 
 
 def _inline_classify(conn, row: dict, meta: dict) -> None:
-    """Detect memory level from content for a single memory.
+    """Detect memory level from content using the unified priority chain.
 
-    Uses module-level _LAYER_RANK and _KEYWORD_RULES.
-    Only upgrades: if the detected level rank is higher than current, update.
+    Uses ``_detect_layers()`` from classify.py for consistency with the
+    batch classifier. Only sets initial level — never overrides pipeline
+    layers (L9, L10).
     """
-    text = row["content"].lower()
+    content = row["content"] or ""
     current_level = row["level"]
 
-    if current_level in _TERMINAL_LAYERS:
+    # Skip pipeline-generated layers
+    if current_level in _PIPELINE_LAYERS:
         return
 
-    detected_level = current_level
-    detected_rank = _LAYER_RANK.get(current_level, 0)
+    summary = row.get("summary") or ""
+    result = _detect_layers(content, summary, current_level=current_level)
+    detected = result["primary"]
 
-    for rank, patterns in _KEYWORD_RULES:
-        if rank <= detected_rank:
-            continue
-        for pat in patterns:
-            if re.search(pat, text, re.IGNORECASE):
-                candidate = _RANK_TO_LEVEL.get(rank)
-                if candidate and rank > detected_rank and candidate not in _TERMINAL_LAYERS:
-                    detected_level = candidate
-                    detected_rank = rank
-                break
+    # Category detection (simple rule-based)
+    best_cat = "general"
+    best_score = 0
+    for pattern, cat in CATEGORY_RULES:
+        matches = re.findall(pattern, content)
+        score = len(matches)
+        if score > best_score:
+            best_score = score
+            best_cat = cat
 
-    if detected_level != current_level:
+    if detected != current_level or best_cat != row.get("category"):
         conn.execute(
-            "UPDATE memories SET level = ? WHERE id = ?",
-            (detected_level, row["id"]),
+            "UPDATE memories SET level = ?, category = ? WHERE id = ?",
+            (detected, best_cat, row["id"]),
         )
