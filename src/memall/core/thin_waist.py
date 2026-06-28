@@ -161,7 +161,7 @@ def _row_to_memory(row) -> Memory:
         supersedes=row["supersedes"], confidence=row["confidence"],
         visibility=row["visibility"],
         access_count=row["access_count"], metadata=row["metadata"],
-        thread_id=row.get("thread_id"), agent_name_locked=bool(row.get("agent_name_locked", 0)),
+        thread_id=row["thread_id"], agent_name_locked=bool(row["agent_name_locked"]),
     )
 
 
@@ -743,27 +743,39 @@ def _split_cjk(text: str) -> str:
 def fts_query(raw: str) -> str:
     """Build an FTS5 MATCH query string from a raw user query.
 
-    Uses jieba for CJK tokenization when available (much better recall than
-    character-level splitting), falling back to char-level _split_cjk.
+    FTS5 unicode61 tokenizer treats 2+ consecutive CJK characters as tokens.
+    Single CJK characters are dropped. jieba sub-tokens are added as OR
+    alternatives for broader recall. Non-CJK words use exact match.
     """
     terms = raw.strip().split()
     if not terms:
         return ""
     tokenized: list[str] = []
     for t in terms:
-        if _HAS_JIEBA and _CJK_RE.search(t):
-            words = [w for w in jieba.cut(t, cut_all=False) if len(w.strip()) > 0 and w not in _CJK_STOP]
-            if len(words) >= 2:
-                tokenized.append(f'({" ".join(words)})')
-            elif words:
-                tokenized.append(f'"{words[0]}"')
+        if _CJK_RE.search(t):
+            # Base: the raw CJK run (a valid unicode61 token)
+            cjk_options = [f'"{t}"']
+            if _HAS_JIEBA:
+                words = [w for w in jieba.cut(t, cut_all=False)
+                         if len(w.strip()) >= 2 and w not in _CJK_STOP]
+                for w in words:
+                    if len(w) >= 2 and w != t:
+                        cjk_options.append(f'"{w}"')
+            # Fallback: for 4+ char CJK not split by jieba, try 2-char sub-tokens
+            if len(cjk_options) == 1 and len(t) >= 4:
+                for i in range(0, len(t) - 1, 2):
+                    sub = t[i:i+2]
+                    if len(sub) >= 2 and sub != t:
+                        cjk_options.append(f'"{sub}"')
+            if len(cjk_options) > 1:
+                tokenized.append(f'({" OR ".join(cjk_options)})')
             else:
-                tokenized.append(f'"{_split_cjk(t)}"')
-        elif _CJK_RE.search(t):
-            tokenized.append(f'"{_split_cjk(t)}"')
+                tokenized.append(cjk_options[0])
         else:
             tokenized.append(f'"{t}"')
-    return " AND ".join(tokenized)
+    if len(tokenized) > 1:
+        return " AND ".join(tokenized)
+    return tokenized[0] if tokenized else ""
 
 
 VALID_RELATIONS = [

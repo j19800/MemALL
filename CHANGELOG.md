@@ -1,3 +1,13 @@
+## [v0.1.17] - 2026-06-28
+
+### Fixed
+
+- **FTS5 CJK 召回率修复**: `_row_to_memory()` 中 `row.get("thread_id")` → `row["thread_id"]`（`sqlite3.Row` 无 `.get()` 方法），修复全部 FTS5 `retrieve()` 调用触发 AttributeError 导致 0 结果的 bug。 (`thin_waist.py`)
+
+- **FTS5 CJK 分词策略重写**: `fts_query()` 从 jieba AND 模式改为 OR 扩展模式（原始 CJK 短语 + jieba 子词 + 2-char 二元回退），解决 jieba 不拆分的长 CJK 词（如"数据处理"）在 FTS5 unicode61 下 0 匹配的问题。经测试所有 9 类中英文查询均返回 ≥1 结果，FTS5 零结果查询从 2/10 降为 0/10。 (`thin_waist.py`)
+
+- **死代码清理**: 移除 `fts_query()` 中对 `_split_cjk()` 的引用，该函数已不被 CJK 分支使用。 (`thin_waist.py`)
+
 ## [v0.1.16] - 2026-06-27
 
 ### Added
