@@ -82,7 +82,7 @@ def _dispatch_new_memory(conn, memory_id: int) -> None:
     waiting for a full pipeline scan.
     """
     row = conn.execute(
-        "SELECT id, content, level, category, metadata FROM memories WHERE id = ?",
+        "SELECT id, content, level, category, metadata, summary FROM memories WHERE id = ?",
         (memory_id,),
     ).fetchone()
     if not row:
@@ -91,7 +91,6 @@ def _dispatch_new_memory(conn, memory_id: int) -> None:
     text = row["content"]
     meta = {}
     try:
-        import json
         meta = json.loads(row["metadata"]) if row["metadata"] else {}
     except (json.JSONDecodeError, TypeError):
         meta = {}
@@ -146,7 +145,7 @@ def _inline_classify(conn, row: dict, meta: dict) -> None:
     if current_level in _PIPELINE_LAYERS:
         return
 
-    summary = row.get("summary") or ""
+    summary = row["summary"] or ""
     result = _detect_layers(content, summary, current_level=current_level)
     detected = result["primary"]
 
@@ -160,7 +159,7 @@ def _inline_classify(conn, row: dict, meta: dict) -> None:
             best_score = score
             best_cat = cat
 
-    if detected != current_level or best_cat != row.get("category"):
+    if detected != current_level or best_cat != row["category"]:
         conn.execute(
             "UPDATE memories SET level = ?, category = ? WHERE id = ?",
             (detected, best_cat, row["id"]),

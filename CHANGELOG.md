@@ -1,3 +1,17 @@
+## [v0.1.19] - 2026-06-28
+
+### Added
+
+- **全方位冒烟测试 (`tests/smoke_test.py`)**: 覆盖 39 模块 import、DB init、capture/search/retrieve、28 个 pipeline step、config、MCP hooks、gateway、onboarding、federation、DB maintenance、tracer。92 项全部通过。(`tests/smoke_test.py`)
+
+### Fixed
+
+- **event_processor.py `sqlite3.Row.get()` bug**: `_dispatch_new_memory()` 和 `_inline_classify()` 中 `row.get("summary")` 和 `row.get("category")` 在 `sqlite3.Row` 对象上调用 `.get()` 失败 — 改用 `row["key"]` 直接索引；SELECT 补上 `summary` 列。 (`pipeline/event_processor.py`)
+
+- **embed_index.py 无 sentence-transformers 崩溃**: 模块级 `from memall.graph.embeddings import build_index` 在缺少 sentence-transformers 时引发 ImportError — 改为函数内部 lazy import，捕获 ImportError 返回 skip 结果。 (`pipeline/embed_index.py`)
+
+- **冒烟测试 6 处适配修复**: `capture()` 签名修正（content→第一个参数）、`observation` 模块已删除、`get_onboarding_status`→`status`、`list_conflicts`→`family`、`get_trace`→`ensure_trace`、`set_config` 移除。 (`tests/smoke_test.py`)
+
 ## [v0.1.18] - 2026-06-28
 
 ### Added

@@ -6,8 +6,6 @@ keep the vector index in sync.  The step is incremental — only
 previously-unembedded memories are processed.
 """
 
-from memall.graph.embeddings import build_index
-
 
 def embed_index_step() -> dict:
     """Run incremental embedding index build.
@@ -16,4 +14,8 @@ def embed_index_step() -> dict:
         ``build_index()`` result dict with keys:
         ``total``, ``embedded``, ``new``, ``status``, ``model``.
     """
-    return build_index()
+    try:
+        from memall.graph.embeddings import build_index
+        return build_index()
+    except ImportError as e:
+        return {"total": 0, "embedded": 0, "new": 0, "status": "skipped", "reason": str(e)}
