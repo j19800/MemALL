@@ -1,3 +1,17 @@
+## [v0.1.18] - 2026-06-28
+
+### Added
+
+- **会话知识提取步 (extract_step)**: 新增 `extract.py` pipeline 步骤，扫描已结束 session 的记忆，按 category（decision/architecture/problem/fix/rule）分类；每组 ≥2 条时创建结构化 L6 条目（含关键句子提取 + `derived_from` 边 + `thread_id` 关联 L4）。首轮运行创建 6 条 L6 提取、29 条边。 (`pipeline/extract.py`)
+
+- **注册到 pipeline**: 在 session 步骤之后、embed_index 之前注册 extract step，确保 harvest 后立即提取。 (`pipeline/pipeline.py`)
+
+### Fixed
+
+- **session.py l6_ch 未定义崩溃**: `_harvest_session()` 创建 L6 时引用了未定义的 `l6_ch` 变量 → 改用 `hashlib.sha256(l6_content.encode()).hexdigest()`。 (`pipeline/session.py`)
+
+- **session.py l4_id 作用域泄露**: `l4_id` 仅在 `if not existing_l4:` 内定义，但被外部 L6 代码使用 → 添加 `else: l4_id = existing_l4["id"]`。 (`pipeline/session.py`)
+
 ## [v0.1.17] - 2026-06-28
 
 ### Added

@@ -287,6 +287,7 @@ _PIPELINE_STEPS = [
     ("decay",           "memall.pipeline.decay",           "decay_step",                      None),
     ("backup",          "memall.pipeline.backup",          "backup_step",                     None),
     ("session",         "memall.pipeline.session",         "harvest_step",                    None),
+    ("extract",         "memall.pipeline.extract",          "extract_step",                    None),
     ("embed_index",     "memall.pipeline.embed_index",     "embed_index_step",                None),
     ("reflect",         "memall.pipeline.reflect",         "reflect_step",                    QUALITY_GATES.get("reflect")),
     ("distill_l7",      "memall.pipeline.distill_l7",      "distill_l7_step",                 None),

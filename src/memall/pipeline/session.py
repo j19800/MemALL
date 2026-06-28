@@ -166,6 +166,8 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
             ).fetchone()
             l4_id = l4_row["id"] if l4_row else None
             result["l4_created"] = True
+        else:
+            l4_id = existing_l4["id"]
 
         # L6 auto-reflection with distinctive content
         distinctive_words = []
@@ -207,7 +209,7 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
                 "(content, content_hash, level, owner, agent_name, category, project, subject, summary, "
                 "occurred_at, created_at, updated_at, confidence, visibility, metadata, thread_id) "
                 "VALUES (?, ?, 'L6', 'system', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (l6_content[:2000], l6_ch, agent_name, session_project,
+                (l6_content[:2000], hashlib.sha256(l6_content.encode()).hexdigest(), agent_name, session_project,
                  l6_subject, "", now, now, now, 0.6, "private",
                  json.dumps({"session_id": session_id, "source": "pipeline_harvest"}),
                  l4_id),
