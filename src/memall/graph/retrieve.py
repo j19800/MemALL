@@ -56,17 +56,12 @@ _EMBED_MODEL = None
 
 
 def _get_embed_model():
-    """Lazy-load the embedding model (cached after first call)."""
-    global _EMBED_MODEL
-    if _EMBED_MODEL is None:
-        try:
-            from sentence_transformers import SentenceTransformer
-            _EMBED_MODEL = SentenceTransformer("BAAI/bge-small-zh-v1.5", device="cpu")
-            logger.info("Embedding model loaded for search")
-        except Exception as e:
-            logger.warning("Embedding model unavailable: %s", e)
-            return None
-    return _EMBED_MODEL
+    """Lazy-load the embedding model — delegates to embeddings module singleton."""
+    from memall.graph.embeddings import _get_model as _emb_get_model
+    try:
+        return _emb_get_model()
+    except ImportError:
+        return None
 
 
 def _query_embed(query: str) -> np.ndarray | None:

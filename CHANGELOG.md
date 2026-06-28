@@ -1,3 +1,14 @@
+## [v0.1.21] - 2026-06-29
+
+### Fixed
+
+- **双 SentenceTransformer 模型实例浪费 21s + 33MB**: `memall.graph.embeddings._MODEL` 和 `memall.graph.retrieve._EMBED_MODEL` 各自独立加载 `BAAI/bge-small-zh-v1.5`。`retrieve._get_embed_model()` 改为委托 `embeddings._get_model()`，共享同一实例，冷启动减少 21s。 (`graph/retrieve.py`)
+
+### Added
+
+- **性能基准测试 (`perf_benchmark.py`)**: 8 维度覆盖 DB 读写延迟、capture/搜索/图操作吞吐、Pipeline 步骤、并发搜索、数据库体积。评分 95/100 S 级。 (`perf_benchmark.py`)
+- **冒烟测试 (`smoke_test.py`)**: 40 项测试覆盖 DB 状态、FTS5、timeline、traverse、图谱、extract/harvest/classify/archive 管线步骤、混合搜索、CJK 多关键词召回、archive.db、session、核心模块 import。40/40 通过。 (`smoke_test.py`)
+
 ## [v0.1.20] - 2026-06-28
 
 ### Docs
