@@ -129,12 +129,56 @@ if __name__ == "__main__":
     passed = 0
     failed = 0
 
+
+def test_detect_layers_module_noise():
+    """Test: MODULE noise content gets P2, not L2."""
+    from memall.pipeline.classify import _detect_layers
+    result = _detect_layers("[MODULE:root/agent_memory] agent_memory")
+    assert result["primary"] == "P2", f"Expected P2 for MODULE, got {result['primary']}"
+    result2 = _detect_layers("content about 今天 and 上线")
+    assert result2["primary"] == "L2", f"Expected L2 for event content, got {result2['primary']}"
+    print("  PASS test_detect_layers_module_noise")
+
+
+def test_classify_step_module_noise():
+    """Test: classify_step reclassifies MODULE L2 to P2."""
+    from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
+    from memall.pipeline.classify import classify_step
+    from memall.core.db import get_conn
+
+    db_path, patcher = init_temp_db()
+    try:
+        conn = get_conn()
+        insert_memory(conn, "[MODULE:root/test] test module registration", level="L2", category="general")
+        conn.close()
+
+        result = classify_step()
+        conn = get_conn()
+        row = conn.execute("SELECT level FROM memories").fetchone()
+        assert row["level"] == "P2", f"Expected P2 after reclassify, got {row['level']}"
+        conn.close()
+        print("  PASS test_classify_step_module_noise")
+    finally:
+        cleanup_temp_db(db_path, patcher)
+
+
+# ── Runner ──────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("MemALL Pipeline Classify Tests")
+    print("=" * 60)
+    passed = 0
+    failed = 0
+
     tests = [
         ("test_classify_step_empty_db", test_classify_step_empty_db),
         ("test_classify_step_general_unchanged", test_classify_step_general_unchanged),
         ("test_classify_step_decision", test_classify_step_decision),
         ("test_classify_step_problem", test_classify_step_problem),
         ("test_classify_step_architecture", test_classify_step_architecture),
+        ("test_detect_layers_module_noise", test_detect_layers_module_noise),
+        ("test_classify_step_module_noise", test_classify_step_module_noise),
     ]
 
     for name, func in tests:

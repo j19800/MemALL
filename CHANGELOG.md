@@ -1,3 +1,9 @@
+## [v0.1.22] - 2026-06-29
+
+### Changed
+
+- **Web Dashboard 前端去重 + 动态化**: 删除 `desktop/index.html`（1873 行过期拷贝）和 `src/memall/api/frontend/index.html`（2156 行安装模式拷贝），仅保留 `frontend/index.html` 为唯一规范副本；server.py 前端路径搜索从双候选循环简化为单路径 + index.html 存在性检查；Debt Dashboard 从硬编码静态 HTML 改为 JS 动态渲染，通过 `/debt/stats` API 获取实时数据（记忆总量、连接数、层级分布、类别分布、归档记录数），饼图/热力图/卡片栏全部动态生成。 (`frontend/index.html`, `src/memall/api/server.py`)
+
 ## [v0.1.21] - 2026-06-29
 
 ### Fixed

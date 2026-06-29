@@ -1,3 +1,5 @@
+__test__ = False  # not for pytest collection (uses sys.exit)
+
 """
 全方位冒烟测试 — MemALL core modules end-to-end.
 
@@ -673,12 +675,11 @@ section("Results")
 
 print("\n".join(_log))
 print(f"\n{'='*50}")
-print(f"Smoke Test: {PASS} passed, {FAIL} failed, {PASS+FAIL} total")
-print(f"{'='*50}")
-
-if FAIL > 0:
+if __name__ == "__main__":
+    print(f"Smoke Test: {PASS} passed, {FAIL} failed, {PASS+FAIL} total")
+    print(f"{'='*50}")
+    if FAIL > 0:
+        cleanup()
+        sys.exit(1)
     cleanup()
-    sys.exit(1)
-
-cleanup()
-sys.exit(0)
+    sys.exit(0)
