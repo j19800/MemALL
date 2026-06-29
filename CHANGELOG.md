@@ -17,6 +17,15 @@
 
 ## [v0.1.20] - 2026-06-28
 
+### Fixed
+
+- **L2 MODULE 噪声过滤**: 存量 51 条 MODULE 注册记录（如 `[MODULE:root/agent_memory]`）被误分类为 L2 — 执行 SQL 回退至 P2。`_detect_layers()` 的 `[MODULE` 正则过滤已确认有效覆盖新内容。 (`pipeline/classify.py`)
+- **`tests/smoke_test.py` pytest 收集崩溃**: 模块级 `sys.exit(0)` 导致 pytest 报 INTERNALERROR — 加 `if __name__ == "__main__":` 守卫，同时加 `__test__ = False` 标记。 (`tests/smoke_test.py`)
+
+### Tests
+
+- **classify 测试覆盖扩展**: 新增 `test_detect_layers_module_noise`（直接测 `_detect_layers` 对 MODULE 返回 P2）和 `test_classify_step_module_noise`（测完整 classify_step 将 MODULE L2 重分类为 P2）。7/7 pass。 (`tests/test_classify.py`)
+
 ### Docs
 
 - **README 全量同步当前功能**: 工具数 38→42，层级 10→11（新增 L2/L7/L8/L11），管线 22 步→24 核心+5 可选，更新 11 层生命周期表、竞品对比表、项目结构图、MCP 工具分类表、Quick Start。中英文同步修改。 (`README.md`, `README.zh-CN.md`)
