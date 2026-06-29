@@ -4,6 +4,10 @@
 
 - **Web Dashboard 前端去重 + 动态化**: 删除 `desktop/index.html`（1873 行过期拷贝）和 `src/memall/api/frontend/index.html`（2156 行安装模式拷贝），仅保留 `frontend/index.html` 为唯一规范副本；server.py 前端路径搜索从双候选循环简化为单路径 + index.html 存在性检查；Debt Dashboard 从硬编码静态 HTML 改为 JS 动态渲染，通过 `/debt/stats` API 获取实时数据（记忆总量、连接数、层级分布、类别分布、归档记录数），饼图/热力图/卡片栏全部动态生成。 (`frontend/index.html`, `src/memall/api/server.py`)
 
+### Added
+
+- **代码扫描集成到前端**: 新增 `/debt/scan` POST 端点，动态导入 `debt/scan.py` 运行实时代码扫描（10 种负债模式 × 所有 .py 文件），返回扫描时间、行数、严重程度统计、前 50 条详情、负债密度。前端 Debt Dashboard 新增"扫描代码"按钮，触发后展示 4 级严重程度卡片 + 负债密度 + 发现详情表格，支持跨页面导航保持扫描结果。删除 `debt/dashboard.html`、`debt/dashboard_*.png`（已被 SPA 取代）。 (`src/memall/api/server.py`, `frontend/index.html`, `debt/`)
+
 ## [v0.1.21] - 2026-06-29
 
 ### Fixed

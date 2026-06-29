@@ -15,6 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
+import importlib.util
+from datetime import datetime, timezone
 
 from memall.core.thin_waist import (
     capture, retrieve, connect, traverse, timeline,
@@ -683,6 +685,59 @@ def api_debt_stats():
                 for mod in set(list(s1_modules.keys()) + list(s2_modules.keys()) + list(s3_modules.keys()))
             }
         }
+    }
+
+
+@app.post("/debt/scan")
+def api_debt_scan():
+    """Run a live scan of all .py files for known debt patterns.
+
+    Dynamically imports debt/scan.py from the project root.
+    Returns scan_time, line_count, severity counts, findings details,
+    density (items/KLOC), and severity_summary string.
+    """
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    if not project_root.exists():
+        return {"error": "project root not found"}
+
+    scan_path = project_root / "debt" / "scan.py"
+    if not scan_path.exists():
+        return {"error": "scanner module not found at debt/scan.py"}
+
+    spec = importlib.util.spec_from_file_location("debt_scanner", str(scan_path))
+    scanner = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(scanner)
+    except Exception as e:
+        return {"error": f"scan module import error: {e}"}
+
+    result = scanner.scan_known_patterns()
+    line_count = scanner.count_lines()
+
+    counts = result["counts"]
+    details = result["details"]
+    total = sum(counts.values())
+    kloc = line_count / 1000
+    density = round(total / kloc, 2) if kloc > 0 else 0
+
+    parts = []
+    if counts["critical"]:
+        parts.append(f"{counts['critical']} Critical")
+    if counts["major"]:
+        parts.append(f"{counts['major']} Major")
+    if counts["minor"]:
+        parts.append(f"{counts['minor']} Minor")
+    if counts["info"]:
+        parts.append(f"{counts['info']} Info")
+    severity_summary = " / ".join(parts) if parts else "All clean"
+
+    return {
+        "scan_time": datetime.now(timezone.utc).isoformat(),
+        "line_count": line_count,
+        "counts": counts,
+        "details": details,
+        "density": density,
+        "severity_summary": severity_summary,
     }
 
 

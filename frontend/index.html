@@ -901,7 +901,11 @@ function loadDebtDashboard(){
     ];
     var html = '<header style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px">'+
       '<div><div style="font-size:14px;color:var(--text-secondary)">代码行数 '+d.code_lines+' · 记忆 '+d.total_memories+' · 连接 '+d.total_edges+' · Agent '+d.total_agents+'</div></div>'+
-      '<div class="text-muted" style="text-align:right;font-size:12px"><div>更新时间</div><div style="font-size:16px;font-weight:600;">'+ds+'</div></div></header>';
+      '<div style="text-align:right;font-size:12px">'+
+        '<div id="scanStatus" style="margin-bottom:4px;font-size:13px;color:var(--text-muted);">尚未扫描</div>'+
+        '<button class="btn btn-primary btn-sm" id="scanBtn" onclick="runDebtScan()">🔍 扫描代码</button>'+
+        '<div style="margin-top:6px"><div class="text-muted" style="font-size:12px">更新时间</div><div style="font-size:16px;font-weight:600;">'+ds+'</div></div>'+
+      '</div></header>';
 
     // Cards
     html += '<div class="debt-cards">';
@@ -909,6 +913,25 @@ function loadDebtDashboard(){
       html += '<div class="debt-card '+b.cls+'"><div class="num">'+b.num+'</div><div class="label">'+b.lbl+'</div><div class="bar" style="width:0%;'+(b.col?'background:'+b.col:'')+'"></div></div>';
     });
     html += '</div>';
+
+    // Scan results panel (hidden initially, shown by runDebtScan)
+    html += '<div id="scanResultsPanel" class="debt-panel" style="display:none;margin-bottom:16px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'+
+        '<h2 style="margin:0;font-size:16px;font-weight:600;color:var(--accent)">代码扫描结果</h2>'+
+        '<span id="scanMeta" style="font-size:12px;color:var(--text-muted)"></span></div>'+
+      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px">'+
+        '<div class="debt-card debt-s0" style="padding:12px"><div class="num" id="scanCritical" style="font-size:24px">0</div><div class="label">Critical</div><div class="bar" style="width:100%;background:#ff4444"></div></div>'+
+        '<div class="debt-card debt-s1" style="padding:12px"><div class="num" id="scanMajor" style="font-size:24px">0</div><div class="label">Major</div><div class="bar" style="width:100%;background:#ff8800"></div></div>'+
+        '<div class="debt-card debt-s2" style="padding:12px"><div class="num" id="scanMinor" style="font-size:24px">0</div><div class="label">Minor</div><div class="bar" style="width:100%;background:#f0c000"></div></div>'+
+        '<div class="debt-card debt-s3" style="padding:12px"><div class="num" id="scanInfo" style="font-size:24px">0</div><div class="label">Info</div><div class="bar" style="width:100%;background:#4488ff"></div></div></div>'+
+      '<div style="display:flex;gap:16px;font-size:13px;color:var(--text-secondary);margin-bottom:12px">'+
+        '<span>代码行数: <b id="scanLines">-</b></span>'+
+        '<span>负债密度: <b id="scanDensity">-</b> 项/KLOC</span></div>'+
+      '<div class="table-wrap" style="max-height:400px;overflow-y:auto">'+
+        '<table class="data-table" id="scanFindingsTable"><thead><tr>'+
+          '<th style="width:80px">严重程度</th><th style="width:auto">文件路径</th><th style="width:50px">行号</th><th>描述</th></tr></thead>'+
+          '<tbody id="scanFindingsTbody"></tbody></table>'+
+        '<div id="scanFindingsEmpty" style="display:none;text-align:center;padding:20px;color:var(--text-muted);font-size:14px">✅ 未发现已知负债模式</div></div></div>';
 
     // Pie + heatmap
     var p1 = total>0 ? Math.round(s1/total*100) : 0;
@@ -1003,7 +1026,118 @@ function loadDebtDashboard(){
         setTimeout(function(){ b.style.width = (w?w[1]:'0')+'%'; }, 80);
       });
     }, 50);
+
+    // Restore prior scan result if we navigated away and back
+    if(window._lastScanResult){ setTimeout(function(){ restoreScanResult(); }, 150); }
   }).catch(function(){ c.innerHTML='<div style="text-align:center;padding:60px 20px;color:var(--red);">加载负债数据失败</div>'; });
+}
+
+// ============================================================
+//  Debt Scanner
+// ============================================================
+function runDebtScan(){
+  var btn = document.getElementById('scanBtn');
+  var status = document.getElementById('scanStatus');
+  if(!btn||!status) return;
+
+  btn.disabled = true;
+  btn.textContent = '⏳ 扫描中...';
+  status.textContent = '正在扫描所有 .py 文件...';
+  status.style.color = 'var(--text-secondary)';
+
+  api('POST', '/debt/scan').then(function(data){
+    if(!data||data.error){
+      status.textContent = '扫描失败: ' + (data ? data.error : '无响应');
+      status.style.color = 'var(--red)';
+      btn.disabled = false;
+      btn.textContent = '🔍 重新扫描';
+      return;
+    }
+
+    window._lastScanResult = data;
+    populateScanPanel(data);
+
+    btn.textContent = '🔄 重新扫描';
+    status.textContent = '上次扫描: ' + fmtTimeFromISO(data.scan_time);
+    status.style.color = 'var(--text-muted)';
+    toast('扫描完成，发现 ' + (data.details ? data.details.length : 0) + ' 处模式', 'success');
+  }).catch(function(err){
+    status.textContent = '扫描失败: ' + (err.message||'未知错误');
+    status.style.color = 'var(--red)';
+  }).finally(function(){
+    btn.disabled = false;
+    if(btn.textContent.indexOf('扫描中') >= 0) btn.textContent = '🔍 重新扫描';
+  });
+}
+
+function fmtTimeFromISO(isoStr){
+  if(!isoStr) return '';
+  try{
+    var d = new Date(isoStr);
+    if(isNaN(d.getTime())) return isoStr;
+    var h = d.getHours().toString().padStart(2,'0');
+    var m = d.getMinutes().toString().padStart(2,'0');
+    var s = d.getSeconds().toString().padStart(2,'0');
+    var mo = (d.getMonth()+1).toString().padStart(2,'0');
+    var day = d.getDate().toString().padStart(2,'0');
+    return mo + '/' + day + ' ' + h + ':' + m + ':' + s;
+  } catch(e){ return isoStr; }
+}
+
+function populateScanPanel(data){
+  if(!data) return;
+  var panel = document.getElementById('scanResultsPanel');
+  if(panel) panel.style.display = 'block';
+
+  document.getElementById('scanCritical').textContent = data.counts ? (data.counts.critical||0) : 0;
+  document.getElementById('scanMajor').textContent = data.counts ? (data.counts.major||0) : 0;
+  document.getElementById('scanMinor').textContent = data.counts ? (data.counts.minor||0) : 0;
+  document.getElementById('scanInfo').textContent = data.counts ? (data.counts.info||0) : 0;
+  document.getElementById('scanLines').textContent = data.line_count||0;
+  document.getElementById('scanDensity').textContent = data.density||0;
+  document.getElementById('scanMeta').textContent = (data.severity_summary||'') + ' · 共' + (data.details ? data.details.length : 0) + '条';
+
+  var tbody = document.getElementById('scanFindingsTbody');
+  var empty = document.getElementById('scanFindingsEmpty');
+  if(!tbody) return;
+
+  if(data.details && data.details.length > 0){
+    tbody.innerHTML = data.details.map(function(d){
+      var sevMatch = d.match(/^\s*\[(\w+)\]\s*/);
+      var sev = sevMatch ? sevMatch[1].toLowerCase() : 'info';
+      var sevClass = 'sev-s3';
+      if(sev === 'critical') sevClass = 'sev-s0';
+      else if(sev === 'major') sevClass = 'sev-s1';
+      else if(sev === 'minor') sevClass = 'sev-s2';
+
+      var rest = d.replace(/^\s*\[\w+\]\s*/, '');
+      var pathMatch = rest.match(/^([^:]+):(\d+)\s*[—–-]\s*(.+)/);
+      var filePath = pathMatch ? pathMatch[1] : rest;
+      var lineNo = pathMatch ? pathMatch[2] : '';
+      var desc = pathMatch ? pathMatch[3] : rest;
+
+      return '<tr><td><span class="sev '+sevClass+'">'+sev.toUpperCase()+'</span></td>'+
+        '<td style="font-family:monospace;font-size:12px">'+esc(filePath)+'</td>'+
+        '<td style="text-align:center">'+esc(lineNo)+'</td>'+
+        '<td>'+esc(desc)+'</td></tr>';
+    }).join('');
+    if(empty) empty.style.display = 'none';
+  } else {
+    tbody.innerHTML = '';
+    if(empty) empty.style.display = 'block';
+  }
+}
+
+function restoreScanResult(){
+  populateScanPanel(window._lastScanResult);
+  if(!window._lastScanResult) return;
+  var btn = document.getElementById('scanBtn');
+  var status = document.getElementById('scanStatus');
+  if(btn){ btn.textContent = '🔄 重新扫描'; btn.disabled = false; }
+  if(status){
+    status.textContent = '上次扫描: ' + fmtTimeFromISO(window._lastScanResult.scan_time);
+    status.style.color = 'var(--text-muted)';
+  }
 }
 
 // ============================================================
