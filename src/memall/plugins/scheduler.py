@@ -311,7 +311,7 @@ def _check_capture_discussion(memory_id: int) -> dict | None:
                     responses = conn.execute(
                         "SELECT * FROM memories WHERE id IN ("
                         "  SELECT target_id FROM edges WHERE source_id = ? AND relation_type = 'cites'"
-                        ") AND level = 'P2' ORDER BY created_at ASC",
+                        ") AND level = 'P2' ORDER BY created_at ASC LIMIT 1000",
                         (disc_id,),
                     ).fetchall()
                     result = converge_discussion(conn, dict(disc), [dict(r) for r in responses],
@@ -325,7 +325,7 @@ def _check_capture_discussion(memory_id: int) -> dict | None:
                 responses = conn.execute(
                     "SELECT * FROM memories WHERE id IN ("
                     "  SELECT target_id FROM edges WHERE source_id = ? AND relation_type = 'cites'"
-                    ") AND level = 'P2' ORDER BY created_at ASC",
+                    ") AND level = 'P2' ORDER BY created_at ASC LIMIT 1000",
                     (disc_id,),
                 ).fetchall()
                 for r in responses:
