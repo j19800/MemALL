@@ -1,3 +1,10 @@
+## [v0.1.26] - 2026-06-30
+
+### Fixed
+
+- **pipeline.observation 模块名不存在**: `_PIPELINE_STEPS` 中 observation 步的 module_path 为 `"memall.pipeline.observation"`，但文件名已重命名为 `observe.py`。改为 `"memall.pipeline.observe"`。 (`pipeline/pipeline.py`)
+- **vec0 虚拟表 INSERT OR REPLACE 不支持**: `_vec0_upsert()` 用 `INSERT OR REPLACE INTO mem_vec(rowid, embedding)` 在 vec0 virtual table 上触发 UNIQUE constraint failed on primary key。改为先 `DELETE WHERE rowid=?` 再 `INSERT`，绕过 vec0 对 OR REPLACE 支持不完整的问题。 (`graph/embeddings.py`)
+
 ## [v0.1.25] - 2026-06-30
 
 ### Docs

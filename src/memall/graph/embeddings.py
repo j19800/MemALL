@@ -67,9 +67,14 @@ def _content_hash(content: str) -> str:
 
 
 def _vec0_upsert(conn, memory_id: int, vec_bytes: bytes) -> None:
-    """Insert or replace a vector row in the vec0 virtual table."""
+    """Insert or replace a vector row in the vec0 virtual table.
+
+    Uses DELETE + INSERT instead of INSERT OR REPLACE because the vec0
+    virtual table may not handle OR REPLACE correctly on some platforms.
+    """
+    conn.execute("DELETE FROM mem_vec WHERE rowid = ?", (memory_id,))
     conn.execute(
-        "INSERT OR REPLACE INTO mem_vec(rowid, embedding) VALUES (?, ?)",
+        "INSERT INTO mem_vec(rowid, embedding) VALUES (?, ?)",
         (memory_id, vec_bytes),
     )
 
