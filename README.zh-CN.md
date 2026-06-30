@@ -121,13 +121,13 @@ SQLite + FTS5 + 向量搜索。零云端依赖。数据留在你的机器上。
 | **知识图谱** | `connect`, `traverse`, `timeline` |
 | **搜索** | `vector_search`, FTS5 全文搜索, `hybrid_search` (FTS5+vec0 RRF，可选交叉编码器重排[¹]), `memall_search` |
 | **会话** | `session_start`, `session_end`, `session_summary` |
-| **身份与人格** | `persona`, `persona_profile`, `identity`, `ask`, `memall_identity` |
+| **身份与人格** | `persona`, `persona_profile`, `identity`, `ask`, `memall_persona action=identity` |
 | **讨论与决策** | `discussion_create`, `discussion_respond`, `discussion_status`, `trace` |
-| **蒸馏** | `memall_distill_pending` |
+| **蒸馏** | `memall_system action=distill` |
 | **联邦** | `fed_query`, `fed_publish`, `fed_deliver`, `fed_conflicts`, `fed_inject`, `fed_extract` |
 | **Hub 同步** | `hub_connect`, `hub_sync` |
-| **管线与进化** | `run_pipeline`, `reflect_interact`, `forget`, `adaptive`, `index_rebuild`, `memall_forget`, `memall_adaptive` |
-| **安全与运维** | `security`, `ops`, `gateway`, `db`, `memall_db` |
+| **管线与进化** | `run_pipeline`, `reflect_interact`, `forget`, `adaptive`, `index_rebuild`, `memall_write action=forget`, `memall_system action=adaptive` |
+| **安全与运维** | `security`, `ops`, `gateway`, `db`, `memall_system action=db`, `memall_system action=security`, `memall_write action=ops` |
 | **引导** | `onboarding` |
 | **导出/导入** | `export`, `import`, `sync` |
 

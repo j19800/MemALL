@@ -121,13 +121,13 @@ SQLite + FTS5 + vector search. Zero cloud dependency. Your data stays on your ma
 | **Knowledge Graph** | `connect`, `traverse`, `timeline` |
 | **Search** | `vector_search`, FTS5 full-text search, `hybrid_search` (FTS5+vec0 RRF, optional cross-encoder[¹]), `memall_search` |
 | **Session** | `session_start`, `session_end`, `session_summary` |
-| **Identity & Persona** | `persona`, `persona_profile`, `identity`, `ask`, `memall_identity` |
+| **Identity & Persona** | `persona`, `persona_profile`, `identity`, `ask`, `memall_persona action=identity` |
 | **Discussion & Decision** | `discussion_create`, `discussion_respond`, `discussion_status`, `trace` |
-| **Distillation** | `memall_distill_pending` |
+| **Distillation** | `memall_system action=distill` |
 | **Federation** | `fed_query`, `fed_publish`, `fed_deliver`, `fed_conflicts`, `fed_inject`, `fed_extract` |
 | **Hub Sync** | `hub_connect`, `hub_sync` |
-| **Pipeline & Evolution** | `run_pipeline`, `reflect_interact`, `forget`, `adaptive`, `index_rebuild`, `memall_forget`, `memall_adaptive` |
-| **Security & Ops** | `security`, `ops`, `gateway`, `db`, `memall_db` |
+| **Pipeline & Evolution** | `run_pipeline`, `reflect_interact`, `forget`, `adaptive`, `index_rebuild`, `memall_write action=forget`, `memall_system action=adaptive` |
+| **Security & Ops** | `security`, `ops`, `gateway`, `db`, `memall_system action=db`, `memall_system action=security`, `memall_write action=ops` |
 | **Onboarding** | `onboarding` |
 | **Export/Import** | `export`, `import`, `sync` |
 
