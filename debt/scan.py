@@ -55,8 +55,7 @@ def scan_known_patterns() -> dict:
                 line_no = text[:m.start()].count("\n") + 1
                 counts[severity] += 1
                 rel_path = py_file.relative_to(PROJECT)
-                if len(details) < 50:  # 只记录前 50 条
-                    details.append(f"  [{severity.upper():8s}] {rel_path}:{line_no} — {msg}")
+                details.append(f"  [{severity.upper():8s}] {rel_path}:{line_no} — {msg}")
     
     return {"counts": counts, "details": details}
 

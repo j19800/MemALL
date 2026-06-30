@@ -1,3 +1,11 @@
+## [v0.1.34] - 2026-07-01
+
+### Added
+
+- **Debt dashboard 全面升级**: 主仪表盘新增技术负债概览卡片；负债详情表支持按严重程度/文件路径/行号/描述列排序 + 全量分页（每页 25 条）；新增文件维度负债分布面板（Top 20 文件，显示 Critical/Major/Minor 圆点标记）；新增扫描历史趋势 SVG 线图（需至少 2 次扫描记录）。 (`frontend/index.html`, `src/memall/api/server.py`, `debt/scan.py`)
+- **debt/scan.py 移除 50 条记录上限**: `scan_known_patterns()` 不再截断详情，返回全部匹配条目供前端分页。 (`debt/scan.py:58`)
+- **后端扫描缓存保留历史**: `_save_debt_cache()` 追加扫描摘要到 `history[]`（保留最近 20 次），`/debt/stats` 返回 `file_summary` + `history`。 (`src/memall/api/server.py`)
+
 ## [v0.1.33] - 2026-07-01
 
 ### Fixed

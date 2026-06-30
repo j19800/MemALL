@@ -518,6 +518,45 @@ pre{font-family:inherit;white-space:pre-wrap;word-break:break-word}
 .debt-rule-item .num{color:var(--accent);font-weight:600;margin-right:6px}
 .debt-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:768px){.debt-grid-2{grid-template-columns:1fr}.debt-pie-wrap{flex-direction:column;align-items:flex-start}.debt-kanban{grid-template-columns:1fr}}
+
+/* Findings table sortable headers */
+.debt-table-wrap{max-height:500px;overflow-y:auto;border:1px solid var(--border);border-radius:6px}
+.debt-table-wrap table{width:100%;border-collapse:collapse;font-size:13px}
+.debt-table-wrap th{position:sticky;top:0;z-index:1;background:var(--bg-card);padding:10px 8px;text-align:left;font-weight:600;font-size:12px;color:var(--text-secondary);border-bottom:2px solid var(--border);cursor:pointer;white-space:nowrap;user-select:none}
+.debt-table-wrap th:hover{color:var(--accent)}
+.debt-table-wrap th.sorted{color:var(--accent)}
+.debt-table-wrap th .sort-arrow{display:inline-block;width:16px;text-align:center;margin-left:4px;font-size:10px}
+.debt-table-wrap td{padding:8px;border-bottom:1px solid var(--border);vertical-align:top}
+.debt-table-wrap tr:hover td{background:var(--bg-body)}
+.sev-pill{display:inline-block;padding:1px 8px;border-radius:3px;font-size:11px;font-weight:600;white-space:nowrap}
+.sev-pill.s0{background:#ff444422;color:#ff4444}
+.sev-pill.s1{background:#ff880022;color:#ff8800}
+.sev-pill.s2{background:#f0c00022;color:#f0c000}
+.sev-pill.s3{background:#4488ff22;color:#4488ff}
+
+/* Pagination */
+.debt-pager{display:flex;align-items:center;justify-content:center;gap:6px;padding:12px 0;font-size:13px}
+.debt-pager button{background:var(--bg-body);border:1px solid var(--border);border-radius:4px;padding:4px 12px;cursor:pointer;font-size:12px;color:var(--text-primary)}
+.debt-pager button:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+.debt-pager button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.debt-pager button:disabled{opacity:0.4;cursor:default}
+.debt-pager .info{color:var(--text-muted);font-size:12px;margin-left:8px}
+
+/* File breakdown */
+.file-bar-wrap{margin:8px 0}
+.file-bar-row{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px}
+.file-bar-row .fpath{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:monospace;font-size:11px}
+.file-bar-row .fbar{height:14px;border-radius:3px;min-width:4px;transition:width 0.5s}
+.file-bar-row .fcnt{width:60px;text-align:right;font-weight:600;font-size:11px;flex-shrink:0}
+.file-sev-dots{display:flex;gap:3px;width:80px;flex-shrink:0}
+.file-sev-dots .dot{width:8px;height:8px;border-radius:50%}
+
+/* Trend chart */
+.debt-trend-chart{width:100%;height:160px}
+.debt-trend-grid text{fill:var(--text-muted);font-size:9px}
+.debt-trend-line{fill:none;stroke:var(--accent);stroke-width:2}
+.debt-trend-area{fill:var(--accent);opacity:0.08}
+.debt-trend-dot{fill:var(--accent)}
 </style>
 </head>
 <body>
@@ -602,6 +641,7 @@ pre{font-family:inherit;white-space:pre-wrap;word-break:break-word}
           <div class="stat-card"><div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M12 20V10M18 20V4M6 20v-4"/></svg></div><div class="stat-value" id="statL6High">-</div><div class="stat-label">高质量反思</div></div>
           <div class="stat-card"><div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></div><div class="stat-value" id="statL6Recent">-</div><div class="stat-label">近24h反思</div></div>
           <div class="stat-card"><div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div><div class="stat-value" id="statL6Chain">-</div><div class="stat-label">修正链(矛/调)</div></div>
+          <div class="stat-card" id="statDebtCard" style="display:none"><div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M12 1l9 4v6c0 5.5-3.8 10.7-9 12-5.2-1.3-9-6.5-9-12V5l9-4z"/><path d="M9.1 8.5l2.9 2.9 2.9-2.9" stroke="currentColor" stroke-width="1.5" fill="none"/></svg></div><div class="stat-value" id="statDebtTotal">-</div><div class="stat-label" id="statDebtLabel">技术负债</div></div>
         </div>
         <div class="dash-grid">
           <div class="chart-container">
@@ -879,6 +919,12 @@ function switchPage(name){
 // ============================================================
 //  Debt Dashboard
 // ============================================================
+var debtData = null;
+var debtSortField = null;
+var debtSortDir = 1;
+var debtPage = 1;
+var debtPerPage = 25;
+
 function loadDebtDashboard(){
   var c = document.getElementById('debtContainer');
   api('GET', '/debt/stats').then(function(d){
@@ -888,6 +934,10 @@ function loadDebtDashboard(){
     var total = t.total||0;
     var mx = Math.max(s0,s1,s2,s3,1);
     var scanned = d.scanned;
+    debtData = t;
+    debtSortField = null;
+    debtSortDir = 1;
+    debtPage = 1;
 
     var html = '<header style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px">'+
       '<div><div style="font-size:14px;color:var(--text-secondary)">记忆 '+d.total_memories+' · 连接 '+d.total_edges+' · Agent '+d.total_agents+'</div></div>'+
@@ -896,7 +946,7 @@ function loadDebtDashboard(){
           (scanned ? '上次扫描: '+(t.line_count||'')+' 行 · '+t.severity_summary : '尚未扫描 — 点击下方按钮扫描代码')+'</div>'+
         '<button class="btn btn-primary btn-sm" id="scanBtn" onclick="runDebtScan()">🔍 '+(scanned?'重新扫描':'扫描代码')+'</button></div></header>';
 
-    // Debt severity cards (from real scan data)
+    // Severity summary cards
     var bars = [
       {cls:'debt-s0',num:s0,lbl:'Critical',pct:Math.round(s0/mx*100),col:'#ff4444'},
       {cls:'debt-s1',num:s1,lbl:'Major',pct:Math.round(s1/mx*100),col:'#ff8800'},
@@ -912,13 +962,19 @@ function loadDebtDashboard(){
     html += '</div>';
 
     if(scanned && total > 0){
-      // Pie chart (severity distribution)
+      var det = t.details||[];
+      var fs = t.file_summary||[];
+      var hist = t.history||[];
+
+      // Row 1: Pie chart + File breakdown
+      html += '<div class="debt-grid-2">';
+
+      // Pie chart (reuse existing)
       var p1 = total>0 ? Math.round(s0/total*100) : 0;
       var p2 = total>0 ? Math.round(s1/total*100) : 0;
       var p3 = total>0 ? Math.round(s2/total*100) : 0;
       var off1 = 25, off2 = 25-p1, off3 = 25-p1-p2;
-      html += '<div class="debt-grid-2">';
-      html += '<div class="debt-panel"><h2>扫描结果分布</h2><div class="debt-pie-wrap">'+
+      html += '<div class="debt-panel"><h2>严重程度分布</h2><div class="debt-pie-wrap">'+
         '<svg class="debt-pie-chart" viewBox="0 0 100 100">'+
         '<circle cx="50" cy="50" r="40" fill="none" stroke="#ff4444" stroke-width="20" stroke-dasharray="'+(p1||1)+' '+(100-p1||1)+'" stroke-dashoffset="'+off1+'" transform="rotate(-90,50,50)"/>'+
         '<circle cx="50" cy="50" r="40" fill="none" stroke="#ff8800" stroke-width="20" stroke-dasharray="'+(p2||1)+' '+(100-p2||1)+'" stroke-dashoffset="'+off2+'" transform="rotate(-90,50,50)"/>'+
@@ -931,53 +987,59 @@ function loadDebtDashboard(){
         '<div class="item"><div class="dot" style="background:#f0c000;"></div>Minor<span class="val">'+s2+'</span></div>'+
         '<div class="item"><div class="dot" style="background:#4488ff;"></div>Info<span class="val">'+s3+'</span></div></div></div></div>';
 
-      // Scan findings table inline
-      var det = t.details||[];
-      html += '<div class="debt-panel"><h2>扫描详情 <span style="font-size:12px;color:var(--text-muted);font-weight:400;">前 '+det.length+' 条</span></h2>'+
-        '<div style="display:flex;gap:16px;font-size:13px;color:var(--text-secondary);margin-bottom:12px">'+
-        '<span>代码行数: <b>'+t.line_count+'</b></span>'+
-        '<span>负债密度: <b>'+t.density+'</b> 项/KLOC</span></div>';
+      // File breakdown
+      html += '<div class="debt-panel"><h2>文件负债分布 <span style="font-size:12px;color:var(--text-muted);font-weight:400;">Top '+Math.min(fs.length,20)+'</span></h2>';
+      html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">'+t.line_count+' 行代码 · '+t.density+' 项/KLOC</div>';
+      html += '<div class="file-bar-wrap">';
+      var topFiles = fs.slice(0,20);
+      var maxF = topFiles.length ? topFiles[0].total : 1;
+      topFiles.forEach(function(f){
+        var fp = f.path, wp = Math.max(f.total/maxF*100, 2);
+        html += '<div class="file-bar-row"><span class="fcnt" style="color:'+(f.critical?'#ff4444':'var(--text-muted)')+'">'+f.total+'</span>'+
+          '<div class="fbar" style="width:'+wp+'%;background:'+(f.critical?'#ff4444':'var(--accent)')+'"></div>'+
+          '<span class="fpath">'+esc(fp)+'</span>'+
+          '<span class="file-sev-dots">'+
+          (f.critical?'<span class="dot" style="background:#ff4444" title="Critical: '+f.critical+'"></span>':'')+
+          (f.major?'<span class="dot" style="background:#ff8800" title="Major: '+f.major+'"></span>':'')+
+          (f.minor?'<span class="dot" style="background:#f0c000" title="Minor: '+f.minor+'"></span>':'')+
+          '</span></div>';
+      });
+      html += '</div></div></div>'; // close grid-2
 
-      if(det.length > 0){
-        html += '<div class="table-wrap" style="max-height:400px;overflow-y:auto">'+
-          '<table class="data-table"><thead><tr>'+
-          '<th style="width:80px">严重程度</th><th style="width:auto">文件路径</th><th style="width:50px">行号</th><th>描述</th></tr></thead><tbody>';
-        det.forEach(function(d){
-          var sevMatch = d.match(/^\s*\[(\w+)\]\s*/);
-          var sev = sevMatch ? sevMatch[1].toLowerCase() : 'info';
-          var sevClass = sev==='critical'?'sev-s0':sev==='major'?'sev-s1':sev==='minor'?'sev-s2':'sev-s3';
-          var rest = d.replace(/^\s*\[\w+\]\s*/, '');
-          var pathMatch = rest.match(/^([^:]+):(\d+)\s*[—–-]\s*(.+)/);
-          var filePath = pathMatch ? pathMatch[1] : rest;
-          var lineNo = pathMatch ? pathMatch[2] : '';
-          var desc = pathMatch ? pathMatch[3] : rest;
-          html += '<tr><td><span class="sev '+sevClass+'">'+sev.toUpperCase()+'</span></td>'+
-            '<td style="font-family:monospace;font-size:12px">'+esc(filePath)+'</td>'+
-            '<td style="text-align:center">'+esc(lineNo)+'</td>'+
-            '<td>'+esc(desc)+'</td></tr>';
-        });
-        html += '</tbody></table></div>';
+      // Row 2: Trend chart + meta
+      html += '<div class="debt-grid-2">';
+
+      // Trend chart
+      html += '<div class="debt-panel"><h2>负债趋势</h2>';
+      if(hist.length >= 2){
+        html += '<svg class="debt-trend-chart" id="debtTrendChart"></svg>';
       } else {
-        html += '<div style="text-align:center;padding:20px;color:var(--text-muted);font-size:14px">✅ 未发现已知负债模式</div>';
+        html += '<div style="text-align:center;padding:20px;color:var(--text-muted);font-size:13px">需要至少 2 次扫描记录才能显示趋势</div>';
       }
-      html += '</div></div>'; // close grid-2 + scan panel
+      html += '</div>';
+
+      // Meta
+      html += '<div class="debt-panel"><h2>预防规则</h2><div class="debt-rules">'+
+        '<div class="debt-rule-item"><span class="num">#1</span>所有 SQL 必须用 <code>?</code> 参数绑定</div>'+
+        '<div class="debt-rule-item"><span class="num">#2</span>所有 query param 必须通过校验</div>'+
+        '<div class="debt-rule-item"><span class="num">#3</span>所有 pipeline 步骤必须有 LIMIT</div>'+
+        '<div class="debt-rule-item"><span class="num">#4</span>新增 agent 必须过 3 个 gate</div>'+
+        '<div class="debt-rule-item"><span class="num">#5</span>每步 PRAGMA 必须有 try/finally 恢复</div>'+
+        '<div class="debt-rule-item"><span class="num">#6</span>except Exception 必须注明具体类型</div>'+
+        '<div class="debt-rule-item"><span class="num">#7</span>新增字段须更新 dataclass + INSERT</div></div></div>';
+
+      html += '</div>'; // close grid-2 row 2
+
+      // Findings table with sort & paginate
+      html += '<div class="debt-panel"><h2>扫描详情 <span style="font-size:12px;color:var(--text-muted);font-weight:400;">共 '+det.length+' 条</span></h2>';
+      html += '<div id="debtTableContainer"></div></div>';
     } else {
       html += '<div class="debt-panel"><div style="text-align:center;padding:40px;color:var(--text-muted)">'+
         '尚未进行代码扫描。点击上方「扫描代码」按钮分析全部 .py 文件中的已知负债模式。</div></div>';
     }
 
-    // Prevention rules (static policy)
-    html += '<div class="debt-panel"><h2>负债预防规则</h2><div class="debt-rules">'+
-      '<div class="debt-rule-item"><span class="num">#1</span>所有 SQL 必须用 <code>?</code> 参数绑定，禁止 f-string 拼接</div>'+
-      '<div class="debt-rule-item"><span class="num">#2</span>所有 query param 必须通过 try/except 或 Pydantic 校验</div>'+
-      '<div class="debt-rule-item"><span class="num">#3</span>所有 pipeline 步骤必须有 LIMIT + 游标</div>'+
-      '<div class="debt-rule-item"><span class="num">#4</span>新增 agent 必须过 3 个 gate：必要性 → 命名规范 → 责任边界</div>'+
-      '<div class="debt-rule-item"><span class="num">#5</span>每步 <code>PRAGMA</code> 必须有 <code>try/finally</code> 恢复</div>'+
-      '<div class="debt-rule-item"><span class="num">#6</span><code>except Exception</code> 必须注明具体异常类型</div>'+
-      '<div class="debt-rule-item"><span class="num">#7</span>新增字段必须同时更新 dataclass + _row_to_memory + INSERT</div></div></div>';
-
     html += '<footer style="margin-top:16px;padding:12px 0;border-top:1px solid var(--border);font-size:12px;color:var(--text-muted);">'+
-      'MemALL Technical Debt Dashboard · 数据来源: <code style="font-size:11px">debt/scan.py</code> 实时代码扫描</footer>';
+      'MemALL Technical Debt Dashboard · 数据来源: <code style="font-size:11px">debt/scan.py</code></footer>';
 
     c.innerHTML = html;
 
@@ -989,7 +1051,164 @@ function loadDebtDashboard(){
         setTimeout(function(){ b.style.width = (w?w[1]:'0')+'%'; }, 80);
       });
     }, 50);
+
+    // Render trend chart
+    if(scanned && total > 0 && hist.length >= 2){
+      renderDebtTrend(hist);
+    }
+
+    // Render findings table
+    if(scanned && total > 0){
+      renderDebtTable();
+    }
   }).catch(function(){ c.innerHTML='<div style="text-align:center;padding:60px 20px;color:var(--red);">加载负债数据失败</div>'; });
+}
+
+// Render sortable + paginated findings table
+function renderDebtTable(){
+  var container = document.getElementById('debtTableContainer');
+  if(!container) return;
+  var det = debtData.details || [];
+  var fields = ['severity','file','line','desc'];
+  var labels = {severity:'严重程度',file:'文件路径',line:'行号',desc:'描述'};
+  var sevOrder = {critical:0, major:1, minor:2, info:3};
+
+  // Sort
+  var sorted = det.slice();
+  if(debtSortField){
+    sorted.sort(function(a,b){
+      var va = parseDetail(a, debtSortField);
+      var vb = parseDetail(b, debtSortField);
+      if(debtSortField === 'severity'){ va = sevOrder[va]||9; vb = sevOrder[vb]||9; }
+      if(debtSortField === 'line'){ va = parseInt(va)||0; vb = parseInt(vb)||0; }
+      if(typeof va === 'string'){ va = va.toLowerCase(); vb = (vb||'').toLowerCase(); }
+      if(va < vb) return -debtSortDir;
+      if(va > vb) return debtSortDir;
+      return 0;
+    });
+  }
+
+  // Paginate
+  var totalPages = Math.max(1, Math.ceil(sorted.length / debtPerPage));
+  if(debtPage > totalPages) debtPage = totalPages;
+  var start = (debtPage - 1) * debtPerPage;
+  var pageItems = sorted.slice(start, start + debtPerPage);
+
+  // Build header
+  var h = '<div class="debt-table-wrap"><table><thead><tr>';
+  fields.forEach(function(f){
+    var arrow = '';
+    if(debtSortField === f) arrow = '<span class="sort-arrow">'+(debtSortDir===1?'▲':'▼')+'</span>';
+    h += '<th onclick="debtSortBy(\''+f+'\')" class="'+(debtSortField===f?'sorted':'')+'">'+labels[f]+arrow+'</th>';
+  });
+  h += '</tr></thead><tbody>';
+
+  // Build rows
+  pageItems.forEach(function(d){
+    var sev = parseDetail(d,'severity');
+    var filePath = parseDetail(d,'file');
+    var lineNo = parseDetail(d,'line');
+    var desc = parseDetail(d,'desc');
+    var sClass = sev==='critical'?'s0':sev==='major'?'s1':sev==='minor'?'s2':'s3';
+    h += '<tr><td><span class="sev-pill '+sClass+'">'+sev.toUpperCase()+'</span></td>'+
+      '<td style="font-family:monospace;font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis">'+esc(filePath)+'</td>'+
+      '<td style="text-align:center;font-family:monospace">'+esc(lineNo)+'</td>'+
+      '<td>'+esc(desc)+'</td></tr>';
+  });
+  h += '</tbody></table></div>';
+
+  // Paginator
+  h += '<div class="debt-pager">'+
+    '<button onclick="debtPage=1;renderDebtTable()" '+(debtPage<=1?'disabled':'')+'>&#171;</button>'+
+    '<button onclick="debtPage=Math.max(1,debtPage-1);renderDebtTable()" '+(debtPage<=1?'disabled':'')+'>&#8249;</button>';
+  for(var p=Math.max(1,debtPage-2); p<=Math.min(totalPages,debtPage+2); p++){
+    h += '<button onclick="debtPage='+p+';renderDebtTable()" class="'+(p===debtPage?'active':'')+'">'+p+'</button>';
+  }
+  h += '<button onclick="debtPage=Math.min('+totalPages+',debtPage+1);renderDebtTable()" '+(debtPage>=totalPages?'disabled':'')+'>&#8250;</button>'+
+    '<button onclick="debtPage='+totalPages+';renderDebtTable()" '+(debtPage>=totalPages?'disabled':'')+'>&#187;</button>'+
+    '<span class="info">'+start+1+'-'+Math.min(start+debtPerPage,sorted.length)+' / '+sorted.length+'</span></div>';
+
+  container.innerHTML = h;
+}
+
+function debtSortBy(field){
+  if(debtSortField === field){ debtSortDir *= -1; }
+  else { debtSortField = field; debtSortDir = 1; }
+  debtPage = 1;
+  renderDebtTable();
+}
+
+// Parse a detail string into components
+function parseDetail(d, field){
+  var sevM = d.match(/^\s*\[(\w+)\]\s*/);
+  var sev = sevM ? sevM[1].toLowerCase() : 'info';
+  var rest = d.replace(/^\s*\[\w+\]\s*/, '');
+  var pathM = rest.match(/^([^:]+):(\d+)\s*[—–-]\s*(.+)/);
+  if(field === 'severity') return sev;
+  if(field === 'file') return pathM ? pathM[1] : rest;
+  if(field === 'line') return pathM ? pathM[2] : '';
+  if(field === 'desc') return pathM ? pathM[3] : rest;
+  return '';
+}
+
+// Render SVG trend chart
+function renderDebtTrend(hist){
+  var svg = document.getElementById('debtTrendChart');
+  if(!svg) return;
+  var pts = hist.map(function(h){
+    return {total: h.total || 0, time: h.scan_time || ''};
+  });
+  if(pts.length < 2) return;
+
+  var w = parseInt(svg.getAttribute('width')) || svg.parentElement.clientWidth - 40 || 400;
+  var h = 160;
+  svg.setAttribute('viewBox', '0 0 '+w+' '+h);
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  svg.style.width = '100%';
+  svg.style.height = h+'px';
+
+  var pad = {top:16, bottom:24, left:50, right:16};
+  var cw = w - pad.left - pad.right;
+  var ch = h - pad.top - pad.bottom;
+
+  var values = pts.map(function(p){ return p.total; });
+  var maxV = Math.max.apply(null, values) * 1.15 || 1;
+  var minV = Math.min.apply(null, values);
+  if(minV === maxV){ minV = 0; }
+  var range = maxV - minV || 1;
+
+  // Grid lines + labels
+  var gridHtml = '';
+  for(var g=0;g<=4;g++){
+    var gy = pad.top + (ch/4)*g;
+    var gv = Math.round(maxV - (range/4)*g);
+    gridHtml += '<line x1="'+pad.left+'" y1="'+gy+'" x2="'+(w-pad.right)+'" y2="'+gy+'" stroke="var(--border)" stroke-width="0.5"/>'+
+      '<text x="'+(pad.left-6)+'" y="'+(gy+3)+'" text-anchor="end">'+gv+'</text>';
+  }
+
+  // Data points
+  var points = pts.map(function(p,i){
+    var x = pad.left + (i/(pts.length-1))*cw;
+    var y = pad.top + (1 - (p.total - minV)/range)*ch;
+    return {x:x, y:y, total:p.total, time:p.time};
+  });
+
+  // Line path
+  var lineD = points.map(function(p,i){ return (i===0?'M':'L')+p.x.toFixed(1)+','+p.y.toFixed(1); }).join(' ');
+  var areaD = lineD + ' L'+points[points.length-1].x.toFixed(1)+','+(pad.top+ch)+' L'+points[0].x.toFixed(1)+','+(pad.top+ch)+' Z';
+
+  // Dots + labels
+  var dotsHtml = '';
+  points.forEach(function(p){
+    dotsHtml += '<circle cx="'+p.x.toFixed(1)+'" cy="'+p.y.toFixed(1)+'" r="3" class="debt-trend-dot"/>'+
+      '<text x="'+p.x.toFixed(1)+'" y="'+(pad.top+ch+14)+'" text-anchor="middle" fill="var(--text-muted)" font-size="9">'+
+      (p.time ? p.time.substring(5,16) : '')+'</text>';
+  });
+
+  svg.innerHTML = '<g class="debt-trend-grid">'+gridHtml+'</g>'+
+    '<path d="'+areaD+'" class="debt-trend-area"/>'+
+    '<path d="'+lineD+'" class="debt-trend-line"/>'+
+    dotsHtml;
 }
 
 // ============================================================
@@ -1009,7 +1228,7 @@ function runDebtScan(){
       btn.textContent = '🔍 重新扫描';
       return;
     }
-    toast('扫描完成，发现 ' + (data.details ? data.details.length : 0) + ' 处模式', 'success');
+    toast('扫描完成 — Critical: '+(data.counts?.critical||0)+' Major: '+(data.counts?.major||0)+' Minor: '+(data.counts?.minor||0), 'success');
     loadDebtDashboard();
   }).catch(function(err){
     toast('扫描失败: ' + (err.message||'未知错误'), 'error');
@@ -1065,6 +1284,20 @@ function doLoadDashboard(){
       errEl.style.display = 'block';
     }
   });
+
+  // Debt summary card
+  api('GET','/debt/stats').then(function(d){
+    var card = document.getElementById('statDebtCard');
+    var tot = document.getElementById('statDebtTotal');
+    var lbl = document.getElementById('statDebtLabel');
+    if(!d||!d.scanned||!d.debt||!d.debt.total){
+      card.style.display = 'none';
+      return;
+    }
+    card.style.display = '';
+    tot.textContent = d.debt.total;
+    lbl.textContent = '负债 ' + d.debt.s0_count + 'C/' + d.debt.s1_count + 'M';
+  }).catch(function(){});
 
   // Recent memories
   api('GET','/timeline?limit=10').then(function(data){
