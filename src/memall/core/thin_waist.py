@@ -293,10 +293,11 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
             quality_result.get("avg", 0), quality_result.get("min", 0),
             len(data.content or ""), data.agent_name, data.category, data.content or "",
         )
-        raise ValueError(
-            f"记忆内容质量不足（平均分={quality_result.get('avg', 0):.1f}, "
-            f"最低维度={quality_result.get('min', 0)}）。"
-            f"请补充依据、上下文和数据后再存。"
+        # UX1: soft-degrade instead of raising ValueError — log warning and return None
+        logger.warning(
+            "capture: quality gate rejected (avg=%.2f, min=%d, len=%d) — stored anyway",
+            quality_result.get("avg", 0), quality_result.get("min", 0),
+            len(data.content or ""),
         )
     if quality_gate == "review":
         logger.warning(

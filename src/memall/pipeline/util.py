@@ -4,6 +4,7 @@ Centralized subject generation ensures all pipeline-created memories
 get human-readable titles derived from content, not metadata concatenation.
 """
 
+import json
 import re
 
 
@@ -82,3 +83,15 @@ def _smart_subject(content: str, max_len: int = 80) -> str:
             subject = trunc[:max_len - 1] + "…"
 
     return subject
+
+
+def safe_parse_metadata(metadata_value: str | dict | None) -> dict:
+    """Safely parse metadata field that may be None, JSON string, or dict."""
+    if metadata_value is None:
+        return {}
+    if isinstance(metadata_value, dict):
+        return metadata_value
+    try:
+        return json.loads(metadata_value)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}

@@ -1,3 +1,23 @@
+## [v0.1.32] - 2026-07-01
+
+### Changed
+
+- **I3 integrate.py Jaccard threshold 0.7→0.85**: 更紧的去重阈值，减少"部署架构"和"部署测试"等 50%+ 重叠议题被错误去重的概率。 (`pipeline/integrate.py:31`)
+- **I4 integrate.py category top-3 combined**: L10 整合记忆的 category 从单一多数胜出改为 top-3 组合标签（如 `"architecture+testing"`），保留跨领域信号。 (`pipeline/integrate.py:172-174`)
+- **D1 distill.py min_group 3→2**: 2 条高度相关的架构决策也能产生 L9 蒸馏，不再因缺第 3 条而被跳过。 (`pipeline/distill.py:33`)
+- **D2 distill.py source limit 10→20**: 超过 10 条的组不再静默忽略 80% 内容，源记忆上限翻倍。 (`pipeline/distill.py:36,98`)
+- **R1 reflect.py cold‑start threshold 50→20**: 冷启动阈值从 50 降至 20，小规模 agent 也能获得 L6 反思。 (`pipeline/reflect.py:34`)
+- **R3 reflect.py chain overlap 20→40**: 反思链边类型区分(token 重叠)阈值从 20 升至 40，降低 contradicts/refines 误判。 (`pipeline/reflect.py:116`)
+- **O2 observe.py L6 自指排除**: observation 自身生成的 L6 不再计入自己的健康统计指标（l6_total/l6_recent）。 (`pipeline/observe.py:36-57`)
+- **ID1 identity.py scan window 2000→8000**: 身份信号扫描从仅前 2000 字符扩展到 8000，长记忆中的身份信号不再被忽略。 (`pipeline/identity.py:42`)
+- **UX1 thin_waist.py quality gate ValueError→soft warning**: 质量门控失败不再抛 ValueError(HTTP 500/异常文本)，改为 logger.warning + 继续存储。 (`core/thin_waist.py:296-300`)
+- **C5 classify.py L8 promotion substance gate**: 边数 ≥3 即升 L8 前先校验内容长度 ≥50 字符，防止 P2 级碎片凭边数巧合升级为"枢纽知识"。 (`pipeline/classify.py:153-158`)
+- **CD1 util.py safe_parse_metadata()**: 提取 30+ 处重复的 `json.loads(row["metadata"])` 模式为统一工具函数，处理 None/JSON string/dict 三种类型。 (`pipeline/util.py:88-97`)
+
+### Fixed
+
+- **pipeline.py _coerce_int() fallback 返回 dict**: 当步骤返回 dict 且不识别任何 key 时，`return val` 将 dict 传回 → 质量门控 `result >= gate["min_output"]` 触发 `TypeError: '>= not supported between instances of 'dict' and 'int'`。修复：fallback 改为 `return 0`，并补全 `scanned`/`upgraded_to_l6`/`distilled` 等 key。 (`pipeline/pipeline.py:42-43`)
+
 ## [v0.1.31] - 2026-07-01
 
 ### Fixed

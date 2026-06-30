@@ -151,7 +151,11 @@ def _check_l8_promotion(conn, memory_id: int, edge_count_map: dict[int, int],
     if primary in _PIPELINE_LAYERS:
         return primary
     if edge_count_map.get(memory_id, 0) >= 3:
-        return "L8"
+        # C5: require minimum content substance before promoting to L8
+        row = conn.execute("SELECT LENGTH(TRIM(content)) as cl FROM memories WHERE id = ?",
+                           (memory_id,)).fetchone()
+        if row and row["cl"] >= 50:
+            return "L8"
     # Also check module_refs in metadata
     row = conn.execute("SELECT metadata FROM memories WHERE id = ?",
                        (memory_id,)).fetchone()

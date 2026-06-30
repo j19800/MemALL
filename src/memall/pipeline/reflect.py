@@ -31,7 +31,7 @@ def reflect_step() -> dict:
                 f"SELECT LOWER(agent_name) as ag, COUNT(*) as cnt FROM memories WHERE LOWER(agent_name) IN ({ph}) GROUP BY LOWER(agent_name)",
                 [a.lower() for a in agent_names],
             ):
-                if r["cnt"] < 50:
+                if r["cnt"] < 20:
                     cold_start_agents.add(r["ag"])
         rows = [r for r in rows if (r["agent_name"] or "").lower() not in cold_start_agents]
         if not rows:
@@ -113,7 +113,7 @@ def reflect_step() -> dict:
         conn.close()
 
 
-_CHAIN_OVERLAP_THRESHOLD = 20  # min character overlap to consider related
+_CHAIN_OVERLAP_THRESHOLD = 40  # min token overlap to consider related
 
 
 def _build_reflection_chain(conn, new_l6_id: int, agent_name: str, is_correction: bool, now: str) -> None:

@@ -27,7 +27,7 @@ _L10_PREFIX_RE = re.compile(r'^\[(L10|L10\s.*?)\]', re.DOTALL)
 
 
 # Semantic dedup: skip if Jaccard similarity ≥ this threshold vs any recent L10
-_SIMILARITY_THRESHOLD = 0.7
+_SIMILARITY_THRESHOLD = 0.85
 
 
 def _is_explicit_l10(content: str) -> bool:
@@ -169,7 +169,9 @@ def integrate_step(min_categories: int = 2) -> dict:
             for m_cat in (m["category"] for m in targets if m["category"]):
                 primary = m_cat.split("、")[0] if "、" in m_cat else m_cat
                 cat_counts[primary] = cat_counts.get(primary, 0) + 1
-            best_cat = max(cat_counts, key=cat_counts.get) if cat_counts else "general"
+            # I4: Combine categories instead of taking only majority
+            sorted_cats = sorted(cat_counts.keys(), key=lambda c: cat_counts[c], reverse=True)
+            best_cat = "+".join(sorted_cats[:3]) if sorted_cats else "general"
 
             merged = (
                 f"[L10 整合] {agent} 跨领域系统洞察（{best_cat}）：\n"

@@ -39,7 +39,7 @@ def _extract_matches(text: str, patterns: list) -> list:
     """Extract all (pattern_type, snippet) matches from text using relaxed matching."""
     results = []
     for pat, label in patterns:
-        for m in re.finditer(pat, text[:2000]):  # limit to first 2000 chars
+        for m in re.finditer(pat, text[:8000]):  # limit to first 8000 chars
             snippet = m.group(1).strip()[:100]
             if snippet and len(snippet) > 3:
                 results.append({"type": label, "snippet": snippet})

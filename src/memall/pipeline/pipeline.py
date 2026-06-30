@@ -34,12 +34,13 @@ def _coerce_int(val) -> int:
     if isinstance(val, dict):
         # Try common keys
         for k in ("processed", "count", "created", "total", "new",
-                  "personal_created", "global_created", "integrated"):
+                  "personal_created", "global_created", "integrated",
+                  "upgraded_to_l6", "scanned", "distilled"):
             v = val.get(k, None)
             if isinstance(v, int):
                 return v
-        # Fallback: return the dict itself
-        return val
+        # Fallback: return 0 (dict itself causes 'dict >= int' TypeError)
+        return 0
     return 0
 
 

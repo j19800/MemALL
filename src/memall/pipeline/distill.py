@@ -30,10 +30,10 @@ def distill_step() -> dict:
         distilled = 0
 
         for key, mems in groups.items():
-            if len(mems) < 3:
+            if len(mems) < 2:
                 continue
             mem_ids = [m["id"] for m in mems]
-            source_ids = mem_ids[:10]
+            source_ids = mem_ids[:20]
             ph = ",".join("?" * len(source_ids))
 
             # Extract common topics and merge related sentences
@@ -95,7 +95,7 @@ def distill_step() -> dict:
             l9_subject = f"[L9 蒸馏] {l9_subject}"
 
             # Majority project from source memories
-            source_ids = mem_ids[:10]
+            source_ids = mem_ids[:20]
             ph = ",".join("?" * len(source_ids))
             proj_row = conn.execute(f"SELECT project, COUNT(*) as cnt FROM memories WHERE id IN ({ph}) AND project IS NOT NULL AND project != '' GROUP BY project ORDER BY cnt DESC LIMIT 1", source_ids).fetchone()
             l9_project = proj_row["project"] if proj_row else ""
