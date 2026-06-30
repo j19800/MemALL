@@ -19,6 +19,7 @@ import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from memall.core.db import get_conn
+from memall.core.thin_waist import normalize_agent_name
 from memall.pipeline.util import _smart_subject
 
 _MIN_L9_COUNT = 2

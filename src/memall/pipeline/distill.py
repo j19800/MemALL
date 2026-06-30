@@ -23,7 +23,7 @@ def distill_step() -> dict:
 
         groups = defaultdict(list)
         for r in rows:
-            key = (r["agent_name"] or "unknown", r["category"] or "general")
+            key = (normalize_agent_name(r["agent_name"]) or "unknown", r["category"] or "general")
             groups[key].append(r)
 
         now = datetime.now(timezone.utc).isoformat()
