@@ -201,6 +201,7 @@ class AskRequest(BaseModel):
     mode: str = "stance"
     agent_name: Optional[str] = None
     scope: str = "local"
+    history: list = []
 
 class ForgetRequest(BaseModel):
     action: str = "all"

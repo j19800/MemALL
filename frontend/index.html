@@ -592,6 +592,7 @@ pre{font-family:inherit;white-space:pre-wrap;word-break:break-word}
     <div class="content" id="mainContent">
       <!-- ===== Dashboard ===== -->
       <div class="page active" id="page-dashboard">
+        <div class="error-banner" id="dashError" style="display:none;background:#7f1d1d;color:#fca5a5;padding:8px 16px;border-radius:6px;margin-bottom:12px;font-size:13px;"></div>
         <div class="stats-grid" id="dashStats">
           <div class="stat-card"><div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></div><div class="stat-value" id="statMemories">-</div><div class="stat-label">记忆总数</div></div>
           <div class="stat-card"><div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div><div class="stat-value" id="statAgents">-</div><div class="stat-label">Agent数量</div></div>
@@ -1180,11 +1181,16 @@ function doLoadDashboard(){
     // Load L6 reflection data
     loadReflectionData();
   }).catch(function(e){
-    // silent fail for auto-refresh
+    var errEl = document.getElementById('dashError');
+    if(errEl){
+      errEl.textContent = '⚠ 无法连接后端服务（' + (e.message||'网络错误') + '），5秒后重试';
+      errEl.style.display = 'block';
+    }
   });
 
   // Recent memories
   api('GET','/timeline?limit=10').then(function(data){
+    document.getElementById('dashError').style.display = 'none';
     var items = data.data || data.memories || data.results || data || [];
     if(!Array.isArray(items)) items = [];
     var tb = document.getElementById('recentTbody');

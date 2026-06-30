@@ -1,3 +1,10 @@
+## [v0.1.23] - 2026-06-30
+
+### Fixed
+
+- **聊天历史静默丢失**: `AskRequest` 新增 `history: list = []` 字段，前端 `POST /ask` 发送的 `{question, history}` 中 history 不再被 Pydantic 静默丢弃。 (`server.py`)
+- **仪表盘连接失败空白**: `doLoadDashboard()` 的 `.catch` 从静默失败改为展示红色错误条，提示"无法连接后端服务"。 (`frontend/index.html`)
+
 ## [v0.1.22] - 2026-06-29
 
 ### Changed

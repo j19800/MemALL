@@ -38,17 +38,18 @@ def handle_call(tool_name: str, arguments: dict) -> str:
         return format_validation_error(tool_name, err_msg)
     arguments = validated_data
 
-    if tool_name not in ("memall_session_start", "memall_session_end", "ping", "memall_onboarding"):
-        agent_name = arguments.get("agent_name", "")
-        if agent_name:
-            _READ_ONLY_TOOLS = frozenset({
-                "retrieve", "traverse", "timeline", "memall_vector_search",
-                "memall_fed_query", "memall_fed_conflicts", "memall_session_summary",
-                "memall_persona", "memall_persona_profile", "memall_ask",
-                "memall_identity", "memall_trace", "memall_discussion_status",
-                "memall_hub_connect", "memall_db",
-            })
-            ensure_session_started(agent_name, auto_inject=tool_name not in _READ_ONLY_TOOLS)
+    # Session-based tools (memall_system actions) that should not auto-start sessions
+    _SESSION_SKIP_TOOLS = frozenset({"ping", "memall_onboarding"})
+    _SESSION_SKIP_ACTIONS = frozenset({"session_start", "session_end", "session_summary"})
+
+    if tool_name not in _SESSION_SKIP_TOOLS:
+        action = arguments.get("action", "")
+        if action not in _SESSION_SKIP_ACTIONS:
+            agent_name = arguments.get("agent_name", "")
+            if agent_name:
+                from memall.mcp.shared import _READ_ONLY_ACTIONS
+                auto_inject = action not in _READ_ONLY_ACTIONS
+                ensure_session_started(agent_name, auto_inject=auto_inject)
 
     # Pre-tool-use hooks — can block the call
     pre_results = HookRegistry.dispatch(HOOK_PRE_TOOL_USE, tool_name, arguments)

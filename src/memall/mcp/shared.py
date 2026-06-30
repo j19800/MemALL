@@ -6,24 +6,29 @@ _AUTO_START_CACHE: dict[str, str] = {}
 _AUTO_START_COOLDOWN = 1800
 _PENDING_SESSION_NOTE: str | None = None
 
-_READ_ONLY_TOOLS = frozenset({
-    "retrieve", "traverse", "timeline", "memall_vector_search",
-    "memall_fed_query", "memall_fed_conflicts", "memall_session_summary",
-    "memall_persona", "memall_persona_profile", "memall_ask",
-    "memall_identity", "memall_trace", "memall_discussion_status",
-    "memall_hub_connect", "memall_db",
+# Actions that are read-only — no session auto-start needed
+_READ_ONLY_ACTIONS = frozenset({
+    "retrieve", "vector_search", "hybrid_search", "search", "trace",
+    "traverse", "timeline", "fed_query", "fed_conflicts",
+    "persona", "persona_profile", "identity", "ask",
+    "discussion_status", "hub_connect", "db", "index_rebuild",
+    "session_summary",
 })
 
-_INTERCEPT_SKIP = frozenset({
-    "capture", "memall_smart_store", "memall_store_batch",
-    "ping", "memall_session_start", "memall_session_end",
+# Tools/actions that skip intercept logging entirely
+_INTERCEPT_SKIP_TOOLS = frozenset({
     "memall_onboarding",
 })
+_INTERCEPT_SKIP_ACTIONS = frozenset({
+    "capture", "smart_store", "store_batch", "ping",
+    "session_start", "session_end",
+})
 
-_INTERCEPT_CONTEXT_TOOLS = frozenset({
-    "retrieve", "traverse", "timeline", "memall_vector_search",
-    "memall_db", "memall_security", "memall_fed_query",
-    "memall_session_summary",
+# Actions that log a simple [query] line
+_INTERCEPT_QUERY_ACTIONS = frozenset({
+    "retrieve", "search", "vector_search", "hybrid_search",
+    "traverse", "timeline", "fed_query", "session_summary",
+    "db",
 })
 
 
@@ -75,51 +80,71 @@ def write_intercept_log(tool_name: str, summary: str):
 
 
 def run_intercept(tool_name: str, arguments: dict):
-    if tool_name in _INTERCEPT_SKIP:
+    # Map consolidated tool names + action → old-style tool name for logging
+    action = arguments.get("action", "")
+    if action in _INTERCEPT_SKIP_ACTIONS:
         return
+    if tool_name in _INTERCEPT_SKIP_TOOLS:
+        return
+
     try:
         content = None
-        if tool_name in _INTERCEPT_CONTEXT_TOOLS:
-            query = arguments.get("query", arguments.get("question", ""))
-            if query:
-                content = f"[query] {tool_name}: {query[:200]}"
-        elif tool_name == "update":
-            mid = arguments.get("memory_id")
-            fields = [k for k in arguments if k != "memory_id"]
-            if mid and fields:
-                content = f"[update] updated #{mid}: {', '.join(fields)}"
-        elif tool_name == "connect":
-            src = arguments.get("source_id")
-            tgt = arguments.get("target_id")
-            rel = arguments.get("relation_type", "related")
-            if src and tgt:
-                content = f"[link] #{src} -{rel}-> #{tgt}"
-        elif tool_name == "memall_update":
-            mid = arguments.get("memory_id")
-            fields = [k for k in arguments if k != "memory_id" and k != "metadata"]
-            meta = arguments.get("metadata", "")
-            if "status" in meta and "done" in meta:
-                fields.append("status->done")
-            if mid and fields:
-                content = f"[update] #{mid}: {', '.join(fields)}"
-        elif tool_name in ("memall_forget", "memall_adaptive", "memall_ops"):
-            action = arguments.get("action", "")
-            if action:
-                content = f"[manage] {tool_name}: {action}"
-        elif tool_name == "memall_persona" or tool_name == "memall_persona_profile":
-            agent = arguments.get("agent_name", "")
-            if agent:
-                content = f"[profile] queried persona for {agent}"
-        elif tool_name == "memall_ask":
-            q = arguments.get("question", "")
-            subject = arguments.get("subject", arguments.get("agent_name", ""))
-            if q:
-                content = f"[ask] {subject}: {q[:200]}"
-        elif tool_name == "memall_traverse":
-            nid = arguments.get("node_id")
-            depth = arguments.get("depth", 1)
-            if nid:
-                content = f"[graph] traverse #{nid} depth={depth}"
+        if tool_name == "memall_read":
+            if action in _INTERCEPT_QUERY_ACTIONS:
+                query = arguments.get("query", "")
+                if query:
+                    content = f"[query] {action}: {query[:200]}"
+            elif action == "trace":
+                mid = arguments.get("memory_id")
+                if mid:
+                    content = f"[query] trace #{mid}"
+            elif action == "traverse":
+                nid = arguments.get("node_id")
+                depth = arguments.get("depth", 1)
+                if nid:
+                    content = f"[graph] traverse #{nid} depth={depth}"
+
+        elif tool_name == "memall_write":
+            if action == "update":
+                mid = arguments.get("memory_id")
+                fields = [k for k in arguments if k not in ("memory_id", "metadata", "action")]
+                meta = arguments.get("metadata", "")
+                if "status" in meta and "done" in meta:
+                    fields.append("status->done")
+                if mid and fields:
+                    content = f"[update] #{mid}: {', '.join(fields)}"
+            elif action == "connect":
+                src = arguments.get("source_id")
+                tgt = arguments.get("target_id")
+                rel = arguments.get("relation_type", "related")
+                if src and tgt:
+                    content = f"[link] #{src} -{rel}-> #{tgt}"
+            elif action in ("forget", "ops"):
+                sub = arguments.get("sub_action", "")
+                if sub:
+                    content = f"[manage] {action}: {sub}"
+
+        elif tool_name == "memall_persona":
+            if action in ("persona", "persona_profile"):
+                agent = arguments.get("agent_name", "")
+                if agent:
+                    content = f"[profile] queried {action} for {agent}"
+            elif action == "ask":
+                q = arguments.get("question", "")
+                subject = arguments.get("subject", arguments.get("agent_name", ""))
+                if q:
+                    content = f"[ask] {subject}: {q[:200]}"
+
+        elif tool_name == "memall_system":
+            if action in ("security", "adaptive"):
+                sub = arguments.get("sub_action", "")
+                if sub:
+                    content = f"[manage] {action}: {sub}"
+            elif action == "reflect":
+                mid = arguments.get("memory_id")
+                sub = arguments.get("sub_action", "")
+                if mid and sub:
+                    content = f"[reflect] #{mid} => {sub}"
 
         if content and len(content) > 15:
             write_intercept_log(tool_name, content)
