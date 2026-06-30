@@ -1,3 +1,13 @@
+## [v0.1.29] - 2026-06-30
+
+### Changed
+- **pyproject.toml 版本 0.1.4 → 0.1.29**: 同步 PyPI 包版本至最新 changelog 版本。(`pyproject.toml`)
+
+### Fixed
+
+- **distill GROUP BY 使用原始 agent_name**: `distill.py` line 26 GROUP BY key 直接使用 `r["agent_name"]` 而非 `normalize_agent_name(r["agent_name"])`，导致 `system.agent_name` 和 `system` 形成独立分组 → L9 产生重复/噪声。修复后 1263 条系统代理噪声清理完毕（458 L9 + 44 L10 删除，992 条目重命名）。(`pipeline/distill.py`)
+- **integrate.py normalize_agent_name 未 import**: `integrate.py` 调用 `normalize_agent_name()` 但从未 import，任何 integrate 运行都会 NameError 崩溃。(`pipeline/integrate.py`)
+
 ## [v0.1.28] - 2026-06-30
 
 ### Fixed

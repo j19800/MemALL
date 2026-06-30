@@ -7,7 +7,7 @@ packages = ["src/memall"]
 
 [project]
 name = "memall-os"
-version = "0.1.4"
+version = "0.1.29"
 description = "Multi-agent collaborative memory OS"
 readme = "README.md"
 license = { text = "MIT" }
