@@ -1,3 +1,10 @@
+## [v0.1.25] - 2026-06-30
+
+### Docs
+
+- **README 同步 42→6 工具数**: 更新 README.md 和 README.zh-CN.md 中所有"42 工具"引用为"6 个合并工具"（副标题、节标题、项目结构、路线图）。 (`README.md`, `README.zh-CN.md`)
+- **MemALL_Function_Spec.md 同步工具名**: 更新 `memall_forget`→`memall_write action=forget`、`memall_adaptive`→`memall_system action=adaptive`、`memall_db`→`memall_system action=db`。 (`MemALL_Function_Spec.md`)
+
 ## [v0.1.24] - 2026-06-30
 
 ### Added

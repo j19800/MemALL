@@ -304,13 +304,13 @@ MCP 协议层将 MemALL 的所有功能暴露为标准化的 MCP 工具，任何
 
 | 工具 | 功能 | 特性 |
 |------|------|------|
-| `memall_forget` | 自动遗忘 | TTL 过期(90天) + 低值(<30字+7天) + 预览审查 + 自动备份 |
+| `memall_write action=forget` | 自动遗忘 | TTL 过期(90天) + 低值(<30字+7天) + 预览审查 + 自动备份 |
 
 #### 自适应（1 个）
 
 | 工具 | 功能 | 特性 |
 |------|------|------|
-| `memall_adaptive` | 自适应子系统 | 动态清洗(aggressive/standard/compression) + 动态索引 + 动态蒸馏 |
+| `memall_system action=adaptive` | 自适应子系统 | 动态清洗(aggressive/standard/compression) + 动态索引 + 动态蒸馏 |
 
 #### 安全治理（1 个）
 
@@ -334,7 +334,7 @@ MCP 协议层将 MemALL 的所有功能暴露为标准化的 MCP 工具，任何
 
 | 工具 | 功能 | 特性 |
 |------|------|------|
-| `memall_db` | 数据库维护 | optimize/stats/vacuum |
+| `memall_system action=db` | 数据库维护 | optimize/stats/vacuum |
 
 ---
 

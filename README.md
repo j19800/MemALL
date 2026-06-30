@@ -9,7 +9,7 @@
 <p align="center"><strong>Multi-agent Memory OS</strong> — 本地优先的 AI Agent 持久化记忆系统</p>
 
 <p align="center">
-  <i>42 MCP tools · 11-layer memory lifecycle · 24-step self-evolving pipeline · Knowledge graph · Multi-agent shared memory</i>
+  <i>6 MCP tools · 11-layer memory lifecycle · 24-step self-evolving pipeline · Knowledge graph · Multi-agent shared memory</i>
 </p>
 
 <p align="center">
@@ -113,7 +113,7 @@ SQLite + FTS5 + vector search. Zero cloud dependency. Your data stays on your ma
 
 ---
 
-## 🛠️ 42 MCP Tools
+## 🛠️ 6 MCP Tools
 
 | Category | Tools |
 |----------|-------|
@@ -189,7 +189,7 @@ src/memall/
 ├── cli/          # CLI (40+ commands)
 ├── core/         # SQLite / NLP / vector search / event processor / echo scoring
 ├── api/          # FastAPI REST (35 routes)
-├── mcp/          # MCP adapter (42 tools)
+├── mcp/          # MCP adapter (6 consolidated tools)
 ├── pipeline/     # 24-step auto pipeline + 5 optional
 │   ├── observe/  # OODA observation step
 │   ├── distill/  # L9/L10/L11 distillation, L7 preference, epoch detection
@@ -205,7 +205,7 @@ src/memall/
 
 ## 📝 Roadmap
 
-- [x] **v0.1.0** — Core MCP server, 42 tools, CLI, PyPI package
+- [x] **v0.1.0** — Core MCP server, 6 consolidated tools, CLI, PyPI package
 - [ ] **v0.2.0** — Web dashboard, user system, Pro tier gating
 - [ ] **v0.3.0** — Cloud sync, team collaboration, API gateway
 

@@ -9,7 +9,7 @@
 <p align="center"><strong>Multi-agent Memory OS</strong> — 本地优先的 AI Agent 持久化记忆系统</p>
 
 <p align="center">
-  <i>42 个 MCP 工具 · 11 层记忆生命周期 · 24 步自进化管线 · 知识图谱 · 多 Agent 共享记忆</i>
+  <i>6 个 MCP 工具 · 11 层记忆生命周期 · 24 步自进化管线 · 知识图谱 · 多 Agent 共享记忆</i>
 </p>
 
 <p align="center">
@@ -113,7 +113,7 @@ SQLite + FTS5 + 向量搜索。零云端依赖。数据留在你的机器上。
 
 ---
 
-## 🛠️ 42 个 MCP 工具
+## 🛠️ 6 个 MCP 工具
 
 | 分类 | 工具 |
 |------|------|
@@ -189,7 +189,7 @@ src/memall/
 ├── cli/          # CLI（40+ 命令）
 ├── core/         # SQLite / NLP / 向量搜索 / 事件处理器 / echo 评分
 ├── api/          # FastAPI REST（35 路由）
-├── mcp/          # MCP 适配器（42 工具）
+├── mcp/          # MCP 适配器（6 个合并工具）
 ├── pipeline/     # 24 步自动管线 + 5 可选步
 │   ├── observe/  # OODA 观察步
 │   ├── distill/  # L9/L10/L11 蒸馏、L7 偏好、epoch 检测
@@ -205,7 +205,7 @@ src/memall/
 
 ## 📝 路线图
 
-- [x] **v0.1.0** — 核心 MCP 服务器、42 工具、CLI、PyPI 包
+- [x] **v0.1.0** — 核心 MCP 服务器、6 个合并工具、CLI、PyPI 包
 - [ ] **v0.2.0** — Web 仪表盘、用户系统、Pro 版
 - [ ] **v0.3.0** — 云同步、团队协作、API 网关
 
