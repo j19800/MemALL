@@ -48,13 +48,11 @@ def handle_session_start(arguments: dict) -> str:
     injection = (result or {}).get("injection") or {}
     l7_text = _format_l7_instructions(injection)
 
+    # Always return pure JSON — put L7 text inside the result dict
+    # so server.py json.loads() doesn't break on mixed text+JSON.
     if l7_text:
-        # Prefix the JSON with a prominent text block so Claude reads L7 first
-        return (
-            f"{l7_text}\n"
-            f"── session data ──\n"
-            f"{json.dumps(result, ensure_ascii=False, default=str)}"
-        )
+        result["l7_instructions"] = l7_text
+
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
