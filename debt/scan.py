@@ -144,13 +144,23 @@ def _has_whitelist_validation(text: str, pos: int) -> bool:
     return False
 
 def _has_try_except(text: str, pos: int) -> bool:
-    """检查匹配位置是否在 try/except 块内。"""
+    """检查匹配位置是否在 try/except 块内。
+
+    找到 pos 之前的最后一个 try:，再找到该 try 之后的第一个 except，
+    如果 pos 在 try: 和 except: 之间，则视为在 try 块内。
+    """
     before = text[:pos]
-    # Count try/except nesting roughly
-    tries = len(re.findall(r'\btry\s*:', before))
-    excepts = len(re.findall(r'\bexcept\b', before))
-    # Account for the current except if the match is after it
-    return tries > excepts
+    after = text[pos:]
+    # Find last try: before pos
+    try_matches = list(re.finditer(r'\btry\s*:', before))
+    if not try_matches:
+        return False
+    last_try = try_matches[-1]
+    # Search for first except: AFTER pos (not before)
+    except_match = re.search(r'\bexcept\b', after)
+    # If pos is between try: (in before) and except: (in after),
+    # it's inside the try block
+    return except_match is not None
 
 # ── 验证函数 ──
 
@@ -346,8 +356,8 @@ def count_lines() -> int:
             continue
         try:
             total += len(py_file.read_text(encoding="utf-8", errors="replace").splitlines())
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  skipped unreadable file {py_file}: {e}")
     return total
 
 

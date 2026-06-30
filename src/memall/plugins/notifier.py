@@ -106,6 +106,29 @@ def watch_anomaly() -> Optional[dict]:
     return None
 
 
+def on_step_fail(**kwargs) -> None:
+    """Send a notification when a pipeline step fails."""
+    step = kwargs.get("step_name", "?")
+    error = kwargs.get("error", "?")
+    send_notification(
+        f"MemALL — Step Failed: {step}",
+        error,
+        level="error",
+    )
+
+
+def on_pipeline(**kwargs) -> None:
+    """Send a notification when a long pipeline completes."""
+    elapsed = kwargs.get("elapsed", 0)
+    status = kwargs.get("status", "?")
+    if elapsed > 30:  # only notify for long runs
+        send_notification(
+            f"MemALL — Pipeline {status}",
+            f"Elapsed: {elapsed:.1f}s",
+            level="info",
+        )
+
+
 def register():
     """Return plugin metadata."""
     return {

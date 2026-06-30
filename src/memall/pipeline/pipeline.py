@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from .metrics import collect_metrics, append_metrics
 from memall.core.db import get_conn
 from memall.core.tracer import span as trace_span
-from memall.mcp.hooks import HookRegistry, HOOK_STOP
+from memall.mcp.hooks import HookRegistry, HOOK_STOP, dispatch_lifecycle
+from memall.mcp.hooks import HOOK_PRE_PIPELINE, HOOK_POST_PIPELINE
+from memall.mcp.hooks import HOOK_PRE_STEP, HOOK_STEP_OK, HOOK_STEP_FAIL
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +64,8 @@ def _count_memories(conn=None) -> int:
         if conn is not None:
             try:
                 conn.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to close lingering connection in cleanup: {e}")
 
 
 def _check_quality_gate(step_name: str, entry: dict, gate: dict) -> dict:
@@ -122,6 +124,7 @@ def _run_step(step_name: str, step_fn, step_results: dict,
     start = time.time()
     records_before = _count_memories(conn)
     try:
+        dispatch_lifecycle(HOOK_PRE_STEP, step_name=step_name, records_before=records_before)
         with trace_span(f"pipeline.{step_name}", "pipeline_step", {"step": step_name}):
             result = step_fn()
         elapsed_ms = int((time.time() - start) * 1000)
@@ -141,12 +144,15 @@ def _run_step(step_name: str, step_fn, step_results: dict,
             entry["quality"] = _check_quality_gate(step_name, entry, quality_gate)
 
         step_results[step_name] = result  # store original result (int or dict)
+        dispatch_lifecycle(HOOK_STEP_OK, step_name=step_name, entry=entry)
         logger.info("Pipeline step %s: %dms, result=%s", step_name, elapsed_ms, entry["result"])
         return entry
     except Exception as e:
         elapsed_ms = int((time.time() - start) * 1000)
         logger.error("Pipeline step '%s' failed after %dms: %s", step_name, elapsed_ms, e)
         step_results[step_name] = 0
+        dispatch_lifecycle(HOOK_STEP_FAIL, step_name=step_name, error=str(e)[:300],
+                           elapsed_ms=elapsed_ms)
         return {
             "step": step_name,
             "status": "failed",
@@ -350,6 +356,8 @@ def run_pipeline(
     if dry_run:
         return {"status": "dry_run", "results": results, "elapsed": 0}
 
+    dispatch_lifecycle(HOOK_PRE_PIPELINE, dry_run=dry_run)
+
     run_id = _create_pipeline_run()
     pipeline_conn = get_conn()
 
@@ -407,8 +415,8 @@ def run_pipeline(
             _tc.execute("DELETE FROM tracing_spans WHERE created_at < datetime('now', '-7 days')")
             _tc.commit()
             _tc.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"tracing_spans cleanup failed (non-fatal): {e}")
 
         # ── Metrics ──
         metrics = collect_metrics()
@@ -430,9 +438,10 @@ def run_pipeline(
     finally:
         try:
             pipeline_conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to close pipeline_conn in finally: {e}")
 
     elapsed = time.time() - _pipeline_start_time
+    dispatch_lifecycle(HOOK_POST_PIPELINE, status="completed", results=results, elapsed=elapsed)
     HookRegistry.dispatch(HOOK_STOP, arguments={"results": results, "elapsed": elapsed})
     return {"status": "ok", "results": results, "elapsed": elapsed}

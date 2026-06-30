@@ -87,8 +87,8 @@ def collect() -> dict:
                     slowest = max(steps_list, key=lambda s: s.get("elapsed_ms", 0) or 0)
                     slowest_step_label = f"{slowest['step']}({slowest['elapsed_ms']}ms)"
                     slowest_ms = slowest.get("elapsed_ms", 0)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to parse slowest step from completed steps JSON: {e}")
 
         # DB size
         db_path = get_db_path()

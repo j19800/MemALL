@@ -19,35 +19,38 @@ def apply(conn):
     # but the code now stores JSON arrays ("[1,2,3]").  We must disable FK
     # enforcement during migration because setting a TEXT value in a column
     # declared as INTEGER REFERENCES would otherwise fail.
+    fk_was_on = conn.execute("PRAGMA foreign_keys").fetchone()[0]
     conn.execute("PRAGMA foreign_keys=OFF")
-
-    # 1. Migrate existing data
-    rows = conn.execute("SELECT id, supersedes FROM memories").fetchall()
-    updated = 0
-    for row in rows:
-        mid = row["id"]
-        raw = row["supersedes"]
-        if raw is None or raw == "":
-            new_val = "[]"
-        elif isinstance(raw, str) and raw.startswith("["):
-            try:
-                parsed = json.loads(raw)
-                if not isinstance(parsed, list):
-                    new_val = json.dumps([parsed])
-                else:
-                    new_val = raw  # already valid
-            except (json.JSONDecodeError, TypeError):
+    try:
+        # 1. Migrate existing data
+        rows = conn.execute("SELECT id, supersedes FROM memories").fetchall()
+        updated = 0
+        for row in rows:
+            mid = row["id"]
+            raw = row["supersedes"]
+            if raw is None or raw == "":
                 new_val = "[]"
-        elif isinstance(raw, str):
-            # Comma-separated: "1,2,3" or "1" or " 1 , 2 "
-            parts = [int(p.strip()) for p in raw.split(",") if p.strip().isdigit()]
-            new_val = json.dumps(parts)
-        elif isinstance(raw, (int, float)):
-            new_val = json.dumps([int(raw)])
-        else:
-            new_val = "[]"
-        conn.execute("UPDATE memories SET supersedes = ? WHERE id = ?", (new_val, mid))
-        updated += 1
+            elif isinstance(raw, str) and raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if not isinstance(parsed, list):
+                        new_val = json.dumps([parsed])
+                    else:
+                        new_val = raw  # already valid
+                except (json.JSONDecodeError, TypeError):
+                    new_val = "[]"
+            elif isinstance(raw, str):
+                # Comma-separated: "1,2,3" or "1" or " 1 , 2 "
+                parts = [int(p.strip()) for p in raw.split(",") if p.strip().isdigit()]
+                new_val = json.dumps(parts)
+            elif isinstance(raw, (int, float)):
+                new_val = json.dumps([int(raw)])
+            else:
+                new_val = "[]"
+            conn.execute("UPDATE memories SET supersedes = ? WHERE id = ?", (new_val, mid))
+            updated += 1
 
-    conn.commit()
-    return updated
+        conn.commit()
+        return updated
+    finally:
+        conn.execute(f"PRAGMA foreign_keys={'ON' if fk_was_on else 'OFF'}")

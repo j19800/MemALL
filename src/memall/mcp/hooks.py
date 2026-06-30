@@ -14,6 +14,38 @@ HOOK_STOP = "stop"
 HOOK_SESSION_START = "session_start"
 HOOK_SESSION_END = "session_end"
 
+# ── Lifecycle hook constants ──
+HOOK_PRE_CAPTURE = "pre_capture"
+HOOK_POST_CAPTURE = "post_capture"
+HOOK_PRE_STORE = "pre_store"
+HOOK_POST_STORE = "post_store"
+HOOK_PRE_RETRIEVE = "pre_retrieve"
+HOOK_POST_RETRIEVE = "post_retrieve"
+HOOK_PRE_SEARCH = "pre_search"
+HOOK_POST_SEARCH = "post_search"
+HOOK_PRE_PIPELINE = "pre_pipeline"
+HOOK_POST_PIPELINE = "post_pipeline"
+HOOK_PRE_STEP = "pre_step"
+HOOK_STEP_OK = "step_ok"
+HOOK_STEP_FAIL = "step_fail"
+
+# Mapping from lifecycle hook points to plugin function names
+_HOOK_TO_PLUGIN: dict[str, str] = {
+    HOOK_PRE_CAPTURE: "on_pre_capture",
+    HOOK_POST_CAPTURE: "on_capture",
+    HOOK_PRE_STORE: "on_pre_store",
+    HOOK_POST_STORE: "on_store",
+    HOOK_PRE_RETRIEVE: "on_pre_retrieve",
+    HOOK_POST_RETRIEVE: "on_retrieve",
+    HOOK_PRE_SEARCH: "on_pre_search",
+    HOOK_POST_SEARCH: "on_search",
+    HOOK_PRE_PIPELINE: "on_pre_pipeline",
+    HOOK_POST_PIPELINE: "on_pipeline",
+    HOOK_PRE_STEP: "on_pre_step",
+    HOOK_STEP_OK: "on_step_ok",
+    HOOK_STEP_FAIL: "on_step_fail",
+}
+
 
 @dataclass
 class HookDef:
@@ -105,3 +137,40 @@ def hook(
         ))
         return fn
     return decorator
+
+
+def dispatch_lifecycle(hook_point: str, blocking: bool = False, **kwargs) -> bool:
+    """Dispatch a lifecycle event to both HookRegistry hooks and plugin hooks.
+
+    This bridges the HookRegistry (MCP-oriented) and the plugin system.
+    Plugin hooks are loaded lazily via ``run_plugin_hook`` to avoid circular
+    imports.
+
+    Args:
+        hook_point: The lifecycle hook constant (HOOK_*).
+        blocking: If True, any handler returning False will abort the operation.
+        **kwargs: Contextual data passed to handlers.
+
+    Returns:
+        True to proceed, False if a blocking hook returned False.
+    """
+    # 1. HookRegistry dispatch (existing mechanism)
+    results = HookRegistry.dispatch(hook_point, extra=kwargs)
+    if blocking and any(r is False for r in results):
+        return False
+
+    # 2. Plugin hooks (lazy import to avoid circular dependencies)
+    plugin_func = _HOOK_TO_PLUGIN.get(hook_point)
+    if plugin_func:
+        try:
+            from memall.plugins.loader import run_plugin_hook  # noqa: F811
+            plugin_results = run_plugin_hook(plugin_func, **kwargs)
+            if blocking and any(r is False for r in plugin_results):
+                return False
+        except Exception:
+            logger.exception(
+                "Plugin hook %s failed for hook_point=%s",
+                plugin_func, hook_point,
+            )
+
+    return True

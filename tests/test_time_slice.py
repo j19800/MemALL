@@ -133,7 +133,7 @@ def test_temporal_weight_formula():
 
         conn = get_conn()
         rows = conn.execute(
-            "SELECT id, content, metadata FROM memories WHERE agent_name = 'carol' ORDER BY id"
+            "SELECT id, content, metadata FROM memories WHERE agent_name = 'carol' ORDER BY id LIMIT 1000"
         ).fetchall()
         assert len(rows) == 2
 

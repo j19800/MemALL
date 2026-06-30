@@ -2093,7 +2093,7 @@ def export_bundle(agent_name: str, fmt: str = "json") -> Dict[str, Any]:
     try:
         # ── Memories ──
         mem_rows = conn.execute(
-            "SELECT * FROM memories WHERE agent_name = ? ORDER BY id",
+            "SELECT * FROM memories WHERE agent_name = ? ORDER BY id LIMIT 1000",
             (agent_name,),
         ).fetchall()
         memories = [dict(r) for r in mem_rows]

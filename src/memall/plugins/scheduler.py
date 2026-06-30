@@ -211,6 +211,13 @@ def create_default_scheduler() -> TaskScheduler:
     return sched
 
 
+def on_pipeline(**kwargs) -> None:
+    """Log pipeline completion for scheduler visibility."""
+    status = kwargs.get("status", "?")
+    elapsed = kwargs.get("elapsed", 0)
+    logger.info("Pipeline %s finished in %.1fs", status, elapsed)
+
+
 def register():
     """Return plugin metadata."""
     return {

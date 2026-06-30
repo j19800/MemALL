@@ -8,6 +8,9 @@ from typing import Optional
 
 from memall.core.db import get_conn
 
+# In-memory capture counter for hook tracking
+_capture_count: int = 0
+
 
 def generate_dashboard(output_path: Optional[str] = None) -> str:
     """Generate a self-contained HTML dashboard with stats, charts, and timeline.
@@ -197,6 +200,22 @@ tr:last-child td {{ border-bottom:none; }}
 
 
 # Plugin metadata
+def on_capture(**kwargs) -> None:
+    """Increment in-memory capture counter (displayed on dashboard)."""
+    global _capture_count
+    _capture_count += 1
+
+
+def on_pipeline(**kwargs) -> None:
+    """Record pipeline run summary as a module-level dict (for dashboard)."""
+    global _last_pipeline
+    _last_pipeline = {
+        "status": kwargs.get("status"),
+        "results": kwargs.get("results"),
+        "elapsed": kwargs.get("elapsed"),
+    }
+
+
 def register():
     """Return plugin metadata."""
     return {

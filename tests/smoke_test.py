@@ -8,9 +8,10 @@ distill → reflect → converge → forget → pipeline dry-run → identity �
 graph → config → MCP hooks → archive → db maintenance.
 """
 
-import os, sys, json, time, hashlib
+import os, sys, json, time, hashlib, logging
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+logger = logging.getLogger("smoke_test")
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,8 +63,8 @@ def cleanup():
     import shutil
     try:
         shutil.rmtree(TMPDIR, ignore_errors=True)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to clean tmpdir {TMPDIR}: {e}")
 
 # ═══════════════════════════════════════════════════════════════════
 # 1. Imports
@@ -139,7 +140,7 @@ except Exception as e:
 if conn:
     try:
         tables = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name LIMIT 1000"
         ).fetchall()
         table_names = [r[0] for r in tables]
         expected = {"memories", "edges", "identities", "clusters",

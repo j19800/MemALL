@@ -13,6 +13,10 @@ from typing import Any, Dict, List, Optional
 
 from memall.core.db import get_conn
 
+# ── Hook support ───────────────────────────────────────────────────────
+_export_counter: int = 0
+_EXPORT_INTERVAL = 10  # auto-export every N captures
+
 
 def _get_agent_memories(agent_name: str) -> List[Dict[str, Any]]:
     """Fetch all memories + edges for a given agent, ordered by time descending."""
@@ -283,6 +287,23 @@ function filter() {{
         f.write(html)
 
     return str(Path(output_path).resolve())
+
+
+def on_capture(**kwargs) -> None:
+    """Auto-export every N captures to JSONL."""
+    global _export_counter
+    _export_counter += 1
+    if _export_counter % _EXPORT_INTERVAL != 0:
+        return
+    agent = kwargs.get("data", None)
+    agent_name = getattr(agent, "agent_name", None) if agent else None
+    if not agent_name:
+        return
+    try:
+        path = export_jsonl(agent_name)
+        logger.info("Auto-exported %s to %s", agent_name, path)
+    except Exception:
+        logger.exception("Auto-export failed for %s", agent_name)
 
 
 def register():

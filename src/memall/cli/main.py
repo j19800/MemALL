@@ -30,7 +30,7 @@ from memall.cli.commands.management_commands import (
     cmd_serve, cmd_db,
     cmd_setup, cmd_register, cmd_uninstall, cmd_backup,
     cmd_restore, cmd_export, cmd_import, cmd_sync, cmd_mcp_connect,
-    cmd_arcs,
+    cmd_arcs, cmd_hook_list, cmd_hook_register,
 )
 
 configure_logging()
@@ -458,6 +458,20 @@ def app():
     p_arcs_close.set_defaults(func=cmd_arcs)
     p_arcs_stale = p_arcs_sub.add_parser("stale", help="List stale decisions (>21d no activity)")
     p_arcs_stale.set_defaults(func=cmd_arcs)
+
+    # ── hook (Lifecycle Hooks) ──
+    p_hook = sub.add_parser("hook", help="Manage lifecycle hooks")
+    p_hook_sub = p_hook.add_subparsers(dest="action")
+    p_hook_list = p_hook_sub.add_parser("list", help="List registered hooks")
+    p_hook_list.set_defaults(func=cmd_hook_list)
+    p_hook_reg = p_hook_sub.add_parser("register", help="Register a lifecycle hook")
+    p_hook_reg.add_argument("hook_point", help="Hook point name (e.g. post_capture)")
+    p_hook_reg.add_argument("--action", choices=["log", "print"], default="log",
+                            help="Handler action (default: log)")
+    p_hook_reg.add_argument("--matcher", default="*", help="Tool name matcher (default: *)")
+    p_hook_reg.add_argument("--description", default="", help="Human-readable description")
+    p_hook_reg.add_argument("--blocking", action="store_true", help="Blocking hook (can abort)")
+    p_hook_reg.set_defaults(func=cmd_hook_register)
 
     # Compatibility aliases: 57 legacy actions -> redirect messages
     alias_map = {"add": "capture", "store": "capture", "link": "connect", "history": "timeline",

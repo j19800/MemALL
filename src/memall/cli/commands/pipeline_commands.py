@@ -2,6 +2,7 @@
 suggest, bridge, ask, adaptive, security, ops."""
 
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from memall.core.db import get_conn
 from memall.core.thin_waist import retrieve
 from memall.pipeline import run_pipeline
 from memall.pipeline.persona import generate_persona, persona_step, generate_profile_3layer
+
+logger = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────
@@ -927,8 +930,8 @@ def cmd_dream(args):
                     try:
                         raw = r["metadata"]
                         meta = json.loads(raw) if raw and raw.strip() else {}
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Failed to parse decision metadata (using default): {e}")
                     verdict = meta.get("verdict", "undecided")
                     badge = {"newer_wins": "✓", "older_wins": "←", "undecided": "?"}.get(verdict, "?")
                     src_snip = (r["src_content"] or "")[:60].replace("\n", " ")

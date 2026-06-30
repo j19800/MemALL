@@ -60,8 +60,8 @@ def _get_api_token() -> str:
     try:
         from memall.config import get_config
         return get_config("gateway.secret_key", "")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to read gateway.secret_key from config: {e}; falling back to token file")
     token_file = Path.home() / ".memall" / "api_token.txt"
     if token_file.exists():
         return token_file.read_text(encoding="utf-8").strip()

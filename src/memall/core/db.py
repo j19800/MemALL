@@ -550,15 +550,15 @@ def pool_conn(db_path: "str | None" = None):
     except Exception:
         try:
             conn.rollback()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Rollback failed during exception path: {e}")
         raise
     finally:
         if not _sys.exc_info()[0]:
             try:
                 conn.commit()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Commit failed in pool_conn finally: {e}")
         pool.put(conn)
 
 

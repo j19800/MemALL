@@ -8,6 +8,11 @@ from .db import get_pool, content_hash
 from .models import Memory, MemoryInput
 from .nlp import cosine_sim, compute_tfidf
 from memall.graph.embeddings import EMBED_DIM
+from memall.mcp.hooks import (dispatch_lifecycle, HOOK_PRE_CAPTURE,
+                              HOOK_POST_CAPTURE, HOOK_PRE_STORE,
+                              HOOK_POST_STORE, HOOK_PRE_RETRIEVE,
+                              HOOK_POST_RETRIEVE, HOOK_PRE_SEARCH,
+                              HOOK_POST_SEARCH)
 
 logger = logging.getLogger(__name__)
 
@@ -274,6 +279,9 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
     if not data.owner:
         data.owner = data.agent_name
 
+    # Pre-capture lifecycle hook (blocking — can abort capture)
+    dispatch_lifecycle(HOOK_PRE_CAPTURE, blocking=True, data=data)
+
     # Auto-generate subject if not provided by caller
     if not data.subject:
         data.subject = _make_subject(data.content, data.category, data.level, data.agent_name, data.owner)
@@ -482,6 +490,7 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
         except Exception:
             logger.debug("capture: dream scan skipped (non-fatal)", exc_info=True)
 
+        dispatch_lifecycle(HOOK_POST_CAPTURE, data=data, memory_id=mem_id)
         return mem_id
 
 
@@ -584,6 +593,7 @@ def update(memory_id: int, **fields) -> bool:
 
 
 def retrieve(query=None, viewer=None, **filters) -> list | Memory | None:
+    dispatch_lifecycle(HOOK_PRE_RETRIEVE, query=query, viewer=viewer, filters=filters)
     with _pool_conn() as conn:
         if isinstance(query, int) or (isinstance(query, str) and query.isdigit()):
             rid = int(query)
@@ -592,7 +602,10 @@ def retrieve(query=None, viewer=None, **filters) -> list | Memory | None:
             cur = conn.execute("SELECT * FROM memories WHERE id = ?", (rid,))
             row = cur.fetchone()
             if row:
-                return _row_to_memory(row)
+                result = _row_to_memory(row)
+                dispatch_lifecycle(HOOK_POST_RETRIEVE, query=query, result=result)
+                return result
+            dispatch_lifecycle(HOOK_POST_RETRIEVE, query=query, result=None)
             return None
 
         where = ["1=1"]
@@ -642,6 +655,7 @@ def retrieve(query=None, viewer=None, **filters) -> list | Memory | None:
         if viewer:
             results = _filter_by_trust(conn, results, viewer)
 
+        dispatch_lifecycle(HOOK_POST_RETRIEVE, query=query, results=results)
         return results
 
 
@@ -995,12 +1009,17 @@ def smart_store(content: str, owner: str = "", agent_name: str = "",
 
     Returns {"id": memory_id, "status": "new"|"duplicate"}."""
 
+    # Pre-store lifecycle hook
+    dispatch_lifecycle(HOOK_PRE_STORE, content=content, owner=owner, agent_name=agent_name)
+
     # Check exact hash first
     h = content_hash(content)
     with _pool_conn() as conn:
         existing = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (h,)).fetchone()
         if existing:
-            return {"id": existing["id"], "status": "duplicate", "reason": "exact_hash"}
+            result = {"id": existing["id"], "status": "duplicate", "reason": "exact_hash"}
+            dispatch_lifecycle(HOOK_POST_STORE, result=result)
+            return result
 
         # Semantic dedup: compare against recent memories
         recent = conn.execute(
@@ -1018,13 +1037,17 @@ def smart_store(content: str, owner: str = "", agent_name: str = "",
                         if sim_i > sim:
                             sim = sim_i
                 if sim >= dedup_threshold:
-                    return {"id": recent[0]["id"], "status": "duplicate", "reason": f"semantic_similarity_{sim:.2f}"}
+                    result = {"id": recent[0]["id"], "status": "duplicate", "reason": f"semantic_similarity_{sim:.2f}"}
+                    dispatch_lifecycle(HOOK_POST_STORE, result=result)
+                    return result
 
         mid = capture(MemoryInput(
             content=content, owner=owner, agent_name=agent_name,
             subject=subject, project=project, category=category, level=level,
         ))
-        return {"id": mid, "status": "new"}
+        result = {"id": mid, "status": "new"}
+        dispatch_lifecycle(HOOK_POST_STORE, result=result)
+        return result
 
 
 def store_batch(items: list) -> dict:
@@ -1253,6 +1276,9 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
     if rrf_k is None:
         rrf_k = get_config("search.rrf_k", 60)
 
+    dispatch_lifecycle(HOOK_PRE_SEARCH, query=query, top_k=top_k, rrf_k=rrf_k,
+                       category=category, level=level, owner=owner)
+
     def _apply_meta_filters(rows: list) -> list:
         filtered = rows
         if category:
@@ -1356,6 +1382,8 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
         else:
             sorted_results = sorted_results[:top_k]
 
+        dispatch_lifecycle(HOOK_POST_SEARCH, query=query, results=sorted_results,
+                           total=len(scores), fts_hits=len(fts_rows), vec_hits=len(vec_rows))
         return {
             "query": query,
             "mode": "hybrid_rerank" if rerank else "hybrid_rrf",

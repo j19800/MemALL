@@ -341,7 +341,7 @@ def test_epoch_closure_rate():
         arc_rows = conn.execute(
             "SELECT id, level, category, subject, agent_name, created_at, arc_status "
             "FROM memories WHERE level = 'L4' AND arc_status IS NOT NULL "
-            "AND agent_name = ? ORDER BY created_at DESC",
+            "AND agent_name = ? ORDER BY created_at DESC LIMIT 1000",
             ("arc_test",),
         ).fetchall()
 

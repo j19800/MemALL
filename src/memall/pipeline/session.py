@@ -183,8 +183,8 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
                 if words:
                     wf = Counter(w for w in words)
                     distinctive_words = [w for w, _ in wf.most_common(8) if wf[w] >= 2]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to extract distinctive words from session_text: {e}")
 
         l6_parts = [f"会话总结：本次会话记录了 {count} 条记忆"]
         if cat_summary:
@@ -495,8 +495,8 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                             if nd > 0:
                                 cont += f" {nd}dec"
                         fmt_parts.append(cont)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to build CONTINUITY narrative line: {e}")
 
             # [NARRATIVE] greeting
             narrative_line = _build_narrative_greeting(narrative_data, agent_name)
@@ -602,8 +602,8 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 _pending = _distill_result.get("pending", [])
                 if _pending:
                     fmt_parts.append(f"[DISTILL] {len(_pending)} 组待写摘要，调 memall_system action=distill 查看")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to query pending distill items: {e}")
 
             result["injection_formatted"] = chr(10).join(fmt_parts)
 

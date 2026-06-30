@@ -1189,3 +1189,51 @@ def cmd_sync(args):
 
     print(f"Sync complete: {mem_count} new memories, {edge_count} new edges")
     print(f"  Last sync: {state.get('last_sync', '?')}")
+
+
+def cmd_hook_list(args):
+    """List all registered lifecycle hooks."""
+    from memall.mcp.hooks import HookRegistry
+
+    hooks = HookRegistry.list_hooks()
+    if not hooks:
+        print("No hooks registered.")
+        return
+    print(f"{'Hook Point':<20} {'Matcher':<20} {'Blocking':<10} {'Description'}")
+    print("-" * 80)
+    for h in hooks:
+        print(f"{h['hook_point']:<20} {h['matcher']:<20} {str(h['blocking']):<10} {h['description']}")
+
+
+def cmd_hook_register(args):
+    """Register a lifecycle hook via CLI."""
+    from memall.mcp.hooks import HookRegistry, HookDef
+
+    hook = HookDef(
+        hook_point=args.hook_point,
+        matcher=getattr(args, "matcher", "*"),
+        handler=_make_hook_handler(args.action),
+        description=getattr(args, "description", ""),
+        blocking=args.blocking,
+    )
+    HookRegistry.register(hook)
+    print(f"Hook registered: {args.hook_point} (action={args.action}, blocking={args.blocking})")
+
+
+def _make_hook_handler(action: str):
+    """Return a handler function for the given action string."""
+    if action == "log":
+        import logging
+        _log = logging.getLogger("memall.hook")
+
+        def _handler(**kw):
+            _log.info("[hook] %s args=%s", kw.get("hook_point", "?"), kw.get("arguments", {}))
+        return _handler
+    elif action == "print":
+        def _handler(**kw):
+            print(f"[hook] {kw}")
+        return _handler
+    else:
+        def _handler(**kw):
+            pass
+        return _handler

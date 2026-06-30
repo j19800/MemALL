@@ -28,6 +28,8 @@ pip install memall-os[full]    # install + viz + FAISS
 pip install memall-os[rerank]  # install + cross-encoder reranking (HEAVY: ~1.8GB, requires PyTorch)
 memall init                    # initialize
 memall start                   # start services
+memall hook list               # list registered lifecycle hooks
+memall hook register post_capture --action log  # register a hook
 # → MCP ready at http://127.0.0.1:9876/mcp
 # → MCP ready at stdio (add to your mcp.json)
 ```
@@ -197,7 +199,7 @@ src/memall/
 │   └── forget/   # TTL decay, L5 archive, low-value decay
 ├── graph/        # Knowledge graph + arc lifecycle management
 ├── federation/   # Cross-device memory sync + active push delivery
-├── plugins/      # Dashboard / guardrails / rate limiter / metrics
+├── plugins/      # Hook/event-driven dashboard, exporter, notifier, scheduler
 └── migrations/   # DB migrations
 ```
 

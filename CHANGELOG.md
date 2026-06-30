@@ -1,3 +1,17 @@
+## [v0.1.35] - 2026-07-01
+
+### Added
+
+- **Hook 生命周期系统全面打通**: 新增 `dispatch_lifecycle()` 桥接函数，串联 HookRegistry（MCP 层）和插件 `run_plugin_hook()`（lazy import 避免循环依赖）。13 个生命周期 Hook 覆盖全部核心操作：
+  - **capture()**: `pre_capture`（blocking，可中止）+ `post_capture`
+  - **smart_store()**: `pre_store` + `post_store`
+  - **retrieve()**: `pre_retrieve` + `post_retrieve`
+  - **hybrid_search()**: `pre_search` + `post_search`
+  - **pipeline**: `pre_pipeline` + `post_pipeline`（`run_pipeline` 首尾）、`pre_step` + `step_ok` + `step_fail`（`_run_step` 每个步骤）
+  - (`src/memall/mcp/hooks.py`, `src/memall/core/thin_waist.py`, `src/memall/pipeline/pipeline.py`)
+- **4 个内置插件响应 Hook 事件**: dashboard 统计 capture 次数和 pipeline 摘要、exporter 每 10 次 capture 自动导出 JSONL、notifier 步骤失败和长 pipeline 完成通知、scheduler 记录 pipeline 日志。 (`src/memall/plugins/dashboard.py`, `src/memall/plugins/exporter.py`, `src/memall/plugins/notifier.py`, `src/memall/plugins/scheduler.py`)
+- **CLI `memall hook` 子命令**: `memall hook list` 列出已注册 Hook，`memall hook register <hook_point> --action log|print --blocking` 动态注册。 (`src/memall/cli/main.py`, `src/memall/cli/commands/management_commands.py`)
+
 ## [v0.1.34] - 2026-07-01
 
 ### Added
