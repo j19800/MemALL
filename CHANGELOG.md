@@ -1,3 +1,9 @@
+## [v0.1.33] - 2026-07-01
+
+### Fixed
+
+- **observe.py growth_log new-timeline INSERT binding count mismatch**: `_update_growth_log()` 新建反思时间线时，INSERT 有8个 `?` 占位符（对应 content, content_hash, project, summary, occurred_at, created_at, updated_at, metadata），但 values tuple 只传了 6 个值（缺少 project 和 summary），触发 `ProgrammingError: Incorrect number of bindings`。修复：补全 `""` 和 `"📅 反思时间线"`。 (`pipeline/observe.py:332-336`)
+
 ## [v0.1.32] - 2026-07-01
 
 ### Changed

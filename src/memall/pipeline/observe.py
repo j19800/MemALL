@@ -332,7 +332,7 @@ def _update_growth_log(conn, report: dict) -> dict:
         conn.execute(
             "INSERT INTO memories (content, content_hash, level, agent_name, category, project, summary, occurred_at, created_at, updated_at, metadata) "
             "VALUES (?, ?, 'L6', 'system', 'reflection', ?, ?, ?, ?, ?, ?)",
-            (content, ch, now, now, now, json.dumps({"l6_source": "growth_log"})),
+            (content, ch, "", "📅 反思时间线", now, now, now, json.dumps({"l6_source": "growth_log"})),
         )
         new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         return {"updated": True, "created": True, "id": new_id}

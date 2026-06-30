@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
-import json
+import json, re
 import importlib.util
 from datetime import datetime, timezone
 
@@ -612,6 +612,20 @@ def _load_debt_cache():
 
 def _save_debt_cache(data: dict):
     DEBT_SCAN_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    prev = _load_debt_cache() or {}
+    history = prev.get("history", [])
+    scan = data.get("scan", {})
+    if scan:
+        history.append({
+            "scan_time": scan.get("scan_time", ""),
+            "line_count": scan.get("line_count", 0),
+            "total": sum(scan.get("counts", {}).values()),
+            "density": scan.get("density", 0),
+            "severity_summary": scan.get("severity_summary", ""),
+            "counts": scan.get("counts", {}),
+        })
+        history = history[-20:]
+    data["history"] = history
     DEBT_SCAN_CACHE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 @app.get("/debt/stats")
@@ -670,6 +684,8 @@ def api_debt_stats():
     scan = cached.get("scan", {}) if cached else {}
     counts = scan.get("counts", {}) if scan else {}
     details = scan.get("details", []) if scan else []
+    history = cached.get("history", []) if cached else []
+    file_summary = scan.get("file_summary", []) if scan else []
 
     debt = {
         "s0_count": counts.get("critical", 0),
@@ -681,7 +697,9 @@ def api_debt_stats():
         "line_count": scan.get("line_count", 0) if scan else 0,
         "density": scan.get("density", 0) if scan else 0,
         "severity_summary": scan.get("severity_summary", "") if scan else "",
-        "details": details[:50],
+        "details": details,
+        "file_summary": file_summary,
+        "history": history,
     }
 
     return {
@@ -726,10 +744,26 @@ def api_debt_scan():
             if v: parts.append(f"{v} {k.capitalize()}")
         severity_summary = " / ".join(parts) if parts else "All clean"
 
+        # Compute file-level breakdown
+        file_map = {}
+        for d in details:
+            m = re.match(r'^\s*\[(\w+)\]\s*([^:]+):(\d+)\s*[—–-]\s*(.+)', d)
+            if m:
+                sev = m.group(1).lower()
+                fpath = m.group(2)
+                entry = file_map.setdefault(fpath, {"critical": 0, "major": 0, "minor": 0, "info": 0})
+                if sev in entry:
+                    entry[sev] += 1
+
+        file_summary = []
+        for fpath, sv in sorted(file_map.items(), key=lambda x: -sum(x[1].values())):
+            file_summary.append({"path": fpath, "total": sum(sv.values()), **sv})
+
         scan_result = {
             "scan_time": datetime.now(timezone.utc).isoformat(),
             "line_count": line_count, "counts": counts, "details": details,
             "density": density, "severity_summary": severity_summary,
+            "file_summary": file_summary,
         }
 
         _save_debt_cache({"scan": scan_result})
