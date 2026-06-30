@@ -1,3 +1,4 @@
+import json
 from memall.mcp.registry import registry, ToolDef
 
 from . import capture
@@ -339,4 +340,29 @@ registry.register(ToolDef(
     }, "required": ["action"]},
     handler=_handle_system,
     annotations={"readOnlyHint": False, "idempotentHint": False},
+))
+
+
+# ──────────────────────────────────────────────
+# 7. memall_hooks_recent — peek into recent hook activity
+# ──────────────────────────────────────────────
+
+def _handle_hooks(args: dict) -> str:
+    from memall.mcp.hook_effects import peek_recent, format_activity
+    n = args.get("n", 10)
+    events = peek_recent(n)
+    activity = format_activity(events) if events else None
+    if activity:
+        return json.dumps({"activity": activity})
+    return json.dumps({"activity": "No recent hook activity to show."})
+
+
+registry.register(ToolDef(
+    name="memall_hooks_recent",
+    description="Show recent async hook activity (pipeline runs, notifications, reminder checks, etc.)",
+    input_schema={"type": "object", "properties": {
+        "n": {"type": "integer", "description": "Number of recent events (default 10)"},
+    }},
+    handler=_handle_hooks,
+    annotations={"readOnlyHint": True, "idempotentHint": True},
 ))

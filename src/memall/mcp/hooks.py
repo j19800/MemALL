@@ -1,5 +1,6 @@
 from __future__ import annotations
 import re
+import time
 import logging
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -146,6 +147,11 @@ def dispatch_lifecycle(hook_point: str, blocking: bool = False, **kwargs) -> boo
     Plugin hooks are loaded lazily via ``run_plugin_hook`` to avoid circular
     imports.
 
+    For hook points without a plugin handler, this method automatically records
+    a generic activity event so agents get baseline visibility.  Plugin hooks
+    that receive the event should call ``record_event()`` themselves with a
+    richer description.
+
     Args:
         hook_point: The lifecycle hook constant (HOOK_*).
         blocking: If True, any handler returning False will abort the operation.
@@ -154,6 +160,8 @@ def dispatch_lifecycle(hook_point: str, blocking: bool = False, **kwargs) -> boo
     Returns:
         True to proceed, False if a blocking hook returned False.
     """
+    _t0 = time.time()
+
     # 1. HookRegistry dispatch (existing mechanism)
     results = HookRegistry.dispatch(hook_point, extra=kwargs)
     if blocking and any(r is False for r in results):
@@ -161,6 +169,7 @@ def dispatch_lifecycle(hook_point: str, blocking: bool = False, **kwargs) -> boo
 
     # 2. Plugin hooks (lazy import to avoid circular dependencies)
     plugin_func = _HOOK_TO_PLUGIN.get(hook_point)
+    had_plugin = plugin_func is not None
     if plugin_func:
         try:
             from memall.plugins.loader import run_plugin_hook  # noqa: F811
@@ -173,4 +182,43 @@ def dispatch_lifecycle(hook_point: str, blocking: bool = False, **kwargs) -> boo
                 plugin_func, hook_point,
             )
 
+    # 3. Record activity event (skip pre_* hooks — they're internal noise)
+    elapsed_ms = int((time.time() - _t0) * 1000)
+    if not had_plugin and not hook_point.startswith("pre_"):
+        from memall.mcp.hook_effects import record_event  # noqa: F811
+        record_event(
+            hook_point=hook_point,
+            description=_describe_lifecycle(hook_point, **kwargs),
+            plugin="system",
+            elapsed_ms=elapsed_ms,
+        )
+
     return True
+
+
+# ── Description helpers for auto-recorded events ─────────────────────────
+
+_HOOK_DESCRIPTIONS: dict[str, str] = {
+    HOOK_POST_STORE: "Memory stored to database",
+    HOOK_POST_RETRIEVE: "Memory retrieved",
+    HOOK_POST_SEARCH: "Memory search completed",
+    HOOK_POST_PIPELINE: "Pipeline run completed",
+    HOOK_STEP_OK: "Pipeline step completed",
+    HOOK_STEP_FAIL: "Pipeline step failed",
+}
+
+
+def _describe_lifecycle(hook_point: str, **kwargs) -> str:
+    """Build a human-readable description for a lifecycle event."""
+    base = _HOOK_DESCRIPTIONS.get(hook_point, f"Hook: {hook_point}")
+    # Append contextual info where available
+    mem_id = kwargs.get("memory_id")
+    viewer = kwargs.get("viewer") or kwargs.get("agent_name", "")
+    parts = []
+    if mem_id:
+        parts.append(f"memory #{mem_id}")
+    if viewer:
+        parts.append(f"agent={viewer}")
+    if parts:
+        base += f" ({', '.join(parts)})"
+    return base

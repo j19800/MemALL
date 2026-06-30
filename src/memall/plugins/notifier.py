@@ -115,6 +115,11 @@ def on_step_fail(**kwargs) -> None:
         error,
         level="error",
     )
+    _record_plugin_event(
+        "on_step_fail",
+        f"Pipeline step '{step}' failed: {error[:120]}",
+        status="failed",
+    )
 
 
 def on_pipeline(**kwargs) -> None:
@@ -178,6 +183,13 @@ def on_pipeline(**kwargs) -> None:
             level="info" if status == "completed" else "warning",
         )
 
+    # Record hook activity event
+    _record_plugin_event(
+        "on_pipeline",
+        f"Pipeline {status}: {step_oks} ok, {step_fails} failed, {step_skipped} gated in {elapsed:.1f}s",
+        status="failed" if step_fails else "ok",
+    )
+
 
 def _coerce_step_value(result: dict) -> int:
     """Extract a numeric value from a step result dict."""
@@ -202,3 +214,14 @@ def register():
         "description": "System notifications for forget triggers and security alerts",
         "author": "MemALL",
     }
+
+
+# ── Hook activity recording helper ───────────────────────────────────────
+
+def _record_plugin_event(hook_point: str, description: str, status: str = "ok") -> None:
+    """Record a notifier plugin event into the hook effects ring buffer."""
+    try:
+        from memall.mcp.hook_effects import record_event as _re
+        _re(hook_point=hook_point, description=description, plugin="notifier", status=status)
+    except Exception:
+        pass

@@ -381,9 +381,15 @@ def on_capture(**kwargs) -> None:
     now = time.time()
     with _pipeline_lock:
         if now - _last_light_pipeline < _debounce_seconds:
+            _record_plugin_event(
+                "on_capture", "Lightweight pipeline skipped (debounce)", memory_id=memory_id,
+            )
             return
         _last_light_pipeline = now
 
+    _record_plugin_event(
+        "on_capture", "Lightweight pipeline triggered (debounce-coalesced)", memory_id=memory_id,
+    )
     threading.Thread(target=_run_capture_pipeline, daemon=True).start()
 
 
@@ -410,6 +416,10 @@ def on_pre_retrieve(**kwargs) -> None:
                 "on_pre_retrieve: %d discussion reminders for agent '%s'",
                 len(disc_reminders), viewer,
             )
+            _record_plugin_event(
+                "on_pre_retrieve",
+                f"Created {len(disc_reminders)} discussion reminder(s) for {viewer}",
+            )
 
         # Create P2 reminders for pending tasks
         task_reminders = notify_pending_tasks(viewer)
@@ -418,12 +428,23 @@ def on_pre_retrieve(**kwargs) -> None:
                 "on_pre_retrieve: %d task reminders for agent '%s'",
                 len(task_reminders), viewer,
             )
+            _record_plugin_event(
+                "on_pre_retrieve",
+                f"Created {len(task_reminders)} task reminder(s) for {viewer}",
+            )
+
+        if not disc_reminders and not task_reminders:
+            _record_plugin_event(
+                "on_pre_retrieve",
+                f"No pending reminders for {viewer}",
+            )
     except Exception:
         logger.debug("on_pre_retrieve check failed (non-fatal)", exc_info=True)
 
 
 def _run_capture_pipeline() -> None:
     """Run lightweight pipeline in background, log results."""
+    t0 = time.time()
     try:
         from memall.pipeline.pipeline import run_lightweight_pipeline
 
@@ -432,8 +453,8 @@ def _run_capture_pipeline() -> None:
         elapsed = result.get("elapsed", 0)
         logger.info("on_capture: lightweight pipeline %s in %.2fs", status, elapsed)
 
+        step_counts = {}
         if status == "ok":
-            step_counts = {}
             for step_name, step_result in result.get("results", {}).items():
                 if isinstance(step_result, int):
                     step_counts[step_name] = step_result
@@ -441,8 +462,17 @@ def _run_capture_pipeline() -> None:
                     step_counts[step_name] = step_result.get("processed", 0)
             if step_counts:
                 logger.info("on_capture: pipeline step results: %s", step_counts)
+
+        # Record event
+        oks = sum(1 for v in step_counts.values() if v > 0)
+        total = sum(step_counts.values())
+        _record_plugin_event(
+            "on_capture",
+            f"Lightweight pipeline {status} ({elapsed:.1f}s, {oks} steps, {total} items)",
+        )
     except Exception:
         logger.warning("on_capture lightweight pipeline failed", exc_info=True)
+        _record_plugin_event("on_capture", "Lightweight pipeline failed", status="failed")
 
 
 def register():
@@ -453,3 +483,14 @@ def register():
         "description": "Periodic task scheduler for automated forget and security audit",
         "author": "MemALL",
     }
+
+
+# ── Hook activity recording helper ───────────────────────────────────────
+
+def _record_plugin_event(hook_point: str, description: str, status: str = "ok", memory_id: int | None = None) -> None:
+    """Record a scheduler plugin event into the hook effects ring buffer."""
+    try:
+        from memall.mcp.hook_effects import record_event as _re
+        _re(hook_point=hook_point, description=description, plugin="scheduler", status=status, memory_id=memory_id)
+    except Exception:
+        pass

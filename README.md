@@ -116,7 +116,7 @@ SQLite + FTS5 + vector search. Zero cloud dependency. Your data stays on your ma
 
 ---
 
-## 🛠️ 6 MCP Tools
+## 🛠️ 7 MCP Tools
 
 | Category | Tools |
 |----------|-------|
@@ -130,6 +130,7 @@ SQLite + FTS5 + vector search. Zero cloud dependency. Your data stays on your ma
 | **Federation** | `fed_query`, `fed_publish`, `fed_deliver`, `fed_conflicts`, `fed_inject`, `fed_extract` |
 | **Hub Sync** | `hub_connect`, `hub_sync` |
 | **Pipeline & Evolution** | `run_pipeline`, `reflect_interact`, `forget`, `adaptive`, `index_rebuild`, `memall_write action=forget`, `memall_system action=adaptive` |
+| **Hook Activity** | `memall_hooks_recent` — view async pipeline runs, notifications, and reminder checks |
 | **Security & Ops** | `security`, `ops`, `gateway`, `db`, `memall_system action=db`, `memall_system action=security`, `memall_write action=ops` |
 | **Onboarding** | `onboarding` |
 | **Export/Import** | `export`, `import`, `sync` |

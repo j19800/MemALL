@@ -78,4 +78,34 @@ def handle_call(tool_name: str, arguments: dict) -> str:
 
     # Post-tool-use hooks
     HookRegistry.dispatch(HOOK_POST_TOOL_USE, tool_name, arguments, result=result)
+
+    # Inject hook activity into the tool response so agents see async effects
+    result = _inject_hook_activity(result)
+
     return result
+
+
+def _inject_hook_activity(result_str: str) -> str:
+    """Consume recent hook events and inject ``_meta.hook_activity`` into the
+    JSON response.  Only works for dict-shaped results (arrays skip injection).
+    """
+    try:
+        from memall.mcp.hook_effects import consume_recent, format_activity
+
+        events = consume_recent()
+        if not events:
+            return result_str
+
+        formatted = format_activity(events)
+        if not formatted:
+            return result_str
+
+        parsed = json.loads(result_str)
+        if not isinstance(parsed, dict):
+            return result_str
+
+        parsed.setdefault("_meta", {})["hook_activity"] = formatted
+        return json.dumps(parsed, ensure_ascii=False)
+    except Exception:
+        logger.debug("hook_activity injection failed (non-fatal)", exc_info=True)
+        return result_str

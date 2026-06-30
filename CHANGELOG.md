@@ -1,3 +1,14 @@
+## [v0.1.37] - 2026-07-01
+
+### Added
+
+- **Hook Effects — 异步 hook 事件对 Agent 可见**: 新增 ring buffer (maxlen=200, 线程安全) 收集所有异步 hook 活动并注入到 MCP 工具响应中，Agent 不再"看不见"后台行为：
+  - `_meta.hook_activity` 自动注入到每次工具调用的 JSON 响应，Agent 在自己的对话窗口直接看到 pipeline 运行、通知、检查的状态和耗时
+  - 新增 `memall_hooks_recent` MCP 工具，Agent 可随时按需查询最近的 hook 活动 (`src/memall/mcp/tools/__init__.py:346-368`)
+  - dispatch_lifecycle() 自动记录无插件处理的 hook 点事件 (`src/memall/mcp/hooks.py`)
+  - scheduler/notifier 插件记录丰富的语义描述（含状态、结果、耗时） (`src/memall/plugins/scheduler.py`, `src/memall/plugins/notifier.py`)
+  - 新文件 `src/memall/mcp/hook_effects.py` — HookEvent dataclass + ring buffer + consume/peek/format
+
 ## [v0.1.36] - 2026-07-01
 
 ### Added
