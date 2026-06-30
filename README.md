@@ -9,7 +9,7 @@
 <p align="center"><strong>Multi-agent Memory OS</strong> — 本地优先的 AI Agent 持久化记忆系统</p>
 
 <p align="center">
-  <i>6 MCP tools · 11-layer memory lifecycle · 24-step self-evolving pipeline · Knowledge graph · Multi-agent shared memory</i>
+  <i>6 MCP tools · 11-layer memory lifecycle · 24-step self-evolving pipeline · Knowledge graph · Multi-agent shared memory · <b>Hook-driven automation</b></i>
 </p>
 
 <p align="center">
@@ -104,10 +104,11 @@ MemALL doesn't just store — it **improves itself**:
 
 1. **L6 Reflection** — auto-reviews work quality, identifies patterns, corrects mistakes
 2. **L7 Preference Extraction** — learns user preferences from interaction patterns
-3. **L9 Distillation** — compresses raw conversations into structured knowledge
-4. **L11 Domain Intelligence** — cross-project pattern detection
-5. **Forget & Adaptive** — TTL-based decay, low-value cleanup, automatic re-indexing
-6. **OODA Loop** — Observe → Orient → Decide → Act, no human intervention
+3. **Hook-Driven Automation** — post-capture auto-triggers lightweight pipeline + discussion convergence; pre-retrieve injects pending work; post-pipeline reports rich summaries
+4. **L9 Distillation** — compresses raw conversations into structured knowledge
+5. **L11 Domain Intelligence** — cross-project pattern detection
+6. **Forget & Adaptive** — TTL-based decay, low-value cleanup, automatic re-indexing
+7. **OODA Loop** — Observe → Orient → Decide → Act, no human intervention
 
 ### 🏠 100% Local
 
