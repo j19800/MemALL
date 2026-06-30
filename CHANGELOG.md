@@ -1,3 +1,9 @@
+## [v0.1.28] - 2026-06-30
+
+### Fixed
+
+- **debt scan cache 缺少 import json**: `server.py` 的 `_save_debt_cache()` / `_load_debt_cache()` 使用 `json` 模块但未 import，导致 NameError。 (`api/server.py`)
+
 ## [v0.1.27] - 2026-06-30
 
 ### Fixed
