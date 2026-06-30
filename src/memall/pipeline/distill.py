@@ -91,7 +91,6 @@ def distill_step() -> dict:
                 header += f"\n关键词：{distinctive_topics}"
             merged_content = header + "\n" + "\n".join(content_lines)
 
-            merged_content = header
             l9_subject = _smart_subject(merged_content)
             l9_subject = f"[L9 蒸馏] {l9_subject}"
 

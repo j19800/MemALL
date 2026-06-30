@@ -1,3 +1,11 @@
+## [v0.1.30] - 2026-07-01
+
+### Fixed
+
+- **distill.py L9 content overwrite bug**: line 94 `merged_content = header` 覆写了 line 92 正确组装的内容（header + content_lines），导致 L9 蒸馏记忆只存标题头无实质内容，级联影响 L10 整合拿到空内容。修复：删除覆写行。(`pipeline/distill.py`)
+- **observe.py week/month identical key bug**: lines 204-205 `week_start` 和 `month_key` 均为 `today[:7]`（YYYY-MM），line 228 周分组使用 `dt[:7]` 即按月份分组，周总结实际等于月总结。修复：周分组改为 ISO 标准周 `YYYY-WW`。(`pipeline/observe.py`)
+- **reflect.py L6 aggregation date‑based grouping**: line 201 使用 `ts[:10]`（YYYY-MM-DD）作为聚合键，同周不同日期的 L6 反思永不聚合（阈值 4 条永远达不到）。修复：改用 `datetime.isocalendar()` 提取 ISO 周。(`pipeline/reflect.py`)
+
 ## [v0.1.29] - 2026-06-30
 
 ### Changed

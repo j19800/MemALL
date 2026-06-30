@@ -198,7 +198,11 @@ def _aggregate_l6(conn, upgraded_ids: list, now: str) -> int:
 
     groups = defaultdict(list)
     for mid, agent, cat, ts in upgraded_ids:
-        week = ts[:10] if ts else "unknown"  # Use date as week key (YYYY-MM-DD)
+        try:
+            dt = datetime.fromisoformat(ts) if ts else None
+            week = f"{dt.isocalendar()[0]}-W{dt.isocalendar()[1]:02d}" if dt else "unknown"
+        except (ValueError, TypeError):
+            week = "unknown"
         groups[(agent, cat, week)].append(mid)
 
     aggregated = 0

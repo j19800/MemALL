@@ -224,9 +224,14 @@ def _update_weekly_monthly(conn) -> dict:
         weeks = defaultdict(list)
         months = defaultdict(list)
         for m in mems:
-            dt = (m["created_at"] or "")[:10]
-            weeks[dt[:7]].append(m)  # use YYYY-MM as weekly bucket
-            months[dt[:7]].append(m)
+            dt_str = (m["created_at"] or "")[:10]
+            try:
+                dt = datetime.fromisoformat(dt_str) if dt_str else None
+                wk = f"{dt.isocalendar()[0]}-W{dt.isocalendar()[1]:02d}" if dt else dt_str[:7]
+            except (ValueError, TypeError):
+                wk = dt_str[:7]
+            weeks[wk].append(m)
+            months[dt_str[:7]].append(m)
 
         # Check if weekly summary already exists for this period
         for wk, wk_mems in weeks.items():
