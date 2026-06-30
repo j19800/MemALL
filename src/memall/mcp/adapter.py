@@ -20,6 +20,9 @@ def _intercept(tool_name: str, arguments: dict, result_str: str = "") -> None:
 from memall.mcp import tools  # noqa: F401
 # Import built-in hooks (side-effect registers them)
 from memall.mcp import hooks_builtin  # noqa: F401
+# Load plugins so lifecycle hooks (on_capture, on_pipeline, etc.) fire
+from memall.plugins.loader import load_all_plugins as _load_all_plugins
+_load_all_plugins()
 
 TOOL_DEFINITIONS = registry.list_definitions()
 

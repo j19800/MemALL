@@ -1,5 +1,10 @@
 ## [v0.1.37] - 2026-07-01
 
+### Fixed
+
+- **插件加载修复**: 在 adapter.py import 时加载所有插件，否则 `_loaded_plugins` 为空导致无任何 hook 事件产生 (`src/memall/mcp/adapter.py:23-25`)
+- **had_plugin 检测逻辑修复**: `dispatch_lifecycle()` 中 `had_plugin = plugin_func is not None` 改为检查 `run_plugin_hook()` 的实际返回值，使无插件实现的 hook 点（post_search/post_store/post_retrieve/step_ok/step_fail）正确自动记录事件 (`src/memall/mcp/hooks.py:172,177`)
+
 ### Added
 
 - **Hook Effects — 异步 hook 事件对 Agent 可见**: 新增 ring buffer (maxlen=200, 线程安全) 收集所有异步 hook 活动并注入到 MCP 工具响应中，Agent 不再"看不见"后台行为：

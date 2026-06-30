@@ -169,11 +169,12 @@ def dispatch_lifecycle(hook_point: str, blocking: bool = False, **kwargs) -> boo
 
     # 2. Plugin hooks (lazy import to avoid circular dependencies)
     plugin_func = _HOOK_TO_PLUGIN.get(hook_point)
-    had_plugin = plugin_func is not None
+    had_plugin = False  # true only if at least one plugin actually handles this
     if plugin_func:
         try:
             from memall.plugins.loader import run_plugin_hook  # noqa: F811
             plugin_results = run_plugin_hook(plugin_func, **kwargs)
+            had_plugin = bool(plugin_results)
             if blocking and any(r is False for r in plugin_results):
                 return False
         except Exception:
