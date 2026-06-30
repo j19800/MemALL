@@ -12,8 +12,9 @@
   - **Round 1 (CRASH)** — 6 项运行时崩溃修复：`tracer.py` 连接上下文管理（pool_conn()→with）、`gateway.py` timeline 变量定义和 federation_event 缩进、`hub_client.py` urllib.request.quote→urllib.parse.quote、`scheduler.py` watchdog 无限递归（run_daemon_with_watchdog→run_daemon）、`gateway.py` stale_ids 提前初始化。
   - **Round 2 (P0)** — 3 项数据/逻辑修复：`federation_tools.py` capture() 返回 int 而非 dict、`test_helpers.py` init_temp_db 真正创建临时数据库隔离、`register.py` 补全 urllib.request/error 导入。3 项分析后判定非真 bug 跳过。
   - **Round 3 (P1)** — 4 项显著缺陷修复：`db.py` put_nowait queue.Full 异常处理、`gateway.py` exc_info=True 位置参数→关键字参数、`agent_round.py` str.replace→json.dumps、`thin_waist.py` 移除未用 SVD 计算。
-  - 验证：语法检查 + 模块导入 + CLI capture/pipeline dry-run + 191 测试通过（3 项预存失败无回归）。
-  - (`core/tracer.py`, `gateway.py`, `mcp/hub_client.py`, `scheduler/scheduler.py`, `mcp/federation_tools.py`, `tests/test_helpers.py`, `cli/register.py`, `core/db.py`, `scheduler/agent_round.py`, `core/thin_waist.py`)
+  - **Round 4 (P2)** — 11 项结构/UX 修复：`server.py` 移除 3 处死代码路由（2 个裸 root_memories_stats + 重复 search 路由）、`bridge/main.py` 损坏 Unicode 修复、"来自 @agent 的飞书消息"、`tools/__init__.py` 补全 archive_stats/archive_vacuum enum、`tools/gateway.py` stop 传递 port 参数、`tools/pipeline.py` 模块级 ThreadPoolExecutor 缓存、`log_setup.py` root.__class__ 继承 ExtraLogger + Python 3.12 _log 签名兼容、`test_distill.py` 过期 docstring 修正、"2"、`test_gateway.py` time.sleep→_wait_for_health/_wait_for_stop 轮询、`frontend/index.html` ?api_url= URL 参数支持。
+  - 验证：语法检查 + 模块导入 + CLI pipeline dry-run + 37 测试通过（1 项预存 config path 失败无回归）。
+  - (`core/tracer.py`, `gateway.py`, `mcp/hub_client.py`, `scheduler/scheduler.py`, `mcp/federation_tools.py`, `tests/test_helpers.py`, `cli/register.py`, `core/db.py`, `scheduler/agent_round.py`, `core/thin_waist.py`, `src/memall/api/server.py`, `src/memall/bridge/main.py`, `src/memall/mcp/tools/__init__.py`, `src/memall/mcp/tools/gateway.py`, `src/memall/mcp/tools/pipeline.py`, `src/memall/core/log_setup.py`, `tests/test_distill.py`, `tests/test_gateway.py`, `frontend/index.html`)
 
 ## [v0.1.33] - 2026-07-01
 

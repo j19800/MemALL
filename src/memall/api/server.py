@@ -871,16 +871,6 @@ def api_run_migrations():
 
 
 
-def root_memories_stats():
-    '''v30 compat: stats overview.'''
-    from memall.core.db import get_conn
-    conn = get_conn()
-    total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
-    recent = conn.execute("SELECT COUNT(*) FROM memories WHERE created_at >= datetime('now', '-24 hours')").fetchone()[0]
-    by_level = dict(conn.execute("SELECT level, COUNT(*) as cnt FROM memories GROUP BY level").fetchall())
-    conn.close()
-    return {"success": True, "data": {"total": total, "total_memories": total, "recent_24h": recent, "by_level": by_level, "total_links": 0, "total_agents": len(by_level)}}
-
 @app.get("/memories")
 def root_list_memories(request: Request, hours: int = 8760, limit: int = 50, offset: int = 0, level: str = ""):
     '''v30 compat: list memories. Returns HTML (SPA) for browsers, JSON for API clients.'''
@@ -901,32 +891,6 @@ def root_list_memories(request: Request, hours: int = 8760, limit: int = 50, off
         total = conn.execute(f"SELECT COUNT(*) FROM memories WHERE {where}", params).fetchone()[0]
         rows = conn.execute(f"SELECT id, content, subject as title, level, agent_name, category, project, summary, tags, created_at, updated_at, access_count, metadata FROM memories WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?", params + [limit, offset]).fetchall()
         return {"success": True, "data": {"items": [dict(r) for r in rows], "total": total}}
-    finally:
-        conn.close()
-
-
-def root_memories_stats():
-    '''v30 compat: stats overview.'''
-    from memall.core.db import get_conn
-    conn = get_conn()
-    total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
-    recent = conn.execute("SELECT COUNT(*) FROM memories WHERE created_at >= datetime('now', '-24 hours')").fetchone()[0]
-    by_level = dict(conn.execute("SELECT level, COUNT(*) as cnt FROM memories GROUP BY level").fetchall())
-    conn.close()
-    return {"success": True, "data": {"total": total, "total_memories": total, "recent_24h": recent, "by_level": by_level, "total_links": 0, "total_agents": len(by_level)}}
-
-
-@app.get("/memories/search")
-def root_search_memories(q: str = "", limit: int = 20):
-    '''v30 compat: search memories.'''
-    from memall.core.db import get_conn
-    conn = get_conn()
-    try:
-        if q:
-            rows = conn.execute("SELECT id, content, subject as title, level, agent_name, category, project, summary, tags, created_at, updated_at FROM memories WHERE content LIKE ? OR subject LIKE ? ORDER BY id DESC LIMIT ?", (f"%{q}%", f"%{q}%", limit)).fetchall()
-        else:
-            rows = conn.execute("SELECT id, content, subject as title, level, agent_name, category, project, summary, tags, created_at, updated_at FROM memories ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
-        return {"success": True, "data": {"results": [dict(r) for r in rows]}}
     finally:
         conn.close()
 

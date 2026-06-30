@@ -196,7 +196,7 @@ class AgentBridge:
                     "level": "P2", "category": "inter_agent_communication",
                     "agent_name": self.config.agent_name,
                     "subject": f"Feishu @{self.config.agent_name}: {text[:60]}",
-                    "summary": f"?????? @{self.config.agent_name} ??",
+                    "summary": f"来自 @{self.config.agent_name} 的飞书消息",
                 }}
             }, ensure_ascii=False).encode("utf-8")
             req = urllib.request.Request(

@@ -815,7 +815,7 @@ pre{font-family:inherit;white-space:pre-wrap;word-break:break-word}
 // ============================================================
 //  State
 // ============================================================
-var API = (localStorage.getItem('memall_api_url') || 'http://127.0.0.1:8199').replace(/\/+$/,'');
+var API = (new URLSearchParams(window.location.search).get('api_url') || localStorage.getItem('memall_api_url') || 'http://127.0.0.1:8199').replace(/\/+$/,'');
 var chatHistory = [];
 var sending = false;
 var dashboardTimer = null;

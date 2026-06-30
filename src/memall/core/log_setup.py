@@ -32,7 +32,7 @@ class JsonFormatter(logging.Formatter):
 class ExtraLogger(logging.Logger):
     """Logger subclass that accepts ``extra=`` fields merged into the JSON payload."""
 
-    def _log(self, level, msg, args, exc_info=None, extra=None, **kwargs):
+    def _log(self, level, msg, args, exc_info=None, extra=None, exc_info_on_logger=False, **kwargs):
         if extra and "extra_fields" not in extra:
             extra["extra_fields"] = {}
         super()._log(level, msg, args, exc_info=exc_info, extra=extra)
@@ -58,6 +58,7 @@ def configure(level: str | None = None, json_output: bool | None = None):
 
     logging.setLoggerClass(ExtraLogger)
     root = logging.getLogger()
+    root.__class__ = ExtraLogger
     root.setLevel(log_level)
     # Remove any pre-existing handlers
     for h in root.handlers[:]:

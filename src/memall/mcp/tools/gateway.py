@@ -17,7 +17,8 @@ def handle(arguments: dict) -> str:
         return json.dumps({"status": "ok", "host": "127.0.0.1", "port": port})
 
     elif action == "stop":
-        gw = MemAllGateway()
+        port = arguments.get("port", 9919)
+        gw = MemAllGateway(port=port)
         gw.stop()
         return json.dumps({"status": "ok", "message": "gateway stopped"})
 

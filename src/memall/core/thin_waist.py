@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from .db import get_pool, content_hash
 from .models import Memory, MemoryInput
-from .nlp import tfidf_svd_embed, cosine_sim, compute_tfidf
+from .nlp import cosine_sim, compute_tfidf
 from memall.graph.embeddings import EMBED_DIM
 
 logger = logging.getLogger(__name__)
@@ -288,11 +288,6 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
     #   "rejected" → warn and skip (too thin to be useful)
     #   "review"   → warn but store (marginal, caller should improve)
     if quality_gate == "rejected":
-        logger.warning(
-            "capture BLOCKED: quality gate rejected (avg=%.2f, min=%d, len=%d) agent=%s cat=%s: %.100s",
-            quality_result.get("avg", 0), quality_result.get("min", 0),
-            len(data.content or ""), data.agent_name, data.category, data.content or "",
-        )
         # UX1: soft-degrade instead of raising ValueError — log warning and return None
         logger.warning(
             "capture: quality gate rejected (avg=%.2f, min=%d, len=%d) — stored anyway",
@@ -416,23 +411,33 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
 
         occurred = data.occurred_at or now
         supersedes = data.supersedes if data.supersedes and data.supersedes != "[]" else None
-        cur = conn.execute(
-            """INSERT INTO memories
-               (content, content_hash, level, owner, agent_name, subject,
-                project, category, summary, occurred_at, created_at, updated_at,
-                supersedes, confidence, visibility, metadata, thread_id, agent_name_locked)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                data.content, h, data.level, data.owner, data.agent_name,
-                data.subject, data.project, data.category, data.summary,
-                occurred, now, now,
-                supersedes, data.confidence, data.visibility,
-                json.dumps(data.metadata) if isinstance(data.metadata, dict) else data.metadata,
-                data.thread_id,
-                0,  # 默认 0 = 未锁定
-            ),
-        )
-        mem_id = cur.lastrowid
+        try:
+            cur = conn.execute(
+                """INSERT INTO memories
+                   (content, content_hash, level, owner, agent_name, subject,
+                    project, category, summary, occurred_at, created_at, updated_at,
+                    supersedes, confidence, visibility, metadata, thread_id, agent_name_locked)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    data.content, h, data.level, data.owner, data.agent_name,
+                    data.subject, data.project, data.category, data.summary,
+                    occurred, now, now,
+                    supersedes, data.confidence, data.visibility,
+                    json.dumps(data.metadata) if isinstance(data.metadata, dict) else data.metadata,
+                    data.thread_id,
+                    0,  # 默认 0 = 未锁定
+                ),
+            )
+            mem_id = cur.lastrowid
+        except Exception:
+            # Race: concurrent insert with same content_hash — fetch existing
+            conn.rollback()
+            existing = conn.execute(
+                "SELECT id FROM memories WHERE content_hash = ?", (h,)
+            ).fetchone()
+            if existing:
+                return existing["id"]
+            raise
 
         # Publish pipeline event for new memory
         try:

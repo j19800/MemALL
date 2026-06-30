@@ -36,7 +36,7 @@ AGENT_PATHS = {
         "config_key": "mcpServers",
     },
     "opencode": {
-        "path": Path.home() / ".opencode" / "config.json",
+        "path": Path.home() / ".config" / "opencode" / "opencode.jsonc",
         "format": "json",
         "name": "OpenCode",
         "config_key": "mcpServers",

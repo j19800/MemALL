@@ -24,11 +24,42 @@ GW_PORT_HEALTH = 19940
 GW_PORT_CAPTURE = 19941
 
 
+def _wait_for_health(host: str, port: int, timeout: float = 5) -> bool:
+    """Poll /health until the gateway responds (startup wait)."""
+    deadline = time.monotonic() + timeout
+    url = f"http://{host}:{port}/health"
+    while time.monotonic() < deadline:
+        try:
+            req = urllib.request.Request(url)
+            resp = urllib.request.urlopen(req, timeout=1)
+            data = json.loads(resp.read().decode())
+            if data.get("status") == "ok":
+                return True
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError, json.JSONDecodeError):
+            pass
+        time.sleep(0.1)
+    return False
+
+
+def _wait_for_stop(host: str, port: int, timeout: float = 5) -> bool:
+    """Poll until the gateway stops responding (stop wait)."""
+    deadline = time.monotonic() + timeout
+    url = f"http://{host}:{port}/health"
+    while time.monotonic() < deadline:
+        try:
+            req = urllib.request.Request(url)
+            urllib.request.urlopen(req, timeout=1)
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError):
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def test_gateway_start_stop():
     """Test: start gateway, hit /health, stop gateway."""
     gw = MemAllGateway(host="127.0.0.1", port=GW_PORT_HEALTH)
     gw.start()
-    time.sleep(0.5)
+    assert _wait_for_health("127.0.0.1", GW_PORT_HEALTH), "Gateway did not start in time"
 
     try:
         req = urllib.request.Request(f"http://127.0.0.1:{GW_PORT_HEALTH}/health")
@@ -40,14 +71,14 @@ def test_gateway_start_stop():
         print(f"  PASS test_gateway_start_stop — health: {data}")
     finally:
         gw.stop()
-        time.sleep(0.3)
+        assert _wait_for_stop("127.0.0.1", GW_PORT_HEALTH), "Gateway did not stop in time"
 
 
 def test_gateway_capture():
     """Test: POST /capture through gateway."""
     gw = MemAllGateway(host="127.0.0.1", port=GW_PORT_CAPTURE)
     gw.start()
-    time.sleep(0.5)
+    assert _wait_for_health("127.0.0.1", GW_PORT_CAPTURE), "Gateway did not start in time"
 
     try:
         import urllib.request
@@ -74,7 +105,7 @@ def test_gateway_capture():
         print(f"  PASS test_gateway_capture — {data}")
     finally:
         gw.stop()
-        time.sleep(0.3)
+        assert _wait_for_stop("127.0.0.1", GW_PORT_CAPTURE), "Gateway did not stop in time"
 
 
 def test_export_import_bundle():

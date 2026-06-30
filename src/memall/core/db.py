@@ -317,8 +317,10 @@ def get_conn(db_path=None) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=5000")
 
     if not _auto_init_done:
-        init_db(conn=conn)
-        _auto_init_done = True
+        with _auto_init_lock:
+            if not _auto_init_done:
+                init_db(conn=conn)
+                _auto_init_done = True
 
     return conn
 
@@ -704,6 +706,8 @@ def db_stats(db_path: "str | None" = None) -> dict:
 # Auto-init flag: ``get_conn()`` / ``ConnectionPool._new_conn()``
 # run ``init_db()`` exactly once on the first connection.
 _auto_init_done = False
+
+_auto_init_lock = threading.Lock()
 
 # ── Archive DB (hot/cold separation, S3-02) ──
 

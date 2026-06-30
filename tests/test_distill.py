@@ -27,7 +27,7 @@ def test_distill_step_empty_db():
 
 
 def test_distill_step_skips_small_groups():
-    """Test: distill_step skips groups with fewer than 3 memories."""
+    """Test: distill_step skips groups with fewer than 2 memories."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
     from memall.pipeline.distill import distill_step
     from memall.core.db import get_conn

@@ -306,7 +306,7 @@ registry.register(ToolDef(
     description="Pipeline, sessions, gateway, hub sync, DB maintenance, security, adaptive, onboarding, reflection, index rebuild. Actions: run_pipeline | distill | gateway | hub_connect | hub_sync | session_start | session_end | session_summary | db | security | adaptive | onboarding | reflect | index_rebuild",
     input_schema={"type": "object", "properties": {
         "action": {"type": "string", "enum": ["run_pipeline", "distill", "gateway", "hub_connect", "hub_sync", "session_start", "session_end", "session_summary", "db", "security", "adaptive", "onboarding", "reflect", "index_rebuild"]},
-        "sub_action": {"type": "string", "enum": ["list", "summarize", "start", "stop", "export", "import", "discover", "pair", "peers", "federated", "status", "reset", "submit_step", "skip", "audit", "permit", "check", "score", "clean", "index", "distill", "all", "report", "optimize", "stats", "vacuum", "agree", "disagree", "probe", "expired"], "description": "Sub-action for distill/gateway/security/adaptive/db/onboarding/reflect"},
+        "sub_action": {"type": "string", "enum": ["list", "summarize", "start", "stop", "export", "import", "discover", "pair", "peers", "federated", "status", "reset", "submit_step", "skip", "audit", "permit", "check", "score", "clean", "index", "distill", "all", "report", "optimize", "stats", "vacuum", "agree", "disagree", "probe", "expired", "archive_stats", "archive_vacuum"], "description": "Sub-action for distill/gateway/security/adaptive/db/onboarding/reflect"},
         "session_id": {"type": "string", "description": "Session ID"},
         "agent_name": {"type": "string"},
         "auto_inject": {"type": "boolean"},
