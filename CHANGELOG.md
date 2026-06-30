@@ -1,8 +1,15 @@
-## [v0.1.30] - 2026-07-01
+## [v0.1.31] - 2026-07-01
 
 ### Fixed
 
-- **distill.py L9 content overwrite bug**: line 94 `merged_content = header` 覆写了 line 92 正确组装的内容（header + content_lines），导致 L9 蒸馏记忆只存标题头无实质内容，级联影响 L10 整合拿到空内容。修复：删除覆写行。(`pipeline/distill.py`)
+- **[C6] classify.py cursor reset loop**: 空结果时 DELETE 游标，下次运行重新扫描最新 500 条形成无限循环。修复：空结果直接返回，保留游标位置。(`pipeline/classify.py`)
+- **[O1] observe.py self-check wrong baseline**: `prev = history[0]`（最旧条目）应为 `history[-2]`（前一次运行），导致遗忘率/领域宽度变化幅度被放大。修复：改为 `history[-2]`。(`pipeline/observe.py:140`)
+- **[I2] integrate.py thread_id semantic misuse**: L10 合成记忆的 thread_id 设为 source L9 的 memory ID，而非会话/对话 ID，语义混淆。修复：L10 是管道合成洞察、无对话线程，设为 None。(`pipeline/integrate.py:207`)
+- **[ID3] identity.py profile overwrite**: 每次运行全量覆写 profile，上次提取 20 个特质、本次只找到 5 个则 profile 缩水。修复：改为合并（保留旧条目、追加新条目、去重后 cap 20）。(`pipeline/identity.py:106-108`)
+
+### Changed
+
+- **distill L9 content overwrite** (v0.1.30): line 94 `merged_content = header` 覆写了 line 92 正确组装的内容。修复：删除覆写行。(`pipeline/distill.py`)
 - **observe.py week/month identical key bug**: lines 204-205 `week_start` 和 `month_key` 均为 `today[:7]`（YYYY-MM），line 228 周分组使用 `dt[:7]` 即按月份分组，周总结实际等于月总结。修复：周分组改为 ISO 标准周 `YYYY-WW`。(`pipeline/observe.py`)
 - **reflect.py L6 aggregation date‑based grouping**: line 201 使用 `ts[:10]`（YYYY-MM-DD）作为聚合键，同周不同日期的 L6 反思永不聚合（阈值 4 条永远达不到）。修复：改用 `datetime.isocalendar()` 提取 ISO 周。(`pipeline/reflect.py`)
 

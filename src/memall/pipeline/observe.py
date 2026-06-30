@@ -137,7 +137,7 @@ def _self_check(level_dist: dict, l6_total: int) -> list:
         return alerts  # not enough data to compare
 
     latest = history[-1]
-    prev = history[0]
+    prev = history[-2]  # previous run, not the oldest
 
     # 1. 遗忘率突增 (total memory count drop)
     curr_total = sum(level_dist.values())

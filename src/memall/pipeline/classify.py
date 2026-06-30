@@ -203,7 +203,8 @@ def classify_step() -> dict:
                 (min_id, now),
             )
         else:
-            conn.execute("DELETE FROM pipeline_cursors WHERE step='classify'")
+            # C6: Don't reset cursor on empty — next run would re-scan the same 500 records infinitely
+            return {"scanned": 0, "changed": 0, "layer_distribution": {}}
 
         # Pre-aggregate edge counts
         row_ids = [r["id"] for r in rows]

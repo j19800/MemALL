@@ -103,8 +103,21 @@ def identity_step() -> dict:
                 except (json.JSONDecodeError, TypeError):
                     profile = {}
 
-            profile["l1_identity"] = unique_l1[:20]
-            profile["l7_preferences"] = unique_l7[:20]
+            # ID3: Merge with existing — keep old entries, append new, dedup, cap at 20
+            existing_l1 = profile.get("l1_identity", [])
+            existing_l7 = profile.get("l7_preferences", [])
+            seen_l1 = {t["snippet"] for t in existing_l1}
+            seen_l7 = {t["snippet"] for t in existing_l7}
+            for t in unique_l1:
+                if t["snippet"] not in seen_l1:
+                    existing_l1.append(t)
+                    seen_l1.add(t["snippet"])
+            for t in unique_l7:
+                if t["snippet"] not in seen_l7:
+                    existing_l7.append(t)
+                    seen_l7.add(t["snippet"])
+            profile["l1_identity"] = existing_l1[:20]
+            profile["l7_preferences"] = existing_l7[:20]
             profile["l1l7_updated_at"] = now
 
             if row:
