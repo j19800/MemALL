@@ -6,6 +6,15 @@
 - **debt/scan.py 移除 50 条记录上限**: `scan_known_patterns()` 不再截断详情，返回全部匹配条目供前端分页。 (`debt/scan.py:58`)
 - **后端扫描缓存保留历史**: `_save_debt_cache()` 追加扫描摘要到 `history[]`（保留最近 20 次），`/debt/stats` 返回 `file_summary` + `history`。 (`src/memall/api/server.py`)
 
+### Fixed
+
+- **第二轮全审查 32 项修复**: 覆盖 CRASH/P0/P1 三级，追溯审查 44 个源文件，修复分为三轮：
+  - **Round 1 (CRASH)** — 6 项运行时崩溃修复：`tracer.py` 连接上下文管理（pool_conn()→with）、`gateway.py` timeline 变量定义和 federation_event 缩进、`hub_client.py` urllib.request.quote→urllib.parse.quote、`scheduler.py` watchdog 无限递归（run_daemon_with_watchdog→run_daemon）、`gateway.py` stale_ids 提前初始化。
+  - **Round 2 (P0)** — 3 项数据/逻辑修复：`federation_tools.py` capture() 返回 int 而非 dict、`test_helpers.py` init_temp_db 真正创建临时数据库隔离、`register.py` 补全 urllib.request/error 导入。3 项分析后判定非真 bug 跳过。
+  - **Round 3 (P1)** — 4 项显著缺陷修复：`db.py` put_nowait queue.Full 异常处理、`gateway.py` exc_info=True 位置参数→关键字参数、`agent_round.py` str.replace→json.dumps、`thin_waist.py` 移除未用 SVD 计算。
+  - 验证：语法检查 + 模块导入 + CLI capture/pipeline dry-run + 191 测试通过（3 项预存失败无回归）。
+  - (`core/tracer.py`, `gateway.py`, `mcp/hub_client.py`, `scheduler/scheduler.py`, `mcp/federation_tools.py`, `tests/test_helpers.py`, `cli/register.py`, `core/db.py`, `scheduler/agent_round.py`, `core/thin_waist.py`)
+
 ## [v0.1.33] - 2026-07-01
 
 ### Fixed

@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 
 import json
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 from datetime import datetime, timezone
 

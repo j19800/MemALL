@@ -1434,6 +1434,7 @@ class MemAllGateway:
             ).fetchall()
 
             stale_count = 0
+            stale_ids = set()
             if not status_filter or status_filter == "open":
                 stale_cutoff = (date.today() - timedelta(days=21)).isoformat()
                 stale_rows = conn.execute(
@@ -1984,7 +1985,7 @@ class MemAllGateway:
                 days=validated.get("days", 7),
             )
             return web.json_response(
-                {"results": items, "count": len(items)},
+                {"results": results, "count": len(results)},
                 headers=_cors_headers(request),
             )
         except Exception as exc:
@@ -2040,7 +2041,7 @@ class MemAllGateway:
             )
 
 
-async def _handle_federation_event(self, request: web.Request) -> web.Response:
+    async def _handle_federation_event(self, request: web.Request) -> web.Response:
         """POST /federation/events — receive push events from Agent Hub (S3-05).
 
         Hub → MemALL active push endpoint.
@@ -2373,7 +2374,7 @@ def start_discovery(port: int = 9920) -> None:
             try:
                 sock.sendto(msg, ("255.255.255.255", port))
             except Exception:
-                logger.warning("Discovery broadcast failed: %s", exc_info=True)
+                logger.warning("Discovery broadcast failed", exc_info=True)
             time.sleep(5)
         sock.close()
 

@@ -7,6 +7,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
+from memall.core.db import pool_conn
 
 _TRACE_ID: str | None = None
 _lock = threading.Lock()
@@ -33,19 +34,17 @@ def _write_span(trace_id: str, parent_span_id: str | None, span_id: str,
                 status: str, attributes: dict):
     """Persist a span record to the tracing_spans table."""
     try:
-        from memall.core.db import pool_conn
-        conn = pool_conn()
-        conn.execute(
-            """INSERT INTO tracing_spans
-               (trace_id, parent_span_id, span_id, name, span_type,
-                start_time, duration_ms, status, attributes, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (trace_id, parent_span_id, span_id, name, span_type,
-             start_time, duration_ms, status, json.dumps(attributes, ensure_ascii=False),
-             datetime.now(timezone.utc).isoformat()),
-        )
-        conn.commit()
-        conn.close()
+        with pool_conn() as conn:
+            conn.execute(
+                """INSERT INTO tracing_spans
+                   (trace_id, parent_span_id, span_id, name, span_type,
+                    start_time, duration_ms, status, attributes, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (trace_id, parent_span_id, span_id, name, span_type,
+                 start_time, duration_ms, status, json.dumps(attributes, ensure_ascii=False),
+                 datetime.now(timezone.utc).isoformat()),
+            )
+            conn.commit()
     except Exception:
         pass  # tracing must never block the hot path
 

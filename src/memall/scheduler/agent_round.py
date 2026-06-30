@@ -11,6 +11,7 @@ flood the sessions table); just targeted notification writes.
 """
 
 import hashlib
+import json
 import logging
 from datetime import datetime, timezone, timedelta
 
@@ -77,7 +78,7 @@ def notify_pending_tasks(agent_name: str) -> list[dict]:
                 (content, h, "P2", agent_name, agent_name,
                  f"待办: {t['subject']}", "task_pending", "", "",
                  now.isoformat(), now.isoformat(), now.isoformat(),
-                 None, 0.5, "private", str(rem_meta).replace("'", '"'), "open"),
+                 None, 0.5, "private", json.dumps(rem_meta, ensure_ascii=False), "open"),
             )
             reminders.append({"task_id": t["id"], "subject": t["subject"]})
 

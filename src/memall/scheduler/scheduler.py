@@ -191,7 +191,7 @@ def run_daemon_with_watchdog():
     PID_FILE.parent.mkdir(parents=True, exist_ok=True)
     PID_FILE.write_text(str(os.getpid()))
     
-    scheduler_script = "from memall.scheduler.scheduler import run_daemon_with_watchdog; run_daemon_with_watchdog()"
+    scheduler_script = "from memall.scheduler.scheduler import run_daemon; run_daemon()"
     restart_count = 0
     
     while True:
@@ -256,7 +256,7 @@ def daemon_start():
         except (ValueError, TypeError):
             logger.warning(f"invalid PID in {PID_FILE}; removing")
             PID_FILE.unlink(missing_ok=True)
-    script = "from memall.scheduler.scheduler import run_daemon_with_watchdog; run_daemon_with_watchdog()"
+    script = "from memall.scheduler.scheduler import run_daemon; run_daemon()"
     err_log = str(PID_FILE.parent / "scheduler_err.log")
     stderr_handle = open(err_log, "a", encoding="utf-8")
     proc = subprocess.Popen(

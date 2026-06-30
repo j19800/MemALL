@@ -145,7 +145,7 @@ def hub_list_memories(category: str = "", q: str = "",
     if category:
         params += f"&category={category}"
     if q:
-        params += f"&q={urllib.request.quote(q)}"
+        params += f"&q={urllib.parse.quote(q)}"
     result = _hub_request("GET", f"/api/memories{params}")
     if isinstance(result, list):
         return result

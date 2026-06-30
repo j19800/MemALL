@@ -161,7 +161,7 @@ def fed_deliver(target_agent: str, content: str,
     if subject is None:
         subject = f"[hub:push:{event_type}] {source}"
 
-    result = capture(
+    mem_id = capture(
         content=content,
         agent_name=target_agent,
         subject=subject,
@@ -170,7 +170,6 @@ def fed_deliver(target_agent: str, content: str,
         project="agent-hub",
         metadata_json=json.dumps({"event_type": event_type, "source": source}, ensure_ascii=False),
     )
-    mem_id = result.get("id") if isinstance(result, dict) else None
     return {
         "delivered": True,
         "memory_id": mem_id,

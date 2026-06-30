@@ -1004,8 +1004,7 @@ def smart_store(content: str, owner: str = "", agent_name: str = "",
         ).fetchall()
         if recent and dedup_threshold > 0:
             texts = [content[:1000]] + [r["content"][:1000] for r in recent]
-            vecs = tfidf_svd_embed(texts, dims=EMBED_DIM)
-            if vecs is not None and len(vecs) > 1:
+            if len(texts) > 1:
                 tfidf_docs = compute_tfidf(texts)
                 sim = cosine_sim(tfidf_docs[0], tfidf_docs[1])
                 for i, r in enumerate(recent):

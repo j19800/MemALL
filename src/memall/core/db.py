@@ -482,7 +482,10 @@ class ConnectionPool:
             except Exception:
                 logger.warning("db.py: silent error", exc_info=True)
             return
-        self._pool.put_nowait(conn)
+        try:
+            self._pool.put_nowait(conn)
+        except queue.Full:
+            conn.close()
 
     def close_all(self) -> None:
         """Drain the pool and close every connection."""

@@ -6,7 +6,9 @@ Provides temporary database isolation to avoid polluting the real DB.
 
 import os
 import sys
+import tempfile
 import time
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -19,12 +21,32 @@ def _unique_agent() -> str:
 
 
 def init_temp_db():
-    """Legacy — isolation handled by conftest.py autouse fixture."""
-    return (None, None)
+    """Set up a temporary database for test isolation.
+
+    Returns (db_path, original_db_path) for cleanup.
+    """
+    from memall.core import db as core_db
+
+    tmp_dir = Path(tempfile.mkdtemp()) / ".memall"
+    tmp_dir.mkdir(parents=True)
+    db_path = tmp_dir / "data.db"
+
+    original_db_path = core_db.DB_PATH
+    core_db.DB_PATH = db_path
+    core_db._global_pool = None
+
+    from memall.core.db import init_db
+    init_db(migrate=True)
+    return (db_path, original_db_path)
 
 
-def cleanup_temp_db(*args):
-    """Legacy — no-op, isolation handled by conftest."""
+def cleanup_temp_db(unused_db_path=None, original_db_path=None):
+    """Restore original DB_PATH after test."""
+    restore_path = original_db_path or unused_db_path
+    if restore_path:
+        from memall.core import db as core_db
+        core_db.DB_PATH = restore_path
+        core_db._global_pool = None
 
 
 def insert_memory(
