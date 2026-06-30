@@ -599,12 +599,25 @@ def api_db_vacuum():
     return vacuum_db()
 
 
+DEBT_SCAN_CACHE = Path.home() / ".memall" / "debt_scan_cache.json"
+
+def _load_debt_cache():
+    if DEBT_SCAN_CACHE.exists():
+        try:
+            return json.loads(DEBT_SCAN_CACHE.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    return None
+
+def _save_debt_cache(data: dict):
+    DEBT_SCAN_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    DEBT_SCAN_CACHE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
 @app.get("/debt/stats")
 def api_debt_stats():
-    """Debt dashboard statistics (dynamic, replaces hardcoded debt page)."""
+    """Debt dashboard statistics from real scan data + DB."""
     from memall.core.db import db_stats, get_conn
     from pathlib import Path
-    import os
 
     stats = db_stats()
     tables = stats.get("tables", {})
@@ -651,18 +664,23 @@ def api_debt_stats():
         except Exception:
             pass
 
-    # S0-S3 counts from hardcoded known issues (simplified)
-    s1_modules = {
-        "pipeline": 13, "mcp": 7, "gateway": 3, "core": 7,
-        "cli": 1, "tests": 2, "search": 2, "graph": 1, "bridge": 1,
-    }
-    s2_modules = {
-        "pipeline": 6, "mcp": 3, "gateway": 2, "core": 4,
-        "cli": 2, "tests": 4, "search": 1, "graph": 1, "bridge": 1,
-    }
-    s3_modules = {
-        "pipeline": 4, "mcp": 1, "gateway": 1, "core": 2,
-        "cli": 2, "search": 2, "graph": 1,
+    # Load scan cache
+    cached = _load_debt_cache()
+    scan = cached.get("scan", {}) if cached else {}
+    counts = scan.get("counts", {}) if scan else {}
+    details = scan.get("details", []) if scan else []
+
+    debt = {
+        "s0_count": counts.get("critical", 0),
+        "s1_count": counts.get("major", 0),
+        "s2_count": counts.get("minor", 0),
+        "s3_count": counts.get("info", 0),
+        "total": sum(counts.values()),
+        "scan_time": scan.get("scan_time", "") if scan else "",
+        "line_count": scan.get("line_count", 0) if scan else 0,
+        "density": scan.get("density", 0) if scan else 0,
+        "severity_summary": scan.get("severity_summary", "") if scan else "",
+        "details": details[:50],
     }
 
     return {
@@ -673,73 +691,51 @@ def api_debt_stats():
         "level_distribution": level_dist,
         "category_distribution": cat_dist,
         "archive_count": archive_count,
-        "code_lines": tables.get("sqlite_master", 0) or 32813,
-        "debt": {
-            "s0_fixed": 13,
-            "s1_count": sum(s1_modules.values()),
-            "s2_count": sum(s2_modules.values()),
-            "s3_count": sum(s3_modules.values()),
-            "s0_rate": 100,
-            "estimated_hours": 50,
-            "modules": {
-                mod: {"s1": s1_modules.get(mod, 0), "s2": s2_modules.get(mod, 0), "s3": s3_modules.get(mod, 0)}
-                for mod in set(list(s1_modules.keys()) + list(s2_modules.keys()) + list(s3_modules.keys()))
-            }
-        }
+        "scanned": cached is not None,
+        "debt": debt,
     }
 
 
 @app.post("/debt/scan")
 def api_debt_scan():
-    """Run a live scan of all .py files for known debt patterns.
-
-    Dynamically imports debt/scan.py from the project root.
-    Returns scan_time, line_count, severity counts, findings details,
-    density (items/KLOC), and severity_summary string.
-    """
-    project_root = Path(__file__).resolve().parent.parent.parent.parent
-    if not project_root.exists():
-        return {"error": "project root not found"}
-
-    scan_path = project_root / "debt" / "scan.py"
-    if not scan_path.exists():
-        return {"error": "scanner module not found at debt/scan.py"}
-
-    spec = importlib.util.spec_from_file_location("debt_scanner", str(scan_path))
-    scanner = importlib.util.module_from_spec(spec)
+    """Run a live scan of all .py files for known debt patterns."""
     try:
+        project_root = Path(__file__).resolve().parent.parent.parent.parent
+        scan_py = project_root / "debt" / "scan.py"
+
+        import sys as _sys
+        _sys.path.insert(0, str(project_root))
+
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("debt_scanner", str(scan_py))
+        scanner = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(scanner)
+
+        result = scanner.scan_known_patterns()
+        line_count = scanner.count_lines()
+
+        counts = result["counts"]
+        details = result["details"]
+        total = sum(counts.values())
+        kloc = line_count / 1000
+        density = round(float(total) / kloc, 2) if kloc > 0 else 0
+
+        parts = []
+        for k,v in [("critical",counts.get("critical",0)),("major",counts.get("major",0)),("minor",counts.get("minor",0)),("info",counts.get("info",0))]:
+            if v: parts.append(f"{v} {k.capitalize()}")
+        severity_summary = " / ".join(parts) if parts else "All clean"
+
+        scan_result = {
+            "scan_time": datetime.now(timezone.utc).isoformat(),
+            "line_count": line_count, "counts": counts, "details": details,
+            "density": density, "severity_summary": severity_summary,
+        }
+
+        _save_debt_cache({"scan": scan_result})
+        return scan_result
     except Exception as e:
-        return {"error": f"scan module import error: {e}"}
-
-    result = scanner.scan_known_patterns()
-    line_count = scanner.count_lines()
-
-    counts = result["counts"]
-    details = result["details"]
-    total = sum(counts.values())
-    kloc = line_count / 1000
-    density = round(total / kloc, 2) if kloc > 0 else 0
-
-    parts = []
-    if counts["critical"]:
-        parts.append(f"{counts['critical']} Critical")
-    if counts["major"]:
-        parts.append(f"{counts['major']} Major")
-    if counts["minor"]:
-        parts.append(f"{counts['minor']} Minor")
-    if counts["info"]:
-        parts.append(f"{counts['info']} Info")
-    severity_summary = " / ".join(parts) if parts else "All clean"
-
-    return {
-        "scan_time": datetime.now(timezone.utc).isoformat(),
-        "line_count": line_count,
-        "counts": counts,
-        "details": details,
-        "density": density,
-        "severity_summary": severity_summary,
-    }
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
 
 
 # ══════════════════════════════════════════════════════════════════

@@ -16,6 +16,7 @@ import json
 import hashlib
 from datetime import datetime, timezone
 from memall.core.db import get_conn
+from memall.core.thin_waist import normalize_agent_name
 from memall.pipeline.metrics import read_history
 
 
@@ -246,7 +247,7 @@ def _update_weekly_monthly(conn) -> dict:
             conn.execute(
                 "INSERT INTO memories (content, content_hash, level, agent_name, category, project, summary, occurred_at, created_at, updated_at, metadata) "
                 "VALUES (?, ?, 'L6', ?, 'reflection', ?, ?, ?, ?, ?, ?)",
-                (content, ch, agent, "",
+                (content, ch, normalize_agent_name(agent), "",
                  f"📅 周反思 {wk}", now, now, now,
                  json.dumps({"l6_source": "weekly_aggregate", "source_count": len(wk_mems)})),
             )
@@ -270,7 +271,7 @@ def _update_weekly_monthly(conn) -> dict:
             conn.execute(
                 "INSERT INTO memories (content, content_hash, level, agent_name, category, project, summary, occurred_at, created_at, updated_at, metadata) "
                 "VALUES (?, ?, 'L6', ?, 'reflection', ?, ?, ?, ?, ?, ?)",
-                (content, ch, agent, "",
+                (content, ch, normalize_agent_name(agent), "",
                  f"📅 月反思 {mk}", now, now, now,
                  json.dumps({"l6_source": "monthly_aggregate", "source_count": len(mo_mems)})),
             )

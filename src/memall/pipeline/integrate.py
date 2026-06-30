@@ -98,7 +98,7 @@ def integrate_step(min_categories: int = 2) -> dict:
 
         by_agent: dict = defaultdict(list)
         for r in rows:
-            agent = r["agent_name"] or "unknown"
+            agent = normalize_agent_name(r["agent_name"]) or "unknown"
             by_agent[agent].append(r)
 
         integrated = 0

@@ -107,6 +107,21 @@ def normalize_agent_name(name: str) -> str:
             or name in _AGENT_BLACKLIST
             or _AGENT_TAG_RE.search(name)):
         return "system"
+    # Reject single-character names (template leaks, parse artifacts, stray symbols)
+    if len(name) < 2:
+        return "system"
+    # Reject template variable leaks: system.agent_name, demo.agent_name, etc.
+    if name.endswith(".agent_name"):
+        return "system"
+    # Reject names containing template delimiters
+    if "{" in name or "}" in name:
+        return "system"
+    # Reject single-CJK-character names (会, 全, 本, etc. — always parse artifacts)
+    cjk_count = sum(1 for c in name if "一" <= c <= "鿿" or "㐀" <= c <= "䶿")
+    if cjk_count >= 1 and len(name) == cjk_count:
+        # Pure CJK names: require at least 2 CJK characters
+        if cjk_count < 2:
+            return "system"
     return name
 
 

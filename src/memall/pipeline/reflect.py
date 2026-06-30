@@ -2,6 +2,7 @@ import re
 import hashlib
 from datetime import datetime, timezone
 from memall.core.db import get_conn
+from memall.core.thin_waist import normalize_agent_name
 
 import json
 CORRECTION_KEYWORDS = ["不对", "修正", "更正", "纠正", "错了", "错误", "应该是", "实际上是", "不对的"]
@@ -238,7 +239,7 @@ def _aggregate_l6(conn, upgraded_ids: list, now: str) -> int:
         conn.execute(
             "INSERT INTO memories (content, content_hash, level, agent_name, category, project, summary, occurred_at, created_at, updated_at, metadata) "
             "VALUES (?, ?, 'L6', ?, ?, ?, ?, ?, ?, ?, ?)",
-            (content, ch, agent_label, cat, l6_project,
+            (content, ch, normalize_agent_name(agent_label), cat, l6_project,
              f"{len(mids)} 条反思聚合", now, now, now,
              json.dumps({"l6_source": "aggregate", "source_ids": mids, "quality": "aggregated"})),
         )

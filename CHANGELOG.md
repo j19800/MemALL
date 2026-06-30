@@ -1,3 +1,9 @@
+## [v0.1.27] - 2026-06-30
+
+### Fixed
+
+- **Agent 注册机制允许垃圾名称入库**: `normalize_agent_name()` 增加 4 条新校验规则 — 单字符英文拒绝、单字符 CJK 拒绝、花括号拒绝、`.agent_name` 后缀拒绝。4 个绕过 normalize 的管线步骤全部修复：`distill.py`、`observe.py`（2 处）、`reflect.py`、`integrate.py` 写入 agent_name 前统一调用 `normalize_agent_name()`。存量清理：212 条记忆 agent_name 重置为 "system"、33 条垃圾 identity 删除。(`core/thin_waist.py`, `pipeline/distill.py`, `pipeline/observe.py`, `pipeline/reflect.py`, `pipeline/integrate.py`)
+
 ## [v0.1.26] - 2026-06-30
 
 ### Fixed

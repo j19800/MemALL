@@ -6,6 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 from collections import Counter, defaultdict
 from memall.core.db import get_conn
+from memall.core.thin_waist import normalize_agent_name
 from memall.pipeline.util import _smart_subject
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ def distill_step() -> dict:
             l9_thread_id = source_ids[0] if source_ids else None
             cur = conn.execute(
                 "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, summary, created_at, updated_at, occurred_at, subject, project, trust_level, access_count, metadata, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (merged_content, ch, "L9", "", key[0], key[1], l9_subject, now, now, now, l9_subject, l9_project, 0, 0, "{}", l9_thread_id),
+                (merged_content, ch, "L9", "", normalize_agent_name(key[0]), key[1], l9_subject, now, now, now, l9_subject, l9_project, 0, 0, "{}", l9_thread_id),
             )
             if cur.rowcount == 0:
                 # Duplicate hash → record already exists, skip
