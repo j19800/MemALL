@@ -10,18 +10,18 @@ Tests the complete operational flow by calling the tool layer directly
   4. traverse (1-hop)
   5. timeline
   6. session_start → capture → session_end → summary
-  7. memall_smart_store (dedup)
-  8. memall_vector_search
-  9. memall_db stats
-  10. memall_persona
-  11. memall_onboarding status
-  12. memall_forget stats (readonly)
-  13. memall_ops stats (readonly)
-  14. memall_security check (readonly)
-  15. memall_adaptive report (readonly)
-  16. memall_index_rebuild (forces embedding index)
+  7. memall_write smart_store (dedup)
+  8. memall_read vector_search
+  9. memall_system db stats
+  10. memall_persona identity + persona
+  11. memall_system onboarding status
+  12. memall_write forget stats (readonly)
+  13. memall_write ops dedup (readonly)
+  14. memall_system security check (readonly)
+  15. memall_system adaptive report (readonly)
+  16. memall_system index_rebuild (forces embedding index)
   17. Error: unknown tool
-  18. memall_run_pipeline (full pipeline)
+  18. memall_system run_pipeline (full pipeline)
 
 Usage:
     python tests/test_e2e.py
@@ -114,7 +114,8 @@ def main():
     ]
     for i, text in enumerate(captions):
         try:
-            r = tool("capture", {
+            r = tool("memall_write", {
+                "action": "capture",
                 "content": text,
                 "agent_name": "e2e_agent",
                 "category": "test",
@@ -131,7 +132,7 @@ def main():
     # ── 2. Retrieve ──
     print("\n\u2500\u2500 Retrieve \u2500\u2500")
     try:
-        raw = handle_call("retrieve", {"query": "HTTP transport thread pool", "limit": 5})
+        raw = handle_call("memall_read", {"action": "retrieve", "query": "HTTP transport thread pool", "limit": 5})
         r = json.loads(raw)
         assert isinstance(r, list), f"expected list, got {type(r)}"
         ok("retrieve", f"{len(r)} results")
@@ -141,7 +142,7 @@ def main():
     # ── 3. Timeline ──
     print("\n\u2500\u2500 Timeline \u2500\u2500")
     try:
-        raw = handle_call("timeline", {"hours": 24, "limit": 10})
+        raw = handle_call("memall_read", {"action": "timeline", "hours": 24, "limit": 10})
         r = json.loads(raw)
         assert isinstance(r, list), f"expected list, got {type(r)}"
         ok("timeline", f"{len(r)} entries")
@@ -152,7 +153,8 @@ def main():
     print("\n\u2500\u2500 Connect \u2500\u2500")
     if len(mem_ids) >= 2:
         try:
-            r = tool("connect", {
+            r = tool("memall_write", {
+                "action": "connect",
                 "source_id": mem_ids[0],
                 "target_id": mem_ids[1],
                 "relation_type": "refines",
@@ -168,7 +170,7 @@ def main():
     print("\n\u2500\u2500 Traverse \u2500\u2500")
     if mem_ids:
         try:
-            r = tool("traverse", {"node_id": mem_ids[0], "depth": 1})
+            r = tool("memall_read", {"action": "traverse", "node_id": mem_ids[0], "depth": 1})
             ok("traverse", f"from node {mem_ids[0]}")
         except Exception as e:
             fail("traverse", str(e))
@@ -177,7 +179,7 @@ def main():
     print("\n\u2500\u2500 Session Lifecycle \u2500\u2500")
     session_id = None
     try:
-        raw = handle_call("memall_session_start", {"agent_name": "e2e_agent"})
+        raw = handle_call("memall_system", {"action": "session_start", "agent_name": "e2e_agent"})
         r = json.loads(raw)
         if isinstance(r, dict) and r.get("status") == "error":
             err = r.get("error", "")
@@ -195,7 +197,8 @@ def main():
 
     if session_id:
         try:
-            r = tool("capture", {
+            r = tool("memall_write", {
+                "action": "capture",
                 "content": "E2E: memory during active session",
                 "agent_name": "e2e_agent",
                 "category": "test",
@@ -204,14 +207,14 @@ def main():
         except Exception as e:
             fail("capture (in-session)", str(e))
         try:
-            raw = handle_call("memall_session_end", {"session_id": session_id})
+            raw = handle_call("memall_system", {"action": "session_end", "session_id": session_id})
             r = json.loads(raw)
             assert r.get("status") == "ended"
             ok("session_end")
         except Exception as e:
             fail("session_end", str(e))
         try:
-            r = tool("memall_session_summary", {"session_id": session_id})
+            r = tool("memall_system", {"action": "session_summary", "session_id": session_id})
             ok("session_summary",
                f'ids={len(r.get("memory_ids", []))}')
         except Exception as e:
@@ -223,7 +226,8 @@ def main():
     # ── 7. Smart store ──
     print("\n\u2500\u2500 Smart Store \u2500\u2500")
     try:
-        r = tool("memall_smart_store", {
+        r = tool("memall_write", {
+            "action": "smart_store",
             "content": "E2E: testing smart store dedup mechanism",
             "agent_name": "e2e_agent",
         })
@@ -234,7 +238,7 @@ def main():
     # ── 8. Vector search ──
     print("\n\u2500\u2500 Vector Search \u2500\u2500")
     try:
-        r = tool("memall_vector_search", {"query": "memory thread pool", "top_k": 5})
+        r = tool("memall_read", {"action": "vector_search", "query": "memory thread pool", "top_k": 5})
         ok("memall_vector_search", f'{len(r) if isinstance(r, list) else 1} results')
     except Exception as e:
         fail("memall_vector_search", str(e))
@@ -242,7 +246,7 @@ def main():
     # ── 9. DB stats ──
     print("\n\u2500\u2500 DB Stats \u2500\u2500")
     try:
-        r = tool("memall_db", {"action": "stats"})
+        r = tool("memall_system", {"action": "db", "sub_action": "stats"})
         cnt = r.get("memories") or r.get("memory_count") or r.get("total", "?")
         ok("memall_db stats", f"memories={cnt}")
     except Exception as e:
@@ -251,7 +255,7 @@ def main():
     # ── 10. Identity ──
     print("\n\u2500\u2500 Identity \u2500\u2500")
     try:
-        r = tool("memall_identity", {"agent_name": "e2e_agent"})
+        r = tool("memall_persona", {"action": "identity", "agent_name": "e2e_agent"})
         ok("memall_identity", "ok")
     except Exception as e:
         fail("memall_identity", str(e))
@@ -259,7 +263,7 @@ def main():
     # ── 11. Persona ──
     print("\n\u2500\u2500 Persona \u2500\u2500")
     try:
-        r = tool("memall_persona", {"agent_name": "e2e_agent"})
+        r = tool("memall_persona", {"action": "persona", "agent_name": "e2e_agent"})
         ok("memall_persona", f"type={type(r).__name__}")
     except Exception as e:
         fail("memall_persona", str(e))
@@ -267,7 +271,7 @@ def main():
     # ── 12. Onboarding ──
     print("\n\u2500\u2500 Onboarding \u2500\u2500")
     try:
-        r = tool("memall_onboarding", {"action": "status"})
+        r = tool("memall_system", {"action": "onboarding", "sub_action": "status"})
         ok("memall_onboarding", f'step={r.get("current_step", r.get("step", "?"))}')
     except Exception as e:
         fail("memall_onboarding", str(e))
@@ -275,7 +279,7 @@ def main():
     # ── 13. Forget stats (readonly) ──
     print("\n\u2500\u2500 Forget Stats \u2500\u2500")
     try:
-        r = tool("memall_forget", {"action": "stats"})
+        r = tool("memall_write", {"action": "forget", "sub_action": "stats"})
         ok("memall_forget stats", "ok")
     except Exception as e:
         fail("memall_forget stats", str(e))
@@ -283,7 +287,7 @@ def main():
     # ── 14. Security check ──
     print("\n\u2500\u2500 Security Check \u2500\u2500")
     try:
-        r = tool("memall_security", {"action": "check", "agent_name": "e2e_agent"})
+        r = tool("memall_system", {"action": "security", "sub_action": "check", "agent_name": "e2e_agent"})
         ok("memall_security check", "ok")
     except Exception as e:
         fail("memall_security check", str(e))
@@ -291,7 +295,7 @@ def main():
     # ── 15. Adaptive report ──
     print("\n\u2500\u2500 Adaptive Report \u2500\u2500")
     try:
-        r = tool("memall_adaptive", {"action": "report"})
+        r = tool("memall_system", {"action": "adaptive", "sub_action": "report"})
         ok("memall_adaptive report", "ok")
     except Exception as e:
         fail("memall_adaptive report", str(e))
@@ -311,7 +315,7 @@ def main():
     # ── 17. Pipeline (full run) ──
     print("\n\u2500\u2500 Pipeline (full run) \u2500\u2500")
     try:
-        r = tool("memall_run_pipeline", {
+        r = tool("memall_system", {"action": "run_pipeline",
             "include_reflect": True,
             "include_distill": True,
             "include_integrate": True,
@@ -324,7 +328,7 @@ def main():
     # ── 18. Index rebuild ──
     print("\n\u2500\u2500 Index Rebuild \u2500\u2500")
     try:
-        r = tool("memall_index_rebuild", {"force": False})
+        r = tool("memall_system", {"action": "index_rebuild", "force": False})
         ok("memall_index_rebuild", f'status={r.get("status", "?")}')
     except Exception as e:
         fail("memall_index_rebuild", str(e))
@@ -332,7 +336,7 @@ def main():
     # ── 19. Vector search after index rebuild ──
     print("\n\u2500\u2500 Vector Search (post-index) \u2500\u2500")
     try:
-        r = tool("memall_vector_search", {"query": "HTTP transport thread pool", "top_k": 5})
+        r = tool("memall_read", {"action": "vector_search", "query": "HTTP transport thread pool", "top_k": 5})
         ok("memall_vector_search (post-index)", f'{len(r) if isinstance(r, list) else 1} results')
     except Exception as e:
         fail("memall_vector_search (post-index)", str(e))
@@ -340,7 +344,7 @@ def main():
     # ── 20. Ops dedup ──
     print("\n\u2500\u2500 Memall Ops Dedup \u2500\u2500")
     try:
-        r = tool("memall_ops", {"action": "dedup", "agent_name": "e2e_agent", "threshold": 0.95})
+        r = tool("memall_write", {"action": "ops", "sub_action": "dedup", "agent_name": "e2e_agent", "threshold": 0.95})
         ok("memall_ops dedup", "ok")
     except Exception as e:
         fail("memall_ops dedup", str(e))

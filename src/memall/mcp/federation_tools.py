@@ -3,9 +3,9 @@
 Phase 8: MCP 对接 agent-hub.
 
 Tools exposed:
-- memall_fed_query: search shared_memories across agents
-- memall_fed_publish: publish memory to shared_memories
-- memall_fed_conflicts: list unresolved conflicts
+- memall_federation (action=fed_query): search shared_memories across agents
+- memall_federation (action=fed_publish): publish memory to shared_memories
+- memall_federation (action=fed_conflicts): list unresolved conflicts
 - memall_fed_inject: on session_start, inject Agent Profile + semantic fragments
 - memall_fed_extract: on session_end, extract facts to shared_memories
 

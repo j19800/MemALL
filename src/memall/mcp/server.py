@@ -203,12 +203,12 @@ def serve():
                             "onboarding_step": onboarding_step,
                             "onboarding_user_id": user_id,
                             "onboarding_action": "skip" if onboarding_completed else "start",
-                            "onboarding_tool": "memall_onboarding",
+                            "onboarding_tool": "memall_system",
                             "welcome_memory_id": welcome_memory_id,
                             "onboarding_message": (
                                 "MemALL 新手引导已完成。直接使用所有工具。"
                                 if onboarding_completed
-                                else f"MemALL 新手引导未完成（{user_id} 在步骤 {onboarding_step}/5）。建议调 memall_onboarding action=start 走 5 步引导。"
+                                else f"MemALL 新手引导未完成（{user_id} 在步骤 {onboarding_step}/5）。建议调 memall_system action=onboarding sub_action=start 走 5 步引导。"
                             ),
                         }
                     },

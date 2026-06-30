@@ -1992,64 +1992,130 @@ function loadAgents(){
   });
 }
 
-function showAgentDetail(name){
-  var overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.onclick = function(e){if(e.target===overlay)document.body.removeChild(overlay)};
-  overlay.innerHTML = '<div class="modal agent-modal" onclick="event.stopPropagation()">'+
-    '<div class="modal-header"><h3>Agent: '+esc(name)+'</h3>'+
-    '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">&times;</button></div>'+
-    '<div class="modal-body" id="agentDetailBody"><div style="text-align:center;padding:40px"><div class="spinner"></div></div></div></div>';
-  document.body.appendChild(overlay);
-  var body = document.getElementById('agentDetailBody');
+var _agentMemCache = {};
+var _agentFilterTimer = null;
 
-  // Load persona + memories in parallel
+function showAgentDetail(name){
+  document.getElementById('agentGrid').style.display = 'none';
+  var existing = document.getElementById('agentDetailView');
+  if(existing) existing.remove();
+  var div = document.createElement('div');
+  div.id = 'agentDetailView';
+  div.innerHTML = '<div style="margin-bottom:16px"><button class="btn btn-secondary" onclick="closeAgentDetail()">&larr; 返回Agent列表</button></div>'+
+    '<div id="agentDetailBody"><div style="text-align:center;padding:60px"><div class="spinner"></div><span>加载 '+esc(name)+' 数据...</span></div></div>';
+  document.getElementById('page-agents').appendChild(div);
+  loadAgentData(name, '', true);
+}
+
+function closeAgentDetail(){
+  document.getElementById('agentDetailView').remove();
+  document.getElementById('agentGrid').style.display = '';
+}
+
+function loadAgentData(name, filter, reset){
+  var body = document.getElementById('agentDetailBody');
+  if(reset) body.innerHTML = '<div style="text-align:center;padding:60px"><div class="spinner"></div></div>';
+
+  if(reset) _agentMemCache = {};
+
   Promise.all([
     api('GET','/persona/'+encodeURIComponent(name)).catch(function(){ return {}; }),
-    api('GET','/memories/search?limit=200&offset=0&agent_name='+encodeURIComponent(name))
+    api('GET','/memories/search?limit=1000&agent_name='+encodeURIComponent(name))
   ]).then(function(results){
     var p = (results[0].data || results[0].persona || results[0] || {});
     var memData = results[1].data || results[1].results || results[1].memories || results[1] || [];
     if(!Array.isArray(memData)) memData = [];
+    _agentMemCache[name] = memData;
+
+    var filtered = filter ? memData.filter(function(m){
+      var txt = (m.content||'') + (m.subject||'') + (m.category||'') + (m.level||'');
+      return txt.toLowerCase().indexOf(filter.toLowerCase()) !== -1;
+    }) : memData;
 
     var personaText = p.content || p.persona || p.description || p.prompt || '';
     var initial = name.charAt(0).toUpperCase();
+    var cats = {};
+    var lvs = {};
+    memData.forEach(function(m){ cats[m.category||'?']=(cats[m.category||'?']||0)+1; lvs[m.level||'?']=(lvs[m.level||'?']||0)+1; });
+    var topCat = Object.keys(cats).sort(function(a,b){return cats[b]-cats[a]}).slice(0,3).join(', ');
 
-    var html = '<div style="display:flex;align-items:center;gap:16px;padding-bottom:16px;border-bottom:1px solid var(--border);margin-bottom:16px">'+
+    var html = '<div style="display:flex;align-items:center;gap:16px;padding:16px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;margin-bottom:16px">'+
       '<div style="width:56px;height:56px;border-radius:50%;background:var(--accent-dim);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;flex-shrink:0">'+esc(initial)+'</div>'+
-      '<div><div style="font-size:18px;font-weight:600">'+esc(name)+'</div>'+
-      '<div style="font-size:13px;color:var(--text-muted);margin-top:4px">'+memData.length+' 条记忆</div>'+
-      (personaText ? '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;max-height:60px;overflow-y:auto">'+esc(personaText).substring(0,300)+'</div>' : '')+
+      '<div style="flex:1"><div style="font-size:18px;font-weight:600">'+esc(name)+'</div>'+
+      '<div style="font-size:13px;color:var(--text-muted);margin-top:4px">共 '+memData.length+' 条记忆 | 分类: '+esc(topCat)+'</div>'+
+      (personaText ? '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;max-height:48px;overflow:hidden">'+esc(personaText).substring(0,200)+'</div>' : '')+
       '</div></div>';
 
-    html += '<div style="font-size:14px;font-weight:600;margin-bottom:8px">记忆列表</div>';
+    html += '<div style="margin-bottom:12px">'+
+      '<input type="text" id="agentMemFilter" placeholder="搜索该Agent的记忆..." style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-card);color:var(--text-primary);font-size:13px;box-sizing:border-box" oninput="agentFilterDelay(\''+escJS(name)+'\')">'+
+      '</div>';
 
-    if(memData.length === 0){
-      html += '<div style="text-align:center;padding:32px;color:var(--text-muted)">该 Agent 暂无记忆</div>';
+    html += '<div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">共 '+filtered.length+' 条</div>';
+
+    if(filtered.length === 0){
+      html += '<div style="text-align:center;padding:32px;color:var(--text-muted)">'+(filter ? '没有匹配的记忆' : '该 Agent 暂无记忆')+'</div>';
     } else {
-      html += memData.slice(0,100).map(function(m){
-        var id = m.id || '-';
-        var level = m.level || '';
-        var preview = esc((m.content||m.subject||'').substring(0,120));
-        var created = m.created_at || m.occurred_at || '';
-        var cat = esc(m.category || '');
-        return '<div class="agent-mem-card" onclick="showMemDetail('+id+');this.closest(\'.modal-overlay\').remove()">'+
-          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'+
-          '<span class="tag lv-'+esc(level)+'" style="font-size:10px">'+esc(level)+'</span>'+
-          '<span style="font-size:11px;color:var(--text-muted)">#'+id+'</span>'+
-          '<span style="font-size:11px;color:var(--text-muted)">'+esc(cat)+'</span>'+
-          '<span style="font-size:11px;color:var(--text-muted);margin-left:auto">'+fmtDate(created)+'</span>'+
-          '</div>'+
-          '<div style="font-size:13px;color:var(--text-primary);line-height:1.4">'+preview+'</div>'+
-          '</div>';
-      }).join('');
+      html += '<div id="agentMemList">';
+      html += renderAgentMemCards(filtered, 0, 50);
+      html += '</div>';
+      if(filtered.length > 50){
+        html += '<div style="text-align:center;padding:12px"><button class="btn btn-secondary" id="agentLoadMoreBtn" onclick="loadMoreAgentMems(\''+escJS(name)+'\',\''+escJS(filter)+'\', '+filtered.length+')">加载更多 ('+Math.min(50, filtered.length-50)+' / '+filtered.length+')</button></div>';
+      }
     }
-
     body.innerHTML = html;
+    document.getElementById('agentMemFilter').focus();
   }).catch(function(err){
     body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--red)">加载失败: '+esc(err.message)+'</div>';
   });
 }
+
+function renderAgentMemCards(items, start, count){
+  return items.slice(start, start+count).map(function(m){
+    var id = m.id || '-';
+    var level = m.level || '';
+    var preview = esc((m.content||m.subject||'').substring(0,150));
+    var created = m.created_at || m.occurred_at || '';
+    var cat = esc(m.category || '');
+    return '<div class="agent-mem-card" onclick="showMemDetail('+id+')">'+
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'+
+      '<span class="tag lv-'+esc(level)+'" style="font-size:10px">'+esc(level)+'</span>'+
+      '<span style="font-size:11px;color:var(--text-muted)">#'+id+'</span>'+
+      '<span style="font-size:11px;color:var(--text-muted)">'+esc(cat)+'</span>'+
+      '<span style="font-size:11px;color:var(--text-muted);margin-left:auto">'+fmtDate(created)+'</span>'+
+      '</div>'+
+      '<div style="font-size:13px;color:var(--text-primary);line-height:1.4">'+preview+'</div></div>';
+  }).join('');
+}
+
+var _agentMemStart = 50;
+
+function loadMoreAgentMems(name, filter, total){
+  var btn = document.getElementById('agentLoadMoreBtn');
+  var list = document.getElementById('agentMemList');
+  var all = _agentMemCache[name] || [];
+  var filtered = filter ? all.filter(function(m){
+    var txt = (m.content||'') + (m.subject||'') + (m.category||'') + (m.level||'');
+    return txt.toLowerCase().indexOf(filter.toLowerCase()) !== -1;
+  }) : all;
+  var next = _agentMemStart + 50;
+  list.innerHTML += renderAgentMemCards(filtered, _agentMemStart, 50);
+  _agentMemStart = next;
+  if(next >= filtered.length){
+    btn.style.display = 'none';
+  } else {
+    btn.textContent = '加载更多 ('+Math.min(50, filtered.length-next)+' / '+filtered.length+')';
+  }
+}
+
+function agentFilterDelay(name){
+  clearTimeout(_agentFilterTimer);
+  _agentFilterTimer = setTimeout(function(){
+    _agentMemStart = 50;
+    loadAgentData(name, document.getElementById('agentMemFilter').value, false);
+  }, 300);
+}
+
+function escJS(s){ return (''+s).replace(/'/g,"\\'").replace(/"/g,'&quot;'); }
 
 // ============================================================
 //  SETTINGS

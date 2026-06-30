@@ -284,21 +284,21 @@ def cmd_pipeline_status(args):
 def cmd_forget(args):
     """CLI handler for `memall forget` — Phase 11 automatic forgetting."""
     if args.expired:
-        result = mcp_call("memall_forget", action="expired", days=args.days or 90, agent_name=args.agent or None)
+        result = mcp_call("memall_write", action="forget", sub_action="expired", days=args.days or 90, agent_name=args.agent or None)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
         print(f"Expired cleanup: {d['deleted_memories']} memories, {d['deleted_edges']} edges deleted")
 
     elif args.low_value:
-        result = mcp_call("memall_forget", action="low_value", agent_name=args.agent or None)
+        result = mcp_call("memall_write", action="forget", sub_action="low_value", agent_name=args.agent or None)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
         print(f"Low-value cleanup: {d['deleted_memories']}/{d['candidate_count']} candidates deleted")
 
     elif args.review:
-        result = mcp_call("memall_forget", action="review", days=args.days or 90, agent_name=args.agent or None)
+        result = mcp_call("memall_write", action="forget", sub_action="review", days=args.days or 90, agent_name=args.agent or None)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -309,7 +309,7 @@ def cmd_forget(args):
                 print(f"  [{item['type']:10s}] #{item['id']} | {item['content_preview'][:50]} | {item['created_at']} | {item['agent_name']}")
 
     elif args.stats:
-        result = mcp_call("memall_forget", action="stats")
+        result = mcp_call("memall_write", action="forget", sub_action="stats")
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -324,7 +324,7 @@ def cmd_forget(args):
         print(f"  Est size:     {d['size_estimate_mb']} MB")
 
     elif args.all:
-        result = mcp_call("memall_forget", action="all", days=args.days or 90, agent_name=args.agent or None)
+        result = mcp_call("memall_write", action="forget", sub_action="all", days=args.days or 90, agent_name=args.agent or None)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -334,7 +334,7 @@ def cmd_forget(args):
         print(f"  Total:     {d['total_deleted_memories']} memories, {d['total_deleted_edges']} edges")
 
     else:
-        result = mcp_call("memall_forget", action="stats")
+        result = mcp_call("memall_write", action="forget", sub_action="stats")
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -683,7 +683,7 @@ def cmd_adaptive(args):
     agent = args.agent or None
 
     if args.report:
-        result = mcp_call("memall_adaptive", action="report", agent_name=agent)
+        result = mcp_call("memall_system", action="adaptive", sub_action="report", agent_name=agent)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -706,7 +706,7 @@ def cmd_adaptive(args):
     elif args.index: action = "index"
     elif args.distill: action = "distill"
 
-    result = mcp_call("memall_adaptive", action=action, agent_name=agent)
+    result = mcp_call("memall_system", action="adaptive", sub_action=action, agent_name=agent)
     if not result.ok:
         print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
     print(json.dumps(result.data, ensure_ascii=False, indent=2))
@@ -721,7 +721,7 @@ def cmd_security(args):
     action = getattr(args, "action", None)
 
     if action == "audit":
-        result = mcp_call("memall_security", action="audit", agent_name=args.agent or None)
+        result = mcp_call("memall_system", action="security", sub_action="audit", agent_name=args.agent or None)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -737,7 +737,7 @@ def cmd_security(args):
         if not args.agent_name or not args.level:
             print("error: --agent and --level are required", file=sys.stderr)
             sys.exit(1)
-        result = mcp_call("memall_security", action="permit", agent_name=args.agent_name, level=args.level)
+        result = mcp_call("memall_system", action="security", sub_action="permit", agent_name=args.agent_name, level=args.level)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -747,7 +747,7 @@ def cmd_security(args):
         if not args.requester or not args.target:
             print("error: --from and --to are required", file=sys.stderr)
             sys.exit(1)
-        result = mcp_call("memall_security", action="check", requester=args.requester, target=args.target)
+        result = mcp_call("memall_system", action="security", sub_action="check", requester=args.requester, target=args.target)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -756,7 +756,7 @@ def cmd_security(args):
         print(f"  {d['reason']}")
 
     elif action == "score":
-        result = mcp_call("memall_security", action="score")
+        result = mcp_call("memall_system", action="security", sub_action="score")
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -771,7 +771,7 @@ def cmd_security(args):
 
     elif action == "list":
         level = getattr(args, "level", "private")
-        result = mcp_call("memall_security", action="list", level=level)
+        result = mcp_call("memall_system", action="security", sub_action="list", level=level)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -803,7 +803,7 @@ def cmd_ops(args):
     if action == "merge":
         if not args.source_id or not args.target_id:
             print("error: --from and --to are required", file=sys.stderr); sys.exit(1)
-        result = mcp_call("memall_ops", action="merge", source_id=args.source_id, target_id=args.target_id)
+        result = mcp_call("memall_write", action="ops", sub_action="merge", source_id=args.source_id, target_id=args.target_id)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -816,7 +816,7 @@ def cmd_ops(args):
         delim = args.delimiter or "\n\n"
         if delim.startswith("\\"):
             delim = delim.encode().decode("unicode_escape")
-        result = mcp_call("memall_ops", action="split", memory_id=args.split_id, delimiter=delim)
+        result = mcp_call("memall_write", action="ops", sub_action="split", memory_id=args.split_id, delimiter=delim)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -831,7 +831,7 @@ def cmd_ops(args):
         if not tag_list:
             print("error: --tags is required (comma-separated)", file=sys.stderr); sys.exit(1)
         mode = args.mode or "add"
-        result = mcp_call("memall_ops", action="tag", memory_id=args.tag_id, tags=tag_list, mode=mode)
+        result = mcp_call("memall_write", action="ops", sub_action="tag", memory_id=args.tag_id, tags=tag_list, mode=mode)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -844,7 +844,7 @@ def cmd_ops(args):
         if not tag_list:
             print("error: --tags is required", file=sys.stderr); sys.exit(1)
         mode = args.mode or "add"
-        result = mcp_call("memall_ops", action="batch_tag", agent_name=args.agent, category=args.category, tags=tag_list, mode=mode)
+        result = mcp_call("memall_write", action="ops", sub_action="batch_tag", agent_name=args.agent, category=args.category, tags=tag_list, mode=mode)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -854,7 +854,7 @@ def cmd_ops(args):
         if not args.agent:
             print("error: --agent is required", file=sys.stderr); sys.exit(1)
         days = args.days or 30
-        result = mcp_call("memall_ops", action="archive", agent_name=args.agent, days=days)
+        result = mcp_call("memall_write", action="ops", sub_action="archive", agent_name=args.agent, days=days)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -863,7 +863,7 @@ def cmd_ops(args):
     elif action == "restore":
         if not args.agent:
             print("error: --agent is required", file=sys.stderr); sys.exit(1)
-        result = mcp_call("memall_ops", action="restore", agent_name=args.agent)
+        result = mcp_call("memall_write", action="ops", sub_action="restore", agent_name=args.agent)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -872,7 +872,7 @@ def cmd_ops(args):
     elif action == "dedup":
         agent = args.agent or None
         threshold = args.threshold or 0.9
-        result = mcp_call("memall_ops", action="dedup", agent_name=agent, threshold=threshold)
+        result = mcp_call("memall_write", action="ops", sub_action="dedup", agent_name=agent, threshold=threshold)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data

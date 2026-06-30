@@ -601,7 +601,7 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 _distill_result = json.loads(_distill_handle({"action": "list", "limit": 5}))
                 _pending = _distill_result.get("pending", [])
                 if _pending:
-                    fmt_parts.append(f"[DISTILL] {len(_pending)} 组待写摘要，调 memall_distill_pending 查看")
+                    fmt_parts.append(f"[DISTILL] {len(_pending)} 组待写摘要，调 memall_system action=distill 查看")
             except Exception:
                 pass
 

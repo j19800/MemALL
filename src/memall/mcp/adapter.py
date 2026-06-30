@@ -39,8 +39,8 @@ def handle_call(tool_name: str, arguments: dict) -> str:
     arguments = validated_data
 
     # Session-based tools (memall_system actions) that should not auto-start sessions
-    _SESSION_SKIP_TOOLS = frozenset({"ping", "memall_onboarding"})
-    _SESSION_SKIP_ACTIONS = frozenset({"session_start", "session_end", "session_summary"})
+    _SESSION_SKIP_TOOLS = frozenset({"ping"})
+    _SESSION_SKIP_ACTIONS = frozenset({"session_start", "session_end", "session_summary", "onboarding"})
 
     if tool_name not in _SESSION_SKIP_TOOLS:
         action = arguments.get("action", "")

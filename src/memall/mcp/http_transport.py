@@ -174,14 +174,20 @@ async def handle_mcp_post(request: web.Request) -> web.Response:
         _arg_preview = str(arguments.get("action", "") or arguments.get("query", "") or arguments.get("id", ""))
         _log.info("Call tool: %s %s", tool_name, _arg_preview[:60])
 
-        # Route heavy ops to separate pool (pipeline, index_rebuild, etc.) to
-        # avoid exhausting the regular tool pool.
-        _HEAVY_TOOLS = frozenset({
-            "memall_run_pipeline", "memall_index_rebuild", "memall_adaptive",
-            "memall_forget", "memall_gateway", "memall_hub_sync",
-            "memall_persona_profile",
+        # Route heavy ops by consolidated tool name + action to separate pool
+        # (pipeline, index_rebuild, etc.) to avoid exhausting the regular tool pool.
+        _HEAVY_ACTIONS = frozenset({
+            "run_pipeline", "index_rebuild", "adaptive",
+            "gateway", "hub_sync", "persona_profile",
         })
-        if tool_name in _HEAVY_TOOLS:
+        _HEAVY_TOOLS = frozenset({"memall_system", "memall_write"})
+        action = arguments.get("action", "")
+        is_heavy = (
+            tool_name in _HEAVY_TOOLS and action in _HEAVY_ACTIONS
+        ) or (
+            tool_name == "memall_write" and action == "forget"
+        )
+        if is_heavy:
             _pool = _TOOL_HEAVY
             _timeout = _HEAVY_TIMEOUT
         else:

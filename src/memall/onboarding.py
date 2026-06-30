@@ -17,21 +17,21 @@ STEPS = [
         "title": "首次存储记忆",
         "prompt": "输入你想记住的第一条内容（如项目决策、架构设计、经验总结）：",
         "detail": "记忆会自动生成标题、分类、摘要。支持 5 级重要性（P0-P4）、项目和分类标签。",
-        "tools": ["capture", "memall_smart_store", "memall_store_batch"],
+        "tools": ["capture", "memall_write action=smart_store", "memall_write action=store_batch"],
     },
     {
         "id": 3,
         "title": "搜索试用",
         "prompt": "输入一个关键词试试搜索功能（支持全文搜索 + 语义向量搜索）：",
         "detail": "搜索支持关键词匹配、语义相似度（TF-IDF+SVD）、按项目/分类/Agent 过滤。",
-        "tools": ["retrieve", "memall_vector_search", "timeline"],
+        "tools": ["retrieve", "memall_read action=vector_search", "timeline"],
     },
     {
         "id": 4,
         "title": "系统状态",
         "prompt": "",
         "detail": "查看系统概览：记忆总数、Agent 数量、关系网络、联邦状态、安全评分。",
-        "tools": ["memall_db", "memall_security", "memall_adaptive"],
+        "tools": ["memall_system action=db", "memall_system action=security", "memall_system action=adaptive"],
     },
     {
         "id": 5,
@@ -45,11 +45,11 @@ STEPS = [
 # 工具推荐分组（按使用场景）
 _TOOL_RECOMMENDATIONS = [
     {"group": "快速上手", "tools": ["capture → retrieve → connect → traverse → timeline"]},
-    {"group": "智能存储", "tools": ["memall_smart_store → 去重存储", "memall_store_batch → 批量存储", "memall_update → 更新", "memall_vector_search → 语义搜索"]},
-    {"group": "Agent 人格", "tools": ["memall_persona → 认知画像", "memall_persona_profile → 三层画像", "memall_ask → 数字孪生问答"]},
-    {"group": "会话追踪", "tools": ["memall_session_start → 开始会话", "memall_session_end → 结束并提取事实", "memall_session_summary → 会话摘要"]},
-    {"group": "知识图谱", "tools": ["memall_graph → 图谱探索", "memall_fed_query → 跨 Agent 查询", "memall_fed_publish → 联邦发布"]},
-    {"group": "系统运维", "tools": ["memall_forget → 自动遗忘", "memall_security → 安全审计", "memall_adaptive → 自适应管线", "memall_db → 数据库维护"]},
+    {"group": "智能存储", "tools": ["memall_write → smart_store → 去重存储", "memall_write → store_batch → 批量存储", "memall_write → update → 更新", "memall_read → vector_search → 语义搜索"]},
+    {"group": "Agent 人格", "tools": ["memall_persona → persona → 认知画像", "memall_persona → persona_profile → 三层画像", "memall_persona → ask → 数字孪生问答"]},
+    {"group": "会话追踪", "tools": ["memall_system → session_start → 开始会话", "memall_system → session_end → 结束并提取事实", "memall_read → session_summary → 会话摘要"]},
+    {"group": "知识图谱", "tools": ["memall_read → graph → 图谱探索", "memall_federation → fed_query → 跨 Agent 查询", "memall_federation → fed_publish → 联邦发布"]},
+    {"group": "系统运维", "tools": ["memall_write → forget → 自动遗忘", "memall_system → security → 安全审计", "memall_system → adaptive → 自适应管线", "memall_system → db → 数据库维护"]},
 ]
 
 

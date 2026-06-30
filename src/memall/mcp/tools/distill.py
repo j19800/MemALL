@@ -1,4 +1,4 @@
-"""MCP tool: memall_distill_pending — list groups needing LLM-written summaries.
+"""MCP tool: memall_system action=distill — list groups needing LLM-written summaries.
 
 After pipeline runs, L9/L10 groups have keyword fingerprints + source samples
 but no human-readable narrative summary. This tool lets LLMs find and fill them.

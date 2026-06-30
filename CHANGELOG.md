@@ -1,4 +1,12 @@
-## [v0.1.23] - 2026-06-30
+## [v0.1.24] - 2026-06-30
+
+### Added
+
+- **Agent 详情页**: 点击 Agent 卡片后全页展开，顶部展示 persona/记忆总量/分类分布，支持实时搜索过滤 + "加载更多"分页，最多展示 1000 条记忆。 (`frontend/index.html`)
+
+### Changed
+
+- **42 个 MCP 工具合并为 6 个 action 路由工具**: `memall_write`、`memall_read`、`memall_persona`、`memall_discussion`、`memall_federation`、`memall_system`。每个工具通过 `action` 参数路由到原 handler，消除 ~4,500–6,000 tokens 的 tools/list 响应。内部已有 `action` 参数的工具使用 `sub_action` 映射。 (`mcp/tools/__init__.py`, `src/memall/mcp/adapter.py`, `src/memall/mcp/shared.py`, `src/memall/mcp/registry.py`, `src/memall/mcp/models.py`, `tests/test_e2e.py`)
 
 ### Fixed
 

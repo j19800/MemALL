@@ -714,7 +714,7 @@ def cmd_graph_visualize(args):
 
 def cmd_index(args):
     if args.action == "build":
-        result = mcp_call("memall_index_rebuild", force=False)
+        result = mcp_call("memall_system", action="index_rebuild", force=False)
         if not result.ok:
             print(f"Index build failed: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -733,7 +733,7 @@ def cmd_index(args):
 # ──────────────────────────────────────────────
 
 def cmd_retrieve(args):
-    result = mcp_call("memall_vector_search", query=args.query, top_k=args.top)
+    result = mcp_call("memall_read", action="vector_search", query=args.query, top_k=args.top)
     if not result.ok:
         print(f"Retrieve failed: {result.error}", file=sys.stderr); sys.exit(1)
     d = result.data
@@ -752,7 +752,7 @@ def cmd_retrieve(args):
 
 def cmd_onboarding(args):
     if args.action == "start":
-        result = mcp_call("memall_onboarding", action="start", step=args.step)
+        result = mcp_call("memall_system", action="onboarding", sub_action="start", step=args.step)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr)
             return
@@ -760,7 +760,7 @@ def cmd_onboarding(args):
         if d.get("status") == "already_completed":
             print(d.get("message", "already completed"))
     elif args.action == "status":
-        result = mcp_call("memall_onboarding", action="status")
+        result = mcp_call("memall_system", action="onboarding", sub_action="status")
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr)
             return
@@ -772,13 +772,13 @@ def cmd_onboarding(args):
             print(f"  Agent: {d.get('agent_name','未设置')}")
             print(f"  开始时间: {d.get('started_at','?')}")
     elif args.action == "reset":
-        result = mcp_call("memall_onboarding", action="reset")
+        result = mcp_call("memall_system", action="onboarding", sub_action="reset")
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr)
             return
         print(result.data.get("message", "reset"))
     elif args.action == "complete":
-        result = mcp_call("memall_onboarding", action="complete")
+        result = mcp_call("memall_system", action="onboarding", sub_action="complete")
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr)
             return
@@ -807,7 +807,7 @@ def cmd_db(args):
     action = getattr(args, "action", None)
 
     if action == "optimize":
-        result = mcp_call("memall_db", action="optimize")
+        result = mcp_call("memall_system", action="db", sub_action="optimize")
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -816,7 +816,7 @@ def cmd_db(args):
         print(f"OPTIMIZE: done")
 
     elif action == "stats":
-        result = mcp_call("memall_db", action="stats")
+        result = mcp_call("memall_system", action="db", sub_action="stats")
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -828,7 +828,7 @@ def cmd_db(args):
             print(f"  {name}: {cnt} rows")
 
     elif action == "vacuum":
-        result = mcp_call("memall_db", action="vacuum")
+        result = mcp_call("memall_system", action="db", sub_action="vacuum")
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -837,7 +837,7 @@ def cmd_db(args):
         print(f"Reclaimed: {d['reclaimed_mb']} MB")
 
     elif action == "archive_stats":
-        result = mcp_call("memall_db", action="archive_stats")
+        result = mcp_call("memall_system", action="db", sub_action="archive_stats")
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -854,7 +854,7 @@ def cmd_db(args):
                     print(f"  {level}: {cnt}")
 
     elif action == "archive_vacuum":
-        result = mcp_call("memall_db", action="archive_vacuum")
+        result = mcp_call("memall_system", action="db", sub_action="archive_vacuum")
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data

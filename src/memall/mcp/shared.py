@@ -16,12 +16,10 @@ _READ_ONLY_ACTIONS = frozenset({
 })
 
 # Tools/actions that skip intercept logging entirely
-_INTERCEPT_SKIP_TOOLS = frozenset({
-    "memall_onboarding",
-})
+_INTERCEPT_SKIP_TOOLS = frozenset()
 _INTERCEPT_SKIP_ACTIONS = frozenset({
     "capture", "smart_store", "store_batch", "ping",
-    "session_start", "session_end",
+    "session_start", "session_end", "onboarding",
 })
 
 # Actions that log a simple [query] line

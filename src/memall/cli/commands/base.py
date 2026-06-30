@@ -17,7 +17,7 @@ def cmd_capture(args):
     if not content:
         print("error: content required", file=sys.stderr)
         sys.exit(1)
-    result = mcp_call("capture",
+    result = mcp_call("memall_write", action="capture",
         content=content,
         owner=args.owner or "",
         agent_name=args.agent or "",
@@ -34,7 +34,7 @@ def cmd_capture(args):
 
 def cmd_search(args):
     level_filter = getattr(args, "level", None)
-    result = mcp_call("retrieve",
+    result = mcp_call("memall_read", action="retrieve",
         query=args.query,
         owner=args.owner,
         agent_name=args.agent,
@@ -59,7 +59,7 @@ def cmd_search(args):
 
 def cmd_knowledge(args):
     """Search only L9 distilled knowledge."""
-    result = mcp_call("retrieve",
+    result = mcp_call("memall_read", action="retrieve",
         query=args.query,
         level="L9",
         limit=args.limit or 20,
@@ -80,7 +80,7 @@ def cmd_knowledge(args):
 
 def cmd_insights(args):
     """Search only L10 cross-domain insights."""
-    result = mcp_call("retrieve",
+    result = mcp_call("memall_read", action="retrieve",
         query=args.query,
         level="L10",
         limit=args.limit or 10,
@@ -100,7 +100,7 @@ def cmd_insights(args):
 
 
 def cmd_get(args):
-    result = mcp_call("retrieve", query=args.id)
+    result = mcp_call("memall_read", action="retrieve", query=args.id)
     if not result.ok or result.data is None:
         print(f"memory {args.id} not found", file=sys.stderr)
         sys.exit(1)
@@ -116,7 +116,7 @@ def cmd_get(args):
 
 
 def cmd_connect(args):
-    result = mcp_call("connect",
+    result = mcp_call("memall_write", action="connect",
         source_id=args.source,
         target_id=args.target,
         relation_type=args.relation,
@@ -129,7 +129,7 @@ def cmd_connect(args):
 
 
 def cmd_traverse(args):
-    result = mcp_call("traverse",
+    result = mcp_call("memall_read", action="traverse",
         node_id=args.id,
         depth=args.depth or 1,
         relation_filter=args.relation,
@@ -141,7 +141,7 @@ def cmd_traverse(args):
 
 
 def cmd_timeline(args):
-    result = mcp_call("timeline",
+    result = mcp_call("memall_read", action="timeline",
         query=args.query,
         hours=args.hours or 24,
         category=args.category,
@@ -161,7 +161,7 @@ def cmd_timeline(args):
 
 
 def cmd_update(args):
-    result = mcp_call("memall_update", memory_id=args.id, **{args.field: args.value})
+    result = mcp_call("memall_write", action="update", memory_id=args.id, **{args.field: args.value})
     if result.ok:
         print(f"memory {args.id} updated: {args.field}={args.value}")
     else:

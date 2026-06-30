@@ -39,8 +39,8 @@ def handle(arguments: dict) -> str:
             "step_tools": step_info.get("tools", []),
             "message": f"请提交步骤 {current_step} 的输入数据，使用 action=submit_step",
             "next_action": {
-                "tool": "memall_onboarding",
-                "arguments": {"action": "submit_step", "user_id": user_id, "step": current_step, "input_data": "..."}
+                "tool": "memall_system",
+                "arguments": {"action": "onboarding", "sub_action": "submit_step", "user_id": user_id, "step": current_step, "input_data": "..."}
             }
         }, ensure_ascii=False, default=str)
 
@@ -155,8 +155,8 @@ def handle(arguments: dict) -> str:
                     "capture — 存储新记忆",
                     "retrieve — 搜索已有记忆",
                     "connect — 建立记忆关联",
-                    "memall_session_start — 开始会话追踪",
-                    "memall_fed_publish — 跨 Agent 联邦发布",
+                    "memall_system → session_start — 开始会话追踪",
+                    "memall_federation → fed_publish — 跨 Agent 联邦发布",
                 ]
             }, ensure_ascii=False, default=str)
 
