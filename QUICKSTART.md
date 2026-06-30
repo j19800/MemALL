@@ -52,8 +52,8 @@ memall search "FastAPI"
 # 查看记忆详情
 memall get 1
 
-# 仪表盘
-memall dashboard
+# 启动 Web 仪表盘
+memall server
 ```
 
 ## 记忆层级

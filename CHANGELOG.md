@@ -21,6 +21,11 @@
 - **ORDER BY 无 LIMIT (6 处)**: `gateway.py` 3 个 API handler（epochs/epochs_agent/arcs）、`convergence.py` 2 个（list_active/list_all_discussions）、`observe.py` 1 个（L6 reflection scan）均追加 `LIMIT 1000`。 (`gateway.py:1393,1405,1432`, `convergence.py:202,241`, `observe.py:210`)
 - **裸 except Exception (1 处)**: `server.py api_debt_stats()` 中 archive.db 查询失败的裸 `pass` 替换为 `logger.warning`。 (`server.py:679`)
 - **硬编码日期 (1 处)**: `gateway.py` 工单页面中的 "2026-06-25" 改为 `datetime.now()` 动态格式化。 (`gateway.py:621`)
+- **P2 后续增强 (4 项)**:
+  - **gateway stop 增强**: 改用 `_active_gateway` 模块级变量追踪运行实例，确保 stop 正确关闭工作线程。 (`src/memall/mcp/tools/gateway.py`)
+  - **ExtraLogger kwargs 透传**: `_log()` 将 `**kwargs` 传给 `super()._log()`，避免丢失 `stacklevel`/`stack_info`。 (`src/memall/core/log_setup.py`)
+  - **版本统一**: `server.py` FastAPI app 和 health endpoint 版本统一为 `0.1.2`（匹配 `__init__.py`）。 (`src/memall/api/server.py`)
+  - **QUICKSTART.md 命令修正**: `memall dashboard` → `memall server`。 (`QUICKSTART.md`)
 
 ## [v0.1.33] - 2026-07-01
 

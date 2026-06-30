@@ -45,7 +45,7 @@ from memall.mcp.federation_tools import (
     fed_query, fed_publish, fed_conflicts, auto_inject, auto_extract,
 )
 
-app = FastAPI(title="memall", version="0.1.0",
+app = FastAPI(title="memall", version="0.1.2",
               docs_url="/docs", redoc_url="/redoc")
 
 # Bearer token auth scheme
@@ -901,7 +901,7 @@ def root_list_memories(request: Request, hours: int = 8760, limit: int = 50, off
 @app.get("/health")
 def api_health():
     """Health check."""
-    return {"status": "ok", "version": "0.1.0"}
+    return {"status": "ok", "version": "0.1.2"}
 
 
 

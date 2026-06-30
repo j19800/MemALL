@@ -2,7 +2,6 @@
 
 import json
 import logging
-import logging.config
 import os
 import sys
 from datetime import datetime, timezone
@@ -35,7 +34,7 @@ class ExtraLogger(logging.Logger):
     def _log(self, level, msg, args, exc_info=None, extra=None, exc_info_on_logger=False, **kwargs):
         if extra and "extra_fields" not in extra:
             extra["extra_fields"] = {}
-        super()._log(level, msg, args, exc_info=exc_info, extra=extra)
+        super()._log(level, msg, args, exc_info=exc_info, extra=extra, **kwargs)
 
 
 def configure(level: str | None = None, json_output: bool | None = None):

@@ -6,20 +6,28 @@ from memall.gateway import (
     pair_with_peer, list_peers, federated_retrieve,
 )
 
+# Module-level reference to the active gateway instance
+_active_gateway: MemAllGateway | None = None
+
 
 def handle(arguments: dict) -> str:
+    global _active_gateway
     action = arguments["action"]
 
     if action == "start":
         port = arguments.get("port", 9919)
         gw = MemAllGateway(port=port)
         gw.start()
+        _active_gateway = gw
         return json.dumps({"status": "ok", "host": "127.0.0.1", "port": port})
 
     elif action == "stop":
-        port = arguments.get("port", 9919)
-        gw = MemAllGateway(port=port)
-        gw.stop()
+        if _active_gateway is None:
+            gw = MemAllGateway(port=arguments.get("port", 9919))
+            gw.stop()
+            return json.dumps({"status": "ok", "message": "gateway stopped (cleanup)"})
+        _active_gateway.stop()
+        _active_gateway = None
         return json.dumps({"status": "ok", "message": "gateway stopped"})
 
     elif action == "export":
