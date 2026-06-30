@@ -261,7 +261,7 @@ def _cluster_method_embedding(conn):
 
 def _cluster_method_tfidf(conn):
     rows = conn.execute(
-        "SELECT id, content, category FROM memories WHERE LENGTH(content) >= ? ORDER BY created_at",
+        "SELECT id, content, category FROM memories WHERE LENGTH(content) >= ? ORDER BY created_at LIMIT 1000",
         (MIN_MEMORY_LENGTH,),
     ).fetchall()
     if not rows:

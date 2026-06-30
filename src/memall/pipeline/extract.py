@@ -68,7 +68,7 @@ def extract_step() -> dict:
             sessions = conn.execute(
                 "SELECT session_id, agent_name, started_at, ended_at FROM sessions "
                 "WHERE ended_at IS NOT NULL AND ended_at > ? "
-                "ORDER BY ended_at ASC",
+                "ORDER BY ended_at ASC LIMIT 1000",
                 (cursor,),
             ).fetchall()
         else:

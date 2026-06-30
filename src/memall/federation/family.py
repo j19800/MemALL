@@ -234,12 +234,12 @@ def family_list(circle_name: str = "") -> list:
     try:
         if circle_name:
             rows = conn.execute(
-                "SELECT * FROM family_circle WHERE name = ? ORDER BY role, joined_at",
+                "SELECT * FROM family_circle WHERE name = ? ORDER BY role, joined_at LIMIT 1000",
                 (circle_name,),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM family_circle ORDER BY name, role, joined_at"
+                "SELECT * FROM family_circle ORDER BY name, role, joined_at LIMIT 1000"
             ).fetchall()
 
         results = []

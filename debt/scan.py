@@ -124,7 +124,7 @@ def _has_param_safety(text: str, pos: int) -> bool:
     return False
 
 def _has_whitelist_validation(text: str, pos: int) -> bool:
-    """检查 ORDER BY 列名是否有白名单校验。"""
+    """检查 sort 列名是否有白名单校验。"""
     ctx = _get_surrounding(text, pos, 15)
     signals = [
         r'_ALLOWED_\w+',          # _ALLOWED_UPDATE_FIELDS, _ALLOWED_SORT_COLS

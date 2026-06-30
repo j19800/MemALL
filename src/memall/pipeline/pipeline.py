@@ -445,3 +445,53 @@ def run_pipeline(
     dispatch_lifecycle(HOOK_POST_PIPELINE, status="completed", results=results, elapsed=elapsed)
     HookRegistry.dispatch(HOOK_STOP, arguments={"results": results, "elapsed": elapsed})
     return {"status": "ok", "results": results, "elapsed": elapsed}
+
+
+def run_lightweight_pipeline(
+    dry_run: bool = False,
+    classify: bool = True,
+    converge: bool = True,
+    distill_l7: bool = True,
+    reflect: bool = True,
+    session: bool = True,
+    identity: bool = True,
+) -> dict:
+    """Run a lightweight pipeline suitable for capture-triggered processing.
+
+    Skips expensive L9/L10 steps (distill, integrate, improve, archive) and
+    all optional steps (persona, narrative, cluster, suggest, bridge).  Only
+    runs fast, per-capture-relevant steps that don't need bulk data.
+
+    Args:
+        dry_run: If True, skip all execution.
+        classify: Run classification step (priority assignment).
+        converge: Run discussion convergence check.
+        distill_l7: Run L7 preference extraction.
+        reflect: Run L6 reflection generation.
+        session: Run session harvest.
+        identity: Run identity/profile sync.
+
+    Returns:
+        Standard pipeline result dict with results and elapsed time.
+    """
+    return run_pipeline(
+        dry_run=dry_run,
+        include_distill=False,
+        include_integrate=False,
+        include_improve=False,
+        include_embed_index=False,
+        include_archive=False,
+        include_persona=False,
+        include_cluster=False,
+        include_narrative=False,
+        include_suggest=False,
+        include_bridge=False,
+        include_procedure=True,
+        include_identity=identity,
+        include_reflect=reflect,
+        # The core steps from _PIPELINE_STEPS that aren't gated by
+        # _SKIP_WHEN always run (classify, convergence, distill_l7,
+        # session, event_processor, enrich, cleanup, etc.).
+        # _SKIP_WHEN only gates: reflect, distill, integrate, improve,
+        # embed_index, identity, archive.
+    )

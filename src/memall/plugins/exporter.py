@@ -25,7 +25,7 @@ def _get_agent_memories(agent_name: str) -> List[Dict[str, Any]]:
     memories = conn.execute(
         """SELECT id, agent_name, content, category, level, created_at,
                   subject, project, confidence, visibility, tags
-           FROM memories WHERE agent_name = ? ORDER BY created_at DESC""",
+           FROM memories WHERE agent_name = ? ORDER BY created_at DESC LIMIT 1000""",
         (agent_name,),
     ).fetchall()
 

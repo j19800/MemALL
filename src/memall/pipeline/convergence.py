@@ -167,7 +167,7 @@ def get_discussion(discussion_id: int) -> dict:
             "SELECT m.id, m.content, m.metadata, m.agent_name, m.created_at "
             "FROM memories m JOIN edges e ON e.target_id = m.id "
             "WHERE e.source_id=? AND e.relation_type='cites' "
-            "ORDER BY m.created_at",
+            "ORDER BY m.created_at LIMIT 1000",
             (discussion_id,),
         ).fetchall()
 
@@ -287,7 +287,7 @@ def _converge_single(conn, disc: dict) -> dict:
 
     responses = conn.execute(
         "SELECT m.* FROM memories m JOIN edges e ON e.target_id = m.id "
-        "WHERE e.source_id = ? AND e.relation_type = 'cites' ORDER BY m.created_at",
+        "WHERE e.source_id = ? AND e.relation_type = 'cites' ORDER BY m.created_at LIMIT 1000",
         (disc["id"],),
     ).fetchall()
 

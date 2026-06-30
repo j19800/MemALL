@@ -103,7 +103,7 @@ def build_index(batch_size: int = BATCH_SIZE, force: bool = False) -> dict:
     with pool_conn() as conn:
         _ensure_embeddings_table(conn)
         rows = conn.execute(
-            "SELECT id, content, content_hash FROM memories WHERE LENGTH(TRIM(content)) > 10 ORDER BY id"
+            "SELECT id, content, content_hash FROM memories WHERE LENGTH(TRIM(content)) > 10 ORDER BY id LIMIT 1000"
         ).fetchall()
         total = len(rows)
         if total == 0:

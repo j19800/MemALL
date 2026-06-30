@@ -1,3 +1,19 @@
+## [v0.1.36] - 2026-07-01
+
+### Added
+
+- **Hook 驱动的系统人性化自动化**: 利用 lifecycle hook 让系统从被动响应变为主动响应：
+  - **capture → 自动轻量 pipeline**: `on_capture` hook 触发 debounce(60s) 轻量 pipeline（classify + convergence + distill_l7 + reflect + session），避免高频保存压垮系统。 (`src/memall/plugins/scheduler.py:360-387`)
+  - **capture → 讨论自动收敛**: `on_capture` hook 检查新记忆的 `supersedes` 字段关联的讨论，若全部参与者已回复则自动调用 `converge_discussion()` 收敛。 (`src/memall/plugins/scheduler.py:242-357`)
+  - **retrieve → 上下文注入**: `on_pre_retrieve` hook 在每次检索时自动检查待处理讨论和任务，创建 P2 提醒记忆使它们自然出现在检索结果中。 (`src/memall/plugins/scheduler.py:390-422`)
+  - **pipeline → 丰富结果报告**: `on_pipeline` hook 统计步骤成功/跳过/失败数，生成结构化摘要通知（ok>0 或耗时>5s 时通知）。 (`src/memall/plugins/notifier.py:120-179`)
+  - 新增 `run_lightweight_pipeline()` 函数封装轻量 pipeline 配置。 (`src/memall/pipeline/pipeline.py:449-481`)
+
+### Changed
+
+- 新增 3 个 hook 响应函数（`on_capture`、`on_pre_retrieve`、`on_pipeline`），增强 `scheduler/notifier` 插件
+- 所有 post-capture 工作在 daemon 线程中异步执行，capture() 即时返回不阻塞
+
 ## [v0.1.35] - 2026-07-01
 
 ### Added

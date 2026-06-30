@@ -498,7 +498,7 @@ def cmd_migrate(args):
         agent_count = 0
 
         if "facts" in tables:
-            rows = src.execute("SELECT * FROM facts ORDER BY id").fetchall()
+            rows = src.execute("SELECT * FROM facts ORDER BY id LIMIT 1000").fetchall()
             for row in rows:
                 bm = _rget(row, "body_md")
                 content = row["content"]

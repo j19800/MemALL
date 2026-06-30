@@ -70,7 +70,7 @@ def extract_features(agent_name: str, time_range: str = "all") -> dict:
 
         rows = conn.execute(
             "SELECT id, content, category, occurred_at, created_at, updated_at, level FROM memories "
-            "WHERE LOWER(agent_name) = LOWER(?)" + time_filter + " ORDER BY created_at",
+            "WHERE LOWER(agent_name) = LOWER(?)" + time_filter + " ORDER BY created_at LIMIT 1000",
             (agent_name,),
         ).fetchall()
         if not rows:
@@ -430,7 +430,7 @@ def get_evolution(agent_name: str, window_days: int = 30) -> dict:
     try:
         rows = conn.execute(
             "SELECT id, content, category, occurred_at, created_at FROM memories "
-            "WHERE LOWER(agent_name) = LOWER(?) ORDER BY created_at",
+            "WHERE LOWER(agent_name) = LOWER(?) ORDER BY created_at LIMIT 1000",
             (agent_name,),
         ).fetchall()
 
@@ -690,7 +690,7 @@ def extract_behavioral(agent_name: str) -> dict:
     try:
         rows = conn.execute(
             "SELECT id, content, category, created_at FROM memories "
-            "WHERE LOWER(agent_name) = LOWER(?) ORDER BY created_at",
+            "WHERE LOWER(agent_name) = LOWER(?) ORDER BY created_at LIMIT 1000",
             (agent_name,),
         ).fetchall()
         if not rows:

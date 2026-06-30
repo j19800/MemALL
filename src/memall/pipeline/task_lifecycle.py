@@ -59,7 +59,7 @@ def list_active_tasks(agent_name: str = "") -> list[dict]:
                 "FROM memories WHERE level='L5' AND category='task' "
                 "AND json_extract(metadata, '$.status') = 'active' "
                 "AND agent_name = ? "
-                "ORDER BY created_at ASC",
+                "ORDER BY created_at ASC LIMIT 1000",
                 (agent_name,),
             ).fetchall()
         else:
@@ -67,7 +67,7 @@ def list_active_tasks(agent_name: str = "") -> list[dict]:
                 "SELECT id, subject, content, agent_name, metadata, created_at "
                 "FROM memories WHERE level='L5' AND category='task' "
                 "AND json_extract(metadata, '$.status') = 'active' "
-                "ORDER BY created_at ASC",
+                "ORDER BY created_at ASC LIMIT 1000",
             ).fetchall()
 
         results = []
@@ -97,7 +97,7 @@ def list_blocked_tasks(agent_name: str = "") -> list[dict]:
                 "SELECT id, subject, agent_name, metadata, created_at "
                 "FROM memories WHERE level='L5' AND category='task' "
                 "AND json_extract(metadata, '$.status') = 'blocked' "
-                "AND agent_name = ? ORDER BY created_at ASC",
+                "AND agent_name = ? ORDER BY created_at ASC LIMIT 1000",
                 (agent_name,),
             ).fetchall()
         else:
@@ -105,7 +105,7 @@ def list_blocked_tasks(agent_name: str = "") -> list[dict]:
                 "SELECT id, subject, agent_name, metadata, created_at "
                 "FROM memories WHERE level='L5' AND category='task' "
                 "AND json_extract(metadata, '$.status') = 'blocked' "
-                "ORDER BY created_at ASC",
+                "ORDER BY created_at ASC LIMIT 1000",
             ).fetchall()
 
         results = []

@@ -67,7 +67,7 @@ class FaissProvider(SearchProvider):
 
         with pool_conn() as conn:
             rows = conn.execute(
-                "SELECT id, content FROM memories WHERE LENGTH(TRIM(content)) > 10 ORDER BY id"
+                "SELECT id, content FROM memories WHERE LENGTH(TRIM(content)) > 10 ORDER BY id LIMIT 1000"
             ).fetchall()
 
         if not rows:

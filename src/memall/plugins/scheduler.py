@@ -1,10 +1,11 @@
-import logging
 """
 Scheduler Plugin — Periodic task scheduler for automated forget, audit, etc.
 """
+
+import logging
 logger = logging.getLogger(__name__)
 
-
+import json
 import sys
 import threading
 import time
@@ -12,6 +13,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from memall.config import get_config
+
+
+# ── Debounce state for on_capture → lightweight pipeline ──
+_last_light_pipeline: float = 0  # timestamp of last trigger
+_debounce_seconds: int = 60      # don't re-trigger within this window
+_pipeline_lock = threading.Lock()
 
 
 class TaskScheduler:
@@ -212,10 +219,230 @@ def create_default_scheduler() -> TaskScheduler:
 
 
 def on_pipeline(**kwargs) -> None:
-    """Log pipeline completion for scheduler visibility."""
+    """Log pipeline completion with step-level detail."""
     status = kwargs.get("status", "?")
     elapsed = kwargs.get("elapsed", 0)
-    logger.info("Pipeline %s finished in %.1fs", status, elapsed)
+    results = kwargs.get("results", {})
+
+    # Count step outcomes
+    oks = sum(1 for k, v in results.items()
+              if k not in ("metrics", "discipline") and isinstance(v, int) and v > 0)
+    fails = sum(1 for k, v in results.items()
+                if k not in ("metrics", "discipline") and isinstance(v, dict) and v.get("status") == "failed")
+
+    if oks or fails:
+        logger.info(
+            "Pipeline %s: %.1fs, %d steps ok, %d failed, %d results",
+            status, elapsed, oks, fails, len(results),
+        )
+    else:
+        logger.info("Pipeline %s finished in %.1fs", status, elapsed)
+
+
+def _check_capture_discussion(memory_id: int) -> dict | None:
+    """Check if a newly captured memory relates to a pending discussion.
+
+    Looks at the memory's ``supersedes`` field and metadata for discussion
+    references.  If it finds an active discussion where all participants
+    have now responded, auto-converge it.
+
+    Returns:
+        Dict with convergence result, or None if no action taken.
+    """
+    try:
+        from memall.core.db import get_conn
+        from memall.pipeline.convergence import converge_discussion
+
+        conn = get_conn()
+        try:
+            row = conn.execute(
+                "SELECT supersedes, metadata FROM memories WHERE id = ?",
+                (memory_id,),
+            ).fetchone()
+            if not row:
+                return None
+
+            # Check supersedes: does this memory reference a discussion?
+            supersedes = row["supersedes"]
+            if not supersedes:
+                return None
+
+            # supersedes could be an int (direct discussion id) or a JSON list
+            discussion_ids: list[int] = []
+            if isinstance(supersedes, int):
+                discussion_ids = [supersedes]
+            elif isinstance(supersedes, str) and supersedes.strip():
+                try:
+                    parsed = json.loads(supersedes)
+                    if isinstance(parsed, list):
+                        discussion_ids = [int(x) for x in parsed if str(x).isdigit()]
+                    else:
+                        discussion_ids = [int(parsed)]
+                except (json.JSONDecodeError, ValueError):
+                    # Try as single int string
+                    if supersedes.strip().isdigit():
+                        discussion_ids = [int(supersedes)]
+
+            if not discussion_ids:
+                return None
+
+            for disc_id in discussion_ids:
+                disc = conn.execute(
+                    "SELECT * FROM memories WHERE id = ? AND level = 'L5' AND category = 'discussion'",
+                    (disc_id,),
+                ).fetchone()
+                if not disc:
+                    continue
+
+                meta = json.loads(disc.get("metadata") or "{}")
+                if meta.get("status") != "active":
+                    continue
+
+                # Check participants
+                participants = []
+                raw = meta.get("participants", meta.get("_participants", []))
+                if isinstance(raw, dict) and "value" in raw:
+                    raw = raw["value"]
+                if isinstance(raw, list):
+                    participants = raw
+
+                if not participants:
+                    # No participants → converge immediately
+                    responses = conn.execute(
+                        "SELECT * FROM memories WHERE id IN ("
+                        "  SELECT target_id FROM edges WHERE source_id = ? AND relation_type = 'cites'"
+                        ") AND level = 'P2' ORDER BY created_at ASC",
+                        (disc_id,),
+                    ).fetchall()
+                    result = converge_discussion(conn, dict(disc), [dict(r) for r in responses],
+                                                  "Capture-triggered convergence (no participants)")
+                    conn.commit()
+                    logger.info("on_capture: auto-converged discussion #%d (no participants)", disc_id)
+                    return result
+
+                # Count responded agents (including this new memory's agent)
+                responded = set()
+                responses = conn.execute(
+                    "SELECT * FROM memories WHERE id IN ("
+                    "  SELECT target_id FROM edges WHERE source_id = ? AND relation_type = 'cites'"
+                    ") AND level = 'P2' ORDER BY created_at ASC",
+                    (disc_id,),
+                ).fetchall()
+                for r in responses:
+                    rmeta = json.loads(r.get("metadata") or "{}")
+                    agent = rmeta.get("agent_name", r.get("agent_name", ""))
+                    if agent:
+                        responded.add(agent)
+
+                # Check if this memory itself is an implicit response
+                mem_meta = json.loads(row.get("metadata") or "{}")
+                mem_agent = mem_meta.get("agent_name", "")
+                if mem_agent:
+                    responded.add(mem_agent)
+
+                missing = [p for p in participants if p not in responded]
+                if not missing:
+                    result = converge_discussion(conn, dict(disc), [dict(r) for r in responses],
+                                                  "Capture-triggered convergence: all participants responded")
+                    conn.commit()
+                    logger.info("on_capture: auto-converged discussion #%d (all %d participants responded)",
+                                disc_id, len(participants))
+                    return result
+
+            return None
+        finally:
+            conn.close()
+    except Exception:
+        logger.warning("on_capture discussion check failed", exc_info=True)
+        return None
+
+
+def on_capture(**kwargs) -> None:
+    """Triggered after each memory capture.
+
+    Does two things (both non-blocking, in background threads):
+      1. Lightweight pipeline: debounce-coalesced, runs fast steps
+      2. Discussion check: auto-converge if all participants responded
+    """
+    memory_id = kwargs.get("memory_id")
+    if not memory_id:
+        return
+
+    # ── 1. Discussion auto-convergence (inline, fast DB check) ──
+    if isinstance(memory_id, int):
+        threading.Thread(
+            target=_check_capture_discussion,
+            args=(memory_id,),
+            daemon=True,
+        ).start()
+
+    # ── 2. Lightweight pipeline (debounced background thread) ──
+    global _last_light_pipeline
+    now = time.time()
+    with _pipeline_lock:
+        if now - _last_light_pipeline < _debounce_seconds:
+            return
+        _last_light_pipeline = now
+
+    threading.Thread(target=_run_capture_pipeline, daemon=True).start()
+
+
+def on_pre_retrieve(**kwargs) -> None:
+    """Triggered before each retrieve() call.
+
+    Checks for pending discussions and tasks for the querying agent (``viewer``)
+    and creates P2 reminder memories so they appear in retrieve results.
+    This makes the system proactively surface pending work whenever an agent
+    reads memories — no separate timer needed.
+    """
+    viewer = kwargs.get("viewer") or kwargs.get("agent_name", "")
+    if not viewer:
+        return
+
+    try:
+        from memall.pipeline.convergence import check_pending_discussions
+        from memall.scheduler.agent_round import notify_pending_tasks
+
+        # Create P2 reminders for pending discussions
+        disc_reminders = check_pending_discussions(viewer)
+        if disc_reminders:
+            logger.info(
+                "on_pre_retrieve: %d discussion reminders for agent '%s'",
+                len(disc_reminders), viewer,
+            )
+
+        # Create P2 reminders for pending tasks
+        task_reminders = notify_pending_tasks(viewer)
+        if task_reminders:
+            logger.info(
+                "on_pre_retrieve: %d task reminders for agent '%s'",
+                len(task_reminders), viewer,
+            )
+    except Exception:
+        logger.debug("on_pre_retrieve check failed (non-fatal)", exc_info=True)
+
+
+def _run_capture_pipeline() -> None:
+    """Run lightweight pipeline in background, log results."""
+    try:
+        from memall.pipeline.pipeline import run_lightweight_pipeline
+
+        result = run_lightweight_pipeline()
+        status = result.get("status", "?")
+        elapsed = result.get("elapsed", 0)
+        logger.info("on_capture: lightweight pipeline %s in %.2fs", status, elapsed)
+
+        if status == "ok":
+            step_counts = {}
+            for step_name, step_result in result.get("results", {}).items():
+                if isinstance(step_result, int):
+                    step_counts[step_name] = step_result
+                elif isinstance(step_result, dict):
+                    step_counts[step_name] = step_result.get("processed", 0)
+            if step_counts:
+                logger.info("on_capture: pipeline step results: %s", step_counts)
+    except Exception:
+        logger.warning("on_capture lightweight pipeline failed", exc_info=True)
 
 
 def register():

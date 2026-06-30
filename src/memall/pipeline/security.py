@@ -135,12 +135,12 @@ def audit_sensitive(
         if agent_name:
             rows = conn.execute(
                 "SELECT id, content, agent_name, category FROM memories "
-                "WHERE agent_name = ? ORDER BY id",
+                "WHERE agent_name = ? ORDER BY id LIMIT 1000",
                 (agent_name,),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, content, agent_name, category FROM memories ORDER BY id"
+                "SELECT id, content, agent_name, category FROM memories ORDER BY id LIMIT 1000"
             ).fetchall()
 
         total_scanned = len(rows)
@@ -426,7 +426,7 @@ def list_agents_by_permission(level: str) -> List[Dict[str, Any]]:
         _ensure_permission_column(conn)
         rows = conn.execute(
             "SELECT agent_name, permission_level, agent_type FROM identities "
-            "WHERE permission_level = ? ORDER BY agent_name",
+            "WHERE permission_level = ? ORDER BY agent_name LIMIT 1000",
             (level,),
         ).fetchall()
         return [

@@ -118,15 +118,80 @@ def on_step_fail(**kwargs) -> None:
 
 
 def on_pipeline(**kwargs) -> None:
-    """Send a notification when a long pipeline completes."""
+    """Send a notification when a pipeline completes, with rich reporting."""
     elapsed = kwargs.get("elapsed", 0)
     status = kwargs.get("status", "?")
-    if elapsed > 30:  # only notify for long runs
+    results = kwargs.get("results", {})
+
+    # Build a human-readable summary from step results
+    step_oks = 0
+    step_skipped = 0
+    step_fails = 0
+    skipped_reasons = []
+    detail_lines = []
+
+    for step_name, step_result in results.items():
+        if step_name in ("metrics", "discipline"):
+            continue
+        if isinstance(step_result, int):
+            if step_result > 0:
+                step_oks += 1
+                detail_lines.append(f"  {step_name}: {step_result}")
+            else:
+                step_skipped += 1
+                skipped_reasons.append(step_name)
+        elif isinstance(step_result, dict):
+            # Step results with quality gate info
+            err = step_result.get("error")
+            if err:
+                step_fails += 1
+                detail_lines.append(f"  {step_name}: FAILED - {err[:80]}")
+            elif step_result.get("status") == "ok":
+                step_oks += 1
+                val = _coerce_step_value(step_result)
+                detail_lines.append(f"  {step_name}: {val}")
+            elif step_result.get("status") == "failed":
+                step_fails += 1
+                detail_lines.append(f"  {step_name}: FAILED - {step_result.get('error', '?')[:80]}")
+
+    # Compose notification message
+    summary = f"{status} in {elapsed:.1f}s | {step_oks} ok"
+    if step_fails:
+        summary += f", {step_fails} failed"
+    if step_skipped:
+        summary += f", {step_skipped} gated"
+
+    message_lines = [summary]
+    if detail_lines:
+        message_lines.append("Steps:")
+        message_lines.extend(detail_lines[:8])  # limit to 8 lines
+        if len(detail_lines) > 8:
+            message_lines.append(f"  ... and {len(detail_lines) - 8} more")
+
+    message = "\n".join(message_lines)
+
+    # Notify only for meaningful runs (ok steps > 0 or pipeline took > 5s)
+    if step_oks > 0 or elapsed > 5:
         send_notification(
             f"MemALL — Pipeline {status}",
-            f"Elapsed: {elapsed:.1f}s",
-            level="info",
+            message,
+            level="info" if status == "completed" else "warning",
         )
+
+
+def _coerce_step_value(result: dict) -> int:
+    """Extract a numeric value from a step result dict."""
+    for k in ("processed", "count", "created", "result", "total", "new",
+              "personal_created", "global_created", "integrated"):
+        v = result.get(k)
+        if isinstance(v, int):
+            return v
+        if isinstance(v, dict):
+            # Quality gate wrapped result
+            inner = v.get("result", v.get("value", 0))
+            if isinstance(inner, int):
+                return inner
+    return 0
 
 
 def register():

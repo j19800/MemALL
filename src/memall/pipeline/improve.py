@@ -265,7 +265,7 @@ def get_active_corrections(agent_name: str) -> List[Dict[str, Any]]:
         rows = conn.execute(
             "SELECT pattern_id, rule_text, summary, category, severity FROM corrections "
             "WHERE status = 'active' AND (LOWER(agent_name) = LOWER(?) OR agent_name = '') "
-            "ORDER BY severity DESC, category ASC, hit_count DESC",
+            "ORDER BY severity DESC, category ASC, hit_count DESC LIMIT 1000",
             (agent_name,),
         ).fetchall()
         return [dict(r) for r in rows]

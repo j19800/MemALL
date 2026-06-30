@@ -188,7 +188,7 @@ def get_migration_status(conn) -> dict:
     applied = _get_applied_migrations(conn)
 
     applied_details = conn.execute(
-        "SELECT migration_id, applied_at, description FROM schema_version ORDER BY applied_at"
+        "SELECT migration_id, applied_at, description FROM schema_version ORDER BY applied_at LIMIT 1000"
     ).fetchall()
 
     return {
