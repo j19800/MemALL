@@ -16,6 +16,12 @@
   - 验证：语法检查 + 模块导入 + CLI pipeline dry-run + 37 测试通过（1 项预存 config path 失败无回归）。
   - (`core/tracer.py`, `gateway.py`, `mcp/hub_client.py`, `scheduler/scheduler.py`, `mcp/federation_tools.py`, `tests/test_helpers.py`, `cli/register.py`, `core/db.py`, `scheduler/agent_round.py`, `core/thin_waist.py`, `src/memall/api/server.py`, `src/memall/bridge/main.py`, `src/memall/mcp/tools/__init__.py`, `src/memall/mcp/tools/gateway.py`, `src/memall/mcp/tools/pipeline.py`, `src/memall/core/log_setup.py`, `tests/test_distill.py`, `tests/test_gateway.py`, `frontend/index.html`)
 
+### Fixed (Round 5 — Static Analysis Audit)
+
+- **ORDER BY 无 LIMIT (6 处)**: `gateway.py` 3 个 API handler（epochs/epochs_agent/arcs）、`convergence.py` 2 个（list_active/list_all_discussions）、`observe.py` 1 个（L6 reflection scan）均追加 `LIMIT 1000`。 (`gateway.py:1393,1405,1432`, `convergence.py:202,241`, `observe.py:210`)
+- **裸 except Exception (1 处)**: `server.py api_debt_stats()` 中 archive.db 查询失败的裸 `pass` 替换为 `logger.warning`。 (`server.py:679`)
+- **硬编码日期 (1 处)**: `gateway.py` 工单页面中的 "2026-06-25" 改为 `datetime.now()` 动态格式化。 (`gateway.py:621`)
+
 ## [v0.1.33] - 2026-07-01
 
 ### Fixed

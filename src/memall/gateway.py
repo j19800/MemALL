@@ -618,7 +618,7 @@ class MemAllGateway:
 {_NAV_HTML}
 
 <h1>本 Session 成果清单</h1>
-<p style="color:#888;font-size:14px">更新至 2026-06-25 · 2 个推送 · 1 个讨论收敛</p>
+<p style="color:#888;font-size:14px">更新至 {datetime.now().strftime("%Y-%m-%d")} · 2 个推送 · 1 个讨论收敛</p>
 
 <div class="stat-row">
   <div class="stat-card"><div class="num">2</div><div class="label">推送</div></div>
@@ -1390,7 +1390,7 @@ class MemAllGateway:
     async def _handle_api_epochs(self, request: web.Request) -> web.Response:
         with pool_conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM epochs ORDER BY agent_name, started_at"
+                "SELECT * FROM epochs ORDER BY agent_name, started_at LIMIT 1000"
             ).fetchall()
 
         return web.json_response({
@@ -1402,7 +1402,7 @@ class MemAllGateway:
         agent_name = request.match_info.get("agent_name", "").strip().lower()
         with pool_conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM epochs WHERE agent_name = ? ORDER BY started_at",
+                "SELECT * FROM epochs WHERE agent_name = ? ORDER BY started_at LIMIT 1000",
                 (agent_name,),
             ).fetchall()
 
@@ -1429,7 +1429,7 @@ class MemAllGateway:
         with pool_conn() as conn:
             rows = conn.execute(
                 f"SELECT id, level, category, subject, agent_name, created_at, arc_status "
-                f"FROM memories WHERE {' AND '.join(where)} ORDER BY created_at DESC",
+                f"FROM memories WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT 1000",
                 params,
             ).fetchall()
 

@@ -199,7 +199,7 @@ def list_active_discussions() -> list[dict]:
             "SELECT id, subject, content, metadata, created_at FROM memories "
             "WHERE level='L5' AND category='discussion' "
             "AND json_extract(metadata, '$.status') = 'active' "
-            "ORDER BY created_at DESC",
+            "ORDER BY created_at DESC LIMIT 1000",
         ).fetchall()
 
         results = []
@@ -238,7 +238,7 @@ def list_all_discussions() -> list[dict]:
         rows = conn.execute(
             "SELECT id, subject, content, metadata, summary, created_at FROM memories "
             "WHERE level='L5' AND category='discussion' "
-            "ORDER BY created_at DESC",
+            "ORDER BY created_at DESC LIMIT 1000",
         ).fetchall()
 
         results = []

@@ -15,9 +15,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
-import json, re
+import json, re, logging
 import importlib.util
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 from memall.core.thin_waist import (
     capture, retrieve, connect, traverse, timeline,
@@ -677,6 +679,7 @@ def api_debt_stats():
             archive_count = aconn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
             aconn.close()
         except Exception:
+            logger.warning("archive.db stats query failed", exc_info=True)
             pass
 
     # Load scan cache

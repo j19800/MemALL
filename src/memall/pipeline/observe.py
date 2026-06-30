@@ -207,7 +207,7 @@ def _update_weekly_monthly(conn) -> dict:
 
     # Collect L6 reflections by agent
     rows = conn.execute(
-        "SELECT id, agent_name, summary, created_at, category FROM memories WHERE level = 'L6' ORDER BY created_at"
+        "SELECT id, agent_name, summary, created_at, category FROM memories WHERE level = 'L6' ORDER BY created_at LIMIT 1000"
     ).fetchall()
 
     by_agent = defaultdict(list)
