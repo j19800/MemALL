@@ -463,15 +463,12 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
             id_traits = injection.get("identity_traits", {})
             l1_list = id_traits.get("l1_identity", [])
             l7_list = id_traits.get("l7_preferences", [])
-            psum = id_traits.get("persona_summary", {})
-            if l1_list or l7_list or psum:
+            if l1_list or l7_list:
                 parts = ["[PROFILE]"]
                 if l1_list:
                     parts.append("L1=" + "·".join(t["snippet"] for t in l1_list[:3] if t.get("snippet")))
                 if l7_list:
                     parts.append("L7=" + "·".join(t["snippet"] for t in l7_list[:3] if t.get("snippet")))
-                if psum.get("prototype_cn"):
-                    parts.append(f"类型:{psum['prototype_cn']}")
                 fmt_parts.append(" ".join(parts))
 
             # [TODO]

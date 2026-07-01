@@ -310,10 +310,10 @@ def auto_inject(agent_name: str) -> dict:
                 fragments = [f for _, f in scored[:5]]
 
         # ── 7. L1/L7 Identity Traits ──
-        identity_traits = {"l1_identity": [], "l7_preferences": [], "persona_summary": {}}
+        identity_traits = {"l1_identity": [], "l7_preferences": []}
         try:
             row = conn.execute(
-                "SELECT identity_profile, profile_json, persona_updated_at FROM identities WHERE LOWER(agent_name) = LOWER(?)",
+                "SELECT identity_profile, persona_updated_at FROM identities WHERE LOWER(agent_name) = LOWER(?)",
                 (agent_name,),
             ).fetchone()
             if row and row["identity_profile"]:
@@ -321,18 +321,6 @@ def auto_inject(agent_name: str) -> dict:
                 if isinstance(id_profile, dict):
                     identity_traits["l1_identity"] = (id_profile.get("l1_identity") or [])[:5]
                     identity_traits["l7_preferences"] = (id_profile.get("l7_preferences") or [])[:5]
-            if row and row["profile_json"]:
-                pj = json.loads(row["profile_json"]) if isinstance(row["profile_json"], str) else row["profile_json"]
-                if isinstance(pj, dict):
-                    proto = pj.get("prototype", {})
-                    feats = pj.get("features", {})
-                    identity_traits["persona_summary"] = {
-                        "prototype_cn": proto.get("cn", ""),
-                        "prototype_en": proto.get("en", ""),
-                        "certainty_score": feats.get("certainty_score", 0),
-                        "decision_ratio": feats.get("decision_ratio", 0),
-                        "domain_breadth": feats.get("domain_breadth", 0),
-                    }
 
             # Supplement L1 from memories table (catches classify_step assignments
             # that identity_step hasn't processed yet)
