@@ -8,6 +8,7 @@ falls back to keyword-only mode.
 """
 
 import logging
+import sqlite3
 
 import numpy as np
 
@@ -93,7 +94,7 @@ def _vec0_knn(conn, query_vec: np.ndarray, top_k: int) -> list[dict]:
                 "score": round(score, 4),
             })
         return results
-    except Exception:
+    except sqlite3.Error:
         return []
 
 

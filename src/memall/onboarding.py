@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from datetime import datetime, timezone
 from memall.core.db import get_conn
 from memall.core.thin_waist import capture, retrieve
@@ -169,7 +170,7 @@ def _complete(user_id: str):
                     "UPDATE onboarding_status SET collected_data=? WHERE user_id=?",
                     (json.dumps(data, ensure_ascii=False), user_id),
                 )
-            except Exception as e:
+            except sqlite3.Error:
                 # Welcome 记忆失败不应阻塞引导完成
                 pass
         conn.commit()

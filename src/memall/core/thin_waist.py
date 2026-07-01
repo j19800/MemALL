@@ -1,6 +1,7 @@
 import logging
 import json
 import re
+import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Optional
@@ -321,7 +322,7 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
     else:
         try:
             existing_meta = json.loads(data.metadata or "{}")
-        except Exception:
+        except json.JSONDecodeError:
             existing_meta = {}
         if "source" not in existing_meta:
             existing_meta["source"] = "capture_api"
@@ -336,7 +337,7 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
     else:
         try:
             existing_meta = json.loads(data.metadata or "{}")
-        except Exception:
+        except json.JSONDecodeError:
             existing_meta = {}
         existing_meta["quality"] = quality_entry
         data.metadata = existing_meta
@@ -365,13 +366,13 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
                 try:
                     raw = dup["metadata"]
                     existing_meta = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
-                except Exception:
+                except json.JSONDecodeError:
                     existing_meta = {}
                 incoming = data.metadata or {}
                 if isinstance(incoming, str):
                     try:
                         incoming = json.loads(incoming)
-                    except Exception:
+                    except json.JSONDecodeError:
                         incoming = {}
                 if isinstance(existing_meta, dict) and isinstance(incoming, dict):
                     merged = {**existing_meta, **incoming}
@@ -454,7 +455,7 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
                 (mem_id,),
             )
             conn.commit()
-        except Exception:
+        except sqlite3.Error:
             logger.warning("pipeline_events insert failed", exc_info=True)
 
         # Decision Arc: L4 memories start as 'open'
@@ -1179,7 +1180,7 @@ def _context_rerank(results: list[dict], query: str, top_k: int,
                 (viewer,),
             ).fetchall()
             viewer_categories = {r["category"]: r["cnt"] for r in recent_searches}
-    except Exception:
+    except sqlite3.Error:
         viewer_categories = {}
 
     viewer_lower = viewer.lower()

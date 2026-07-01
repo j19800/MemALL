@@ -5,6 +5,7 @@ Stores 512-dim float32 vectors in memory_embeddings table + vec0 virtual table.
 
 import hashlib
 import logging
+import sqlite3
 from datetime import datetime, timezone
 
 import numpy as np
@@ -119,7 +120,7 @@ def build_index(batch_size: int = BATCH_SIZE, force: bool = False) -> dict:
             conn.execute("DELETE FROM memory_embeddings")
             try:
                 conn.execute("DELETE FROM mem_vec")
-            except Exception:
+            except sqlite3.Error:
                 logger.warning("embeddings: failed to clear vec0 index", exc_info=True)
             conn.commit()
         else:

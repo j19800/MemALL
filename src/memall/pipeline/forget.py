@@ -24,6 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 import json
+import sqlite3
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 
@@ -138,7 +139,7 @@ def forget_expired(days: int = 90, agent_name: Optional[str] = None) -> Dict[str
 
         conn.execute("COMMIT")
         return {"deleted_memories": deleted_memories, "deleted_edges": deleted_edges}
-    except Exception:
+    except sqlite3.Error:
         conn.execute("ROLLBACK")
         raise
     finally:
@@ -208,7 +209,7 @@ def forget_low_value(agent_name: Optional[str] = None) -> Dict[str, Any]:
 
         conn.execute("COMMIT")
         return {"deleted_memories": deleted_memories, "candidate_count": candidate_count}
-    except Exception:
+    except sqlite3.Error:
         conn.execute("ROLLBACK")
         raise
     finally:
@@ -332,7 +333,7 @@ def forget_l5_archive(days: int = 30, limit: int = None) -> Dict[str, Any]:
             meta = {}
             try:
                 meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else r["metadata"]
-            except Exception:
+            except json.JSONDecodeError:
                 logger.warning("forget.py: silent error", exc_info=True)
             if not isinstance(meta, dict):
                 continue
@@ -437,7 +438,7 @@ def _get_archive_info() -> dict:
     try:
         from memall.core.db import archive_db_stats
         return archive_db_stats()
-    except Exception:
+    except (ImportError, sqlite3.Error):
         return {"exists": False, "memories": 0, "edges": 0, "file_size_mb": 0}
 
 

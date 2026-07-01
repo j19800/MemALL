@@ -5,6 +5,7 @@ TTL from ``data.db`` to ``archive.db``, keeping the hot DB lean.
 """
 
 import logging
+import sqlite3
 from memall.core.db import get_conn, ARCHIVE_DB_PATH, init_archive_db
 from memall.pipeline.forget import _LEVEL_TTL, _ttl_cutoff
 
@@ -130,7 +131,7 @@ def archive_step(days: int = _ARCHIVE_STEP_SCALE) -> dict:
             "archived_edges": archived_edges,
             "by_level": by_level,
         }
-    except Exception:
+    except sqlite3.Error:
         conn.execute("ROLLBACK")
         raise
     finally:

@@ -15,6 +15,7 @@ Tiered decay per level (P0–P4):
 
 from memall.core.db import get_conn
 from memall.pipeline.forget import _backup_before_delete
+import sqlite3
 
 # (decay_rate, inactivity_days) for each level
 _LEVEL_CONFIG = {
@@ -73,7 +74,7 @@ def decay_step() -> dict:
         )
         conn.execute("COMMIT")
         return {"purged": purged, "decayed": decayed}
-    except Exception:
+    except sqlite3.Error:
         conn.execute("ROLLBACK")
         raise
     finally:

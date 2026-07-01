@@ -1,5 +1,6 @@
 import logging
 import re
+import sqlite3
 from memall.core.db import get_conn, content_hash
 from memall.core.thin_waist import capture
 
@@ -127,7 +128,7 @@ def distill_l7_step() -> dict:
 
                 created_l7 += 1
 
-            except Exception:
+            except sqlite3.Error:
                 logger.warning("distill_l7.py: silent error", exc_info=True)
                 errors += 1
 

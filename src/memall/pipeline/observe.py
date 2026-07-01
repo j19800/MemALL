@@ -13,6 +13,7 @@ After pipeline runs, produces a structured "本轮观察" report capturing:
 """
 
 import json
+import sqlite3
 import hashlib
 from datetime import datetime, timezone
 from memall.core.db import get_conn
@@ -120,7 +121,7 @@ def observation_step() -> dict:
 
         conn.commit()
         return report
-    except Exception as e:
+    except sqlite3.Error as e:
         return {"error": str(e), "captured_as_memory": None}
     finally:
         conn.close()

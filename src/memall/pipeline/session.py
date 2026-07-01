@@ -8,6 +8,7 @@ ended_at TEXT, memory_count INTEGER, summary TEXT, status TEXT)
 """
 
 import logging
+import sqlite3
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ def _ensure_sessions_table(conn):
     if "previous_session_id" not in cols:
         try:
             conn.execute("ALTER TABLE sessions ADD COLUMN previous_session_id TEXT DEFAULT ''")
-        except Exception:
+        except sqlite3.OperationalError:
             logger.warning("session.py: silent error", exc_info=True)
     conn.commit()
 
@@ -401,7 +402,7 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                             "subject": w["subject"],
                             "summary": w["summary"] or w["content"][:200],
                         })
-            except Exception:
+            except sqlite3.Error:
                 logger.warning("session.py: silent error", exc_info=True)
             result["l3_matched"] = l3_workflows
 
@@ -411,7 +412,7 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 p0_count = conn.execute(
                     "SELECT COUNT(*) FROM memories WHERE level = 'P0' AND COALESCE(json_extract(metadata, '$.done'), 0) = 0"
                 ).fetchone()[0]
-            except Exception:
+            except sqlite3.Error:
                 logger.warning("session.py: silent error", exc_info=True)
 
             # ── Collect data for narrative greeting (Direction 1) ──
@@ -602,7 +603,7 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 _pending = _distill_result.get("pending", [])
                 if _pending:
                     fmt_parts.append(f"[DISTILL] {len(_pending)} 组待写摘要，调 memall_system action=distill 查看")
-            except Exception as e:
+            except (ImportError, json.JSONDecodeError) as e:
                 logger.warning(f"Failed to query pending distill items: {e}")
 
             result["injection_formatted"] = chr(10).join(fmt_parts)
@@ -703,7 +704,7 @@ def session_end(session_id: str, auto_extract: bool = False) -> dict:
                     "total_strong": len(strong),
                     "note": f"session had {len(strong)} mandatory correction rules that should have been followed",
                 }
-        except Exception:
+        except (ImportError, sqlite3.Error):
             logger.warning("session.py: silent error", exc_info=True)
 
         return result

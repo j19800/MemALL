@@ -1,4 +1,5 @@
 import logging
+import sqlite3
 import time
 from typing import Generator
 
@@ -137,12 +138,12 @@ def run_pipeline_stream(
             __import__("datetime").timezone.utc
         ).isoformat()
         append_metrics(metrics)
-    except Exception:
+    except sqlite3.Error:
         logger.warning("stream.py: silent error", exc_info=True)
 
     try:
         discipline = check_level_discipline()
-    except Exception:
+    except sqlite3.Error:
         discipline = {}
 
     elapsed = time.time() - start

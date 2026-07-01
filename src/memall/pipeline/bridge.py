@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from datetime import datetime, timezone
 from collections import Counter
 from memall.core.db import get_conn
@@ -119,7 +120,7 @@ def bridge_analysis_step() -> dict:
 
         return results
 
-    except Exception as e:
+    except sqlite3.Error as e:
         return {"error": str(e)}
 
     finally:

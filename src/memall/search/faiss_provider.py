@@ -210,7 +210,7 @@ class FaissProvider(SearchProvider):
                     params = json.load(f)
                 provider.dim = int(params.get("dim", EMBED_DIM))
             return provider
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             return None
 
     # ── Internal helpers ────────────────────────────────────────────────

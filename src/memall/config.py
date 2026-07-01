@@ -108,7 +108,7 @@ def load_yaml_config(path: Union[str, Path] = "memall.yaml") -> Optional[Dict[st
             try:
                 with open(p, "r", encoding="utf-8") as f:
                     return yaml.safe_load(f)
-            except Exception as e:
+            except (OSError, yaml.YAMLError) as e:
                 logger.warning("Config YAML load error (%s): %s", p, e)
 
     return None
@@ -133,7 +133,7 @@ def load_json_config(path: Union[str, Path] = "config.json") -> Optional[Dict[st
             try:
                 with open(p, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except Exception as e:
+            except (OSError, json.JSONDecodeError) as e:
                 logger.warning("Config JSON load error (%s): %s", p, e)
 
     return None

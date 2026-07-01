@@ -1,6 +1,7 @@
 """Lightweight in-process tracer — span context manager + SQLite persistence."""
 
 import json
+import sqlite3
 import threading
 import time
 import uuid
@@ -45,7 +46,7 @@ def _write_span(trace_id: str, parent_span_id: str | None, span_id: str,
                  datetime.now(timezone.utc).isoformat()),
             )
             conn.commit()
-    except Exception:
+    except sqlite3.Error:
         pass  # tracing must never block the hot path
 
 

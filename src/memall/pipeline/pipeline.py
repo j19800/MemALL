@@ -1,6 +1,7 @@
 import importlib
 import json
 import logging
+import sqlite3
 import time
 from datetime import datetime, timezone
 from .metrics import collect_metrics, append_metrics
@@ -52,19 +53,19 @@ def _count_memories(conn=None) -> int:
         try:
             row = conn.execute("SELECT COUNT(*) FROM memories").fetchone()
             return row[0] if row else 0
-        except Exception:
+        except sqlite3.Error:
             return 0
     try:
         conn = get_conn()
         row = conn.execute("SELECT COUNT(*) FROM memories").fetchone()
         return row[0] if row else 0
-    except Exception:
+    except sqlite3.Error:
         return 0
     finally:
         if conn is not None:
             try:
                 conn.close()
-            except Exception as e:
+            except sqlite3.Error as e:
                 logger.warning(f"Failed to close lingering connection in cleanup: {e}")
 
 
@@ -380,7 +381,7 @@ def run_pipeline(
             try:
                 step_fn = _load_step_fn("memall.pipeline.persona", "persona_step")
                 entries.append(_run_step("persona", step_fn, results, conn=pipeline_conn))
-            except Exception as e:
+            except (ImportError, AttributeError) as e:
                 entries.append({"step": "persona", "status": "failed", "error": str(e)[:200]})
             if len(entries) % 5 == 0:
                 _update_pipeline_run(run_id, entries)
@@ -388,25 +389,25 @@ def run_pipeline(
             try:
                 step_fn = _load_step_fn("memall.pipeline.cluster", "cluster_step")
                 entries.append(_run_step("cluster", lambda: step_fn(method=cluster_method), results, conn=pipeline_conn))
-            except Exception as e:
+            except (ImportError, AttributeError) as e:
                 entries.append({"step": "cluster", "status": "failed", "error": str(e)[:200]})
         if include_narrative:
             try:
                 step_fn = _load_step_fn("memall.pipeline.narrative", "narrative_step")
                 entries.append(_run_step("narrative", step_fn, results, conn=pipeline_conn))
-            except Exception as e:
+            except (ImportError, AttributeError) as e:
                 entries.append({"step": "narrative", "status": "failed", "error": str(e)[:200]})
         if include_suggest:
             try:
                 step_fn = _load_step_fn("memall.pipeline.suggest", "suggest_step")
                 entries.append(_run_step("suggest", step_fn, results, conn=pipeline_conn))
-            except Exception as e:
+            except (ImportError, AttributeError) as e:
                 entries.append({"step": "suggest", "status": "failed", "error": str(e)[:200]})
         if include_bridge:
             try:
                 step_fn = _load_step_fn("memall.pipeline.bridge", "bridge_analysis_step")
                 entries.append(_run_step("bridge", step_fn, results, conn=pipeline_conn))
-            except Exception as e:
+            except (ImportError, AttributeError) as e:
                 entries.append({"step": "bridge", "status": "failed", "error": str(e)[:200]})
 
         # ── Trace retention (keep spans ≤ 7 days) ──
@@ -415,7 +416,7 @@ def run_pipeline(
             _tc.execute("DELETE FROM tracing_spans WHERE created_at < datetime('now', '-7 days')")
             _tc.commit()
             _tc.close()
-        except Exception as e:
+        except sqlite3.Error as e:
             logger.warning(f"tracing_spans cleanup failed (non-fatal): {e}")
 
         # ── Metrics ──
@@ -438,7 +439,7 @@ def run_pipeline(
     finally:
         try:
             pipeline_conn.close()
-        except Exception as e:
+        except sqlite3.Error as e:
             logger.warning(f"Failed to close pipeline_conn in finally: {e}")
 
     elapsed = time.time() - _pipeline_start_time

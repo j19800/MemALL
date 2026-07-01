@@ -8,6 +8,7 @@ with ``derived_from`` edges linking back to source memories.
 import hashlib
 import json
 import logging
+import sqlite3
 from datetime import datetime, timezone
 
 from memall.core.db import get_conn
@@ -257,7 +258,7 @@ def extract_step() -> dict:
             "l6_created": l6_created,
             "edges_created": edges_created,
         }
-    except Exception:
+    except sqlite3.Error:
         conn.execute("ROLLBACK")
         raise
     finally:

@@ -466,8 +466,6 @@ class ConnectionPool:
                 conn.close()
             except sqlite3.ProgrammingError:
                 pass  # can't close connection owned by another thread
-            except Exception:
-                logger.warning("db.py: close conn failed on thread switch", exc_info=True)
             return self._new_conn()
 
         return conn
@@ -481,7 +479,7 @@ class ConnectionPool:
         if self._closed:
             try:
                 conn.close()
-            except Exception:
+            except sqlite3.Error:
                 logger.warning("db.py: silent error", exc_info=True)
             return
         try:
@@ -550,14 +548,14 @@ def pool_conn(db_path: "str | None" = None):
     except Exception:
         try:
             conn.rollback()
-        except Exception as e:
+        except sqlite3.Error as e:
             logger.warning(f"Rollback failed during exception path: {e}")
         raise
     finally:
         if not _sys.exc_info()[0]:
             try:
                 conn.commit()
-            except Exception as e:
+            except sqlite3.Error as e:
                 logger.warning(f"Commit failed in pool_conn finally: {e}")
         pool.put(conn)
 

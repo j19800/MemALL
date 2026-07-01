@@ -5,6 +5,7 @@ a lightweight dict suitable for both CLI output and injection formatting.
 """
 
 import json
+import sqlite3
 import logging
 from datetime import datetime, timezone
 
@@ -87,7 +88,7 @@ def collect() -> dict:
                     slowest = max(steps_list, key=lambda s: s.get("elapsed_ms", 0) or 0)
                     slowest_step_label = f"{slowest['step']}({slowest['elapsed_ms']}ms)"
                     slowest_ms = slowest.get("elapsed_ms", 0)
-                except Exception as e:
+                except (json.JSONDecodeError, ValueError, TypeError) as e:
                     logger.warning(f"Failed to parse slowest step from completed steps JSON: {e}")
 
         # DB size
@@ -104,7 +105,7 @@ def collect() -> dict:
         # Pending migrations
         try:
             pending_migrations = len(get_pending_migrations(conn))
-        except Exception:
+        except sqlite3.Error:
             pending_migrations = 0
 
         # Orphan edges
