@@ -20,26 +20,9 @@ import logging
 from datetime import datetime, timezone
 
 from memall.core.db import get_conn
+from memall.core.utils import now_iso, unwrap
 
 logger = logging.getLogger(__name__)
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _unwrap(value):
-    """Unwrap a {value: X, _meta: {...}} structure → bare X.
-
-    Older pipeline versions wrapped metadata values for keys like
-    ``status`` / ``source_discussion`` in a versioned envelope.
-    Task queries use ``json_extract(metadata, '$.status')`` which
-    breaks on wrapped values, so we normalise them on read and
-    permanently during migration.
-    """
-    if isinstance(value, dict) and "_meta" in value and "value" in value:
-        return value["value"]
-    return value
 
 
 # ── Query ──
@@ -78,8 +61,8 @@ def list_active_tasks(agent_name: str = "") -> list[dict]:
                 "subject": r["subject"],
                 "content": (r["content"] or "")[:300],
                 "agent_name": r["agent_name"],
-                "source_discussion": _unwrap(meta.get("source_discussion")),
-                "source_decision": _unwrap(meta.get("source_decision")),
+                "source_discussion": unwrap(meta.get("source_discussion")),
+                "source_decision": unwrap(meta.get("source_decision")),
                 "acknowledged_at": meta.get("acknowledged_at", ""),
                 "created_at": r["created_at"],
             })
@@ -139,11 +122,11 @@ def acknowledge_task(task_id: int) -> dict:
             return {"error": f"task #{task_id} not found"}
 
         meta = json.loads(row["metadata"] or "{}")
-        status = _unwrap(meta.get("status"))
+        status = unwrap(meta.get("status"))
         if status != "active":
             return {"warning": f"task #{task_id} status is '{status}', not 'active'"}
 
-        now = _now()
+        now = now_iso()
         meta["acknowledged_at"] = now
         conn.execute(
             "UPDATE memories SET metadata=?, updated_at=? WHERE id=?",
@@ -167,11 +150,11 @@ def resolve_task(task_id: int, result: str = "") -> dict:
             return {"error": f"task #{task_id} not found"}
 
         meta = json.loads(row["metadata"] or "{}")
-        status = _unwrap(meta.get("status"))
+        status = unwrap(meta.get("status"))
         if status not in ("active", "blocked"):
             return {"warning": f"task #{task_id} status is '{status}', cannot resolve"}
 
-        now = _now()
+        now = now_iso()
         meta["status"] = "resolved"
         meta["resolved_at"] = now
         if result:
@@ -199,11 +182,11 @@ def block_task(task_id: int, reason: str) -> dict:
             return {"error": f"task #{task_id} not found"}
 
         meta = json.loads(row["metadata"] or "{}")
-        status = _unwrap(meta.get("status"))
+        status = unwrap(meta.get("status"))
         if status not in ("active",):
             return {"warning": f"task #{task_id} status is '{status}', cannot block"}
 
-        now = _now()
+        now = now_iso()
         meta["status"] = "blocked"
         meta["blocked_at"] = now
         meta["blocked_reason"] = reason[:500]
@@ -238,7 +221,7 @@ def migrate_wrapped_task_metadata() -> dict:
             changed = False
             for key in ("status", "source_discussion", "source_decision"):
                 if key in meta:
-                    unwrapped = _unwrap(meta[key])
+                    unwrapped = unwrap(meta[key])
                     if unwrapped is not meta[key]:
                         meta[key] = unwrapped
                         changed = True

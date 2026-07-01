@@ -22,9 +22,8 @@ _LARK_CLI_CANDIDATES = [
     "lark-cli",
 ]
 _LARK_CLI = None
-import os as _os2
 for _c in _LARK_CLI_CANDIDATES:
-    if _os2.path.isfile(_c) or _os2.path.exists(_c):
+    if os.path.isfile(_c) or os.path.exists(_c):
         _LARK_CLI = _c
         break
 if not _LARK_CLI:

@@ -3,6 +3,7 @@ import math
 from datetime import datetime, timezone, timedelta
 from collections import Counter
 from memall.core.db import get_conn
+from memall.core.utils import parse_ts
 
 COLORS = {
     "white": {"name": "白", "meaning": "结构"},
@@ -77,7 +78,7 @@ def extract_features(agent_name: str, time_range: str = "all") -> dict:
             return {"error": f"no memories for {agent_name}", "sample_size": 0}
 
         n = len(rows)
-        timestamps = [_parse_ts(r["created_at"]) for r in rows if r["created_at"]]
+        timestamps = [parse_ts(r["created_at"]) for r in rows if r["created_at"]]
         timestamps = [t for t in timestamps if t is not None]
         timestamps.sort()
 
@@ -122,7 +123,7 @@ def extract_features(agent_name: str, time_range: str = "all") -> dict:
             recent_cats = set()
             old_cats = set()
             for i, r in enumerate(rows):
-                ts = _parse_ts(r["created_at"])
+                ts = parse_ts(r["created_at"])
                 if ts:
                     cat = r["category"] or ""
                     if ts >= recent_30d:
@@ -181,25 +182,6 @@ def extract_features(agent_name: str, time_range: str = "all") -> dict:
         }
     finally:
         conn.close()
-
-
-def _parse_ts(ts_str: str):
-    if not ts_str:
-        return None
-    tz_utc = timezone.utc
-    for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
-        try:
-            dt = datetime.strptime(ts_str.rstrip("Z"), fmt.rstrip("z"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=tz_utc)
-            return dt
-        except (ValueError, AttributeError):
-            continue
-    try:
-        ts = ts_str.replace("Z", "+00:00")
-        return datetime.fromisoformat(ts)
-    except (ValueError, TypeError):
-        return None
 
 
 def _time_entropy(timestamps):
@@ -440,7 +422,7 @@ def get_evolution(agent_name: str, window_days: int = 30) -> dict:
         # Parse all timestamps
         entries = []
         for r in rows:
-            ts = _parse_ts(r["created_at"]) or _parse_ts(r["occurred_at"])
+            ts = parse_ts(r["created_at"]) or parse_ts(r["occurred_at"])
             if ts:
                 entries.append({
                     "id": r["id"],
@@ -698,7 +680,7 @@ def extract_behavioral(agent_name: str) -> dict:
 
         entries = []
         for r in rows:
-            ts = _parse_ts(r["created_at"])
+            ts = parse_ts(r["created_at"])
             if ts:
                 entries.append({
                     "id": r["id"],

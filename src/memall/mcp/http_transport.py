@@ -22,6 +22,8 @@ _TOOL_TIMEOUT = 120  # max seconds for a single tool call
 _HEAVY_TIMEOUT = 600  # max seconds for heavy operations
 
 # ── Global exception middleware ────────────────────────────────────────
+_log = logging.getLogger("memall.mcp.http")
+
 @web.middleware
 async def _error_middleware(request: web.Request, handler) -> web.Response:
     """Catch all unhandled exceptions and return 500 instead of crashing."""
@@ -51,14 +53,14 @@ async def _on_shutdown(app: web.Application):
 # fall back to Path.home() for other platforms.
 _user_home = os.environ.get("USERPROFILE") or str(Path.home())
 _fixed_path = os.path.join(_user_home, ".memall", "data.db")
-print(f"[http_transport] USER_HOME = {_user_home}, setting MEMALL_DB_PATH = {_fixed_path}")
+_log.info("USER_HOME = %s, MEMALL_DB_PATH = %s", _user_home, _fixed_path)
 os.environ.setdefault("MEMALL_DB_PATH", _fixed_path)
 
 from memall.mcp.adapter import TOOL_DEFINITIONS, handle_call, _intercept, consume_session_note
 from memall.core.db import init_db
 from memall.core.rate_limiter import get_rate_limiter
 
-_log = logging.getLogger("memall.mcp.http")
+_log.info("USER_HOME = %s, MEMALL_DB_PATH = %s", _user_home, _fixed_path)
 
 # Bearer token for MCP HTTP transport (required for production).
 # Set MEMALL_MCP_TOKEN env var, falls back to MEMALL_AUTH_TOKEN.

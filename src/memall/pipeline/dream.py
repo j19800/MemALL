@@ -25,7 +25,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from memall.core.nlp import tokenize
+from memall.core.nlp import tokenize, jaccard
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +46,6 @@ _JACCARD_THRESHOLD = 0.15
 _CONTRADICT_JACCARD_MIN = 0.10
 # Number of recent memories to scan per call
 _DEFAULT_SCAN_WINDOW = 50
-
-
-def _jaccard(a: set, b: set) -> float:
-    if not a or not b:
-        return 0.0
-    return len(a & b) / len(a | b)
 
 
 def _check_contradiction(text_a: str, text_b: str) -> bool:
@@ -119,7 +113,7 @@ def dream_scan(conn, new_mem_id: int, agent_name: str, content: str,
 
         # Quick Jaccard filter
         existing_tokens = set(tokenize(existing_text))
-        sim = _jaccard(new_tokens, existing_tokens)
+        sim = jaccard(new_tokens, existing_tokens)
 
         if sim < threshold:
             # Still check for strong contradiction at lower similarity

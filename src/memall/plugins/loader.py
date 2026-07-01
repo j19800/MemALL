@@ -3,9 +3,12 @@ Plugin Loader — Automatic discovery, loading, hot-reload, and hook dispatch.
 """
 
 import importlib
+import logging
 import sys
 from pathlib import Path
 from typing import Dict, List, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 # Registry of loaded plugins: name -> module
 _loaded_plugins: Dict[str, Any] = {}
@@ -52,7 +55,7 @@ def load_plugin(name: str) -> Optional[Any]:
         The loaded module object, or None if import failed.
     """
     if name not in _BUILTIN_PLUGINS:
-        print(f"[PluginLoader] Refused to load '{name}': not in plugin whitelist", file=sys.stderr)
+        logger.warning("Refused to load '%s': not in plugin whitelist", name)
         return None
 
     if name in _loaded_plugins:
@@ -66,10 +69,10 @@ def load_plugin(name: str) -> Optional[Any]:
             module.register()
         return module
     except ImportError as e:
-        print(f"[PluginLoader] Failed to load '{name}': {e}", file=sys.stderr)
+        logger.error("Failed to load '%s': %s", name, e)
         return None
     except Exception as e:
-        print(f"[PluginLoader] Error loading '{name}': {e}", file=sys.stderr)
+        logger.error("Error loading '%s': %s", name, e)
         return None
 
 
@@ -93,7 +96,7 @@ def reload_plugin(name: str) -> Optional[Any]:
             reloaded.register()
         return reloaded
     except Exception as e:
-        print(f"[PluginLoader] Failed to reload '{name}': {e}", file=sys.stderr)
+        logger.warning("Failed to reload '%s': %s", name, e)
         return None
 
 
@@ -116,10 +119,7 @@ def run_plugin_hook(hook_name: str, **kwargs) -> List[Any]:
                 result = hook(**kwargs)
                 results.append({"plugin": name, "result": result})
             except Exception as e:
-                print(
-                    f"[PluginLoader] Hook '{hook_name}' in '{name}' failed: {e}",
-                    file=sys.stderr,
-                )
+                logger.warning("Hook '%s' in '%s' failed: %s", hook_name, name, e)
 
     return results
 

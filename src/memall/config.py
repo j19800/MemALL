@@ -6,11 +6,14 @@ variable override (MEMALL_ prefix), and dot-path key access.
 """
 
 import json
+import logging
 import os
 import sys
 import copy
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
+
+logger = logging.getLogger(__name__)
 
 # ── Default configuration ──────────────────────────────────────────────
 _DEFAULT_CONFIG: Dict[str, Any] = {
@@ -106,7 +109,7 @@ def load_yaml_config(path: Union[str, Path] = "memall.yaml") -> Optional[Dict[st
                 with open(p, "r", encoding="utf-8") as f:
                     return yaml.safe_load(f)
             except Exception as e:
-                print(f"[Config] YAML load error ({p}): {e}", file=sys.stderr)
+                logger.warning("Config YAML load error (%s): %s", p, e)
 
     return None
 
@@ -131,7 +134,7 @@ def load_json_config(path: Union[str, Path] = "config.json") -> Optional[Dict[st
                 with open(p, "r", encoding="utf-8") as f:
                     return json.load(f)
             except Exception as e:
-                print(f"[Config] JSON load error ({p}): {e}", file=sys.stderr)
+                logger.warning("Config JSON load error (%s): %s", p, e)
 
     return None
 

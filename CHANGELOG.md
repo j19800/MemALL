@@ -1,3 +1,9 @@
+## [v0.1.38] - 2026-07-01
+
+### Changed
+
+- **print() → logging in 6 non-CLI modules**: Replaced all diagnostic print() calls with structured logging across config.py, api/start_server.py, mcp/http_transport.py, plugins/loader.py, plugins/notifier.py, plugins/scheduler.py (20+ calls). Uses `logger.warning/info/error` with printf-style formatting (`%s`) and `exc_info=True` for exception context. Non-CLI prints preserved in onboarding.py (interactive UX), scheduler/scheduler.py daemon_start/daemon_stop (CLI output), bridge/run_bridge.py (run script). Also fixed pre-existing bug in plugins/notifier.py where `logger.warning(...)` was called on line 227 but `logger` was never defined. (`src/memall/config.py`, `src/memall/api/start_server.py`, `src/memall/mcp/http_transport.py`, `src/memall/plugins/loader.py`, `src/memall/plugins/notifier.py`, `src/memall/plugins/scheduler.py`)
+
 ## [v0.1.37] - 2026-07-01
 
 ### Fixed

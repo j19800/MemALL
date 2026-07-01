@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from memall.core.db import get_conn
 from memall.core.thin_waist import normalize_agent_name
 from memall.pipeline.util import _smart_subject
+from memall.core.nlp import jaccard
 
 _MIN_L9_COUNT = 2
 _L10_PREFIX_RE = re.compile(r'^\[(L10|L10\s.*?)\]', re.DOTALL)
@@ -32,12 +33,6 @@ _SIMILARITY_THRESHOLD = 0.85
 
 def _is_explicit_l10(content: str) -> bool:
     return bool(_L10_PREFIX_RE.match(content.strip()))
-
-
-def _jaccard(a: set, b: set) -> float:
-    if not a or not b:
-        return 0.0
-    return len(a & b) / len(a | b)
 
 
 def _tokenize(text: str) -> set:
@@ -79,7 +74,7 @@ def _recent_l10_similar(conn, merged_content: str, agent: str,
     ).fetchall()
     for r in recent:
         existing_tokens = _tokenize(r["content"])
-        sim = _jaccard(new_tokens, existing_tokens)
+        sim = jaccard(new_tokens, existing_tokens)
         if sim >= threshold:
             return r["id"]
     return None

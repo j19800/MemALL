@@ -1,7 +1,10 @@
 """Start MemALL API server with correct database path.
 Patches DB_PATH to use the symlink (bypasses TRAE sandbox virtualization)."""
+import logging
 import sys, os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Ensure src is on path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -17,10 +20,10 @@ try:
     cnt = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
     max_id = conn.execute("SELECT MAX(id) FROM memories").fetchone()[0]
     conn.close()
-    print(f"[startup] DB: {memall_db.DB_PATH}")
-    print(f"[startup] Memories: {cnt}, Max ID: {max_id}")
+    logger.info("DB: %s", memall_db.DB_PATH)
+    logger.info("Memories: %s, Max ID: %s", cnt, max_id)
 except Exception as e:
-    print(f"[startup] ERROR opening DB: {e}")
+    logger.error("Error opening DB: %s", e, exc_info=True)
     raise
 
 from memall.api.server import serve_http

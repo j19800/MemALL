@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS memories (
     occurred_at TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-	    supersedes INTEGER REFERENCES memories(id),
+	    supersedes TEXT NOT NULL DEFAULT '[]',
 	    trust_level REAL NOT NULL DEFAULT 1.0,
     access_count INTEGER NOT NULL DEFAULT 0,
     metadata TEXT NOT NULL DEFAULT '{}',
@@ -587,12 +587,12 @@ def get_pool(db_path: "str | None" = None,
 # Maintenance — VACUUM / ANALYZE / OPTIMIZE / Stats
 # ══════════════════════════════════════════════════════════════════
 
-def _db_file_size_mb(db_path: str) -> float:
+def _db_file_size_mb(path: str) -> float:
     """Return the size of the database file in MB (0 if missing)."""
-    p = Path(db_path)
-    if not p.exists():
+    try:
+        return round(Path(path).stat().st_size / (1024 * 1024), 2)
+    except (OSError, FileNotFoundError):
         return 0.0
-    return round(p.stat().st_size / (1024 * 1024), 2)
 
 
 def vacuum_db(db_path: "str | None" = None) -> dict:
@@ -771,13 +771,6 @@ def init_archive_db(conn=None):
 
 def get_archive_db_path() -> Path:
     return ARCHIVE_DB_PATH
-
-
-def _db_file_size_mb(path: str) -> float:
-    try:
-        return round(Path(path).stat().st_size / (1024 * 1024), 2)
-    except (OSError, FileNotFoundError):
-        return 0.0
 
 
 def archive_db_stats() -> dict:

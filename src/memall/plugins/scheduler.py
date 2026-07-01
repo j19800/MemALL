@@ -61,7 +61,7 @@ class TaskScheduler:
         """
         with self._lock:
             if name in self._tasks:
-                print(f"[Scheduler] Task '{name}' already exists", file=sys.stderr)
+                logger.warning("Task '%s' already exists", name)
                 return False
 
             self._tasks[name] = {
@@ -158,7 +158,7 @@ class TaskScheduler:
             task["run_count"] += 1
         except Exception as e:
             task["error_count"] += 1
-            print(f"[Scheduler] Task '{name}' failed: {e}", file=sys.stderr)
+            logger.warning("Task '%s' failed: %s", name, e)
         finally:
             task["last_run"] = datetime.now(timezone.utc)
             task["next_run"] = datetime.now(timezone.utc) + timedelta(
@@ -174,13 +174,11 @@ def _daily_forget() -> None:
         from memall.pipeline.forget import forget_low_value
 
         result = forget_low_value()
-        print(
-            f"[Scheduler] Daily forget: {result.get('deleted_memories', 0)} removed"
-        )
+        logger.info("Daily forget: %s removed", result.get("deleted_memories", 0))
     except ImportError:
         logger.warning("scheduler.py: silent error", exc_info=True)
     except Exception as e:
-        print(f"[Scheduler] Daily forget error: {e}", file=sys.stderr)
+        logger.warning("Daily forget error: %s", e)
 
 
 def _daily_security_audit() -> None:
@@ -191,14 +189,11 @@ def _daily_security_audit() -> None:
         result = audit_sensitive()
         count = result.get("total_findings", 0)
         if count > 0:
-            print(
-                f"[Scheduler] Daily audit: {count} sensitive findings "
-                f"(risk={result.get('risk_level', '?')})"
-            )
+            logger.info("Daily audit: %s sensitive findings (risk=%s)", count, result.get("risk_level", "?"))
     except ImportError:
         logger.warning("scheduler.py: silent error", exc_info=True)
     except Exception as e:
-        print(f"[Scheduler] Daily audit error: {e}", file=sys.stderr)
+        logger.warning("Daily audit error: %s", e)
 
 
 def create_default_scheduler() -> TaskScheduler:
@@ -493,4 +488,4 @@ def _record_plugin_event(hook_point: str, description: str, status: str = "ok", 
         from memall.mcp.hook_effects import record_event as _re
         _re(hook_point=hook_point, description=description, plugin="scheduler", status=status, memory_id=memory_id)
     except Exception:
-        pass
+        logger.warning("Failed to record scheduler plugin event for %s", hook_point, exc_info=True)

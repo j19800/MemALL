@@ -2,11 +2,14 @@
 Notifier Plugin — System notifications for forget triggers and security alerts.
 """
 
+import logging
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from memall.core.db import get_conn
+
+logger = logging.getLogger(__name__)
 
 # Windows notification support (optional)
 try:
@@ -42,13 +45,14 @@ def send_notification(title: str, message: str, level: str = "info") -> bool:
             )
             return True
         except Exception as e:
-            print(f"[Notifier] Toast failed: {e}", file=sys.stderr)
+            logger.warning("Toast failed: %s", e)
 
     # Fallback
     prefix = {"info": "[INFO]", "warning": "[WARN]", "error": "[ERROR]"}.get(
         level, "[INFO]"
     )
-    print(f"{prefix} {title}: {message}", file=sys.stderr)
+    fallback_msg = f"{prefix} {title}: {message}"
+    logger.warning("%s", fallback_msg)
     return False
 
 
@@ -101,7 +105,7 @@ def watch_anomaly() -> Optional[dict]:
         # security module not available
         pass
     except Exception as e:
-        print(f"[Notifier] Anomaly check failed: {e}", file=sys.stderr)
+        logger.warning("Anomaly check failed: %s", e)
 
     return None
 
@@ -224,4 +228,4 @@ def _record_plugin_event(hook_point: str, description: str, status: str = "ok") 
         from memall.mcp.hook_effects import record_event as _re
         _re(hook_point=hook_point, description=description, plugin="notifier", status=status)
     except Exception:
-        pass
+        logger.warning("Failed to record notifier plugin event for %s", hook_point, exc_info=True)

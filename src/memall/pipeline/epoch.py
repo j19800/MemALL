@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from memall.core.db import get_conn
+from memall.core.utils import parse_ts
 
 logger = logging.getLogger(__name__)
 
@@ -33,29 +34,10 @@ _VIEWPOINT_KEYWORDS = [
 
 # ── Helpers ─────────────────────────────────────────────────────
 
-def _parse_ts(ts_str: str) -> Optional[datetime]:
-    """Parse ISO timestamp string to timezone-aware datetime."""
-    if not ts_str:
-        return None
-    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
-        try:
-            dt = datetime.strptime(ts_str[:26], fmt)
-            return dt.replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-    try:
-        dt = datetime.fromisoformat(ts_str)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
-        return None
-
-
 def _hours_between(ts1: str, ts2: str) -> float:
     """Compute hours between two ISO timestamp strings."""
-    dt1 = _parse_ts(ts1)
-    dt2 = _parse_ts(ts2)
+    dt1 = parse_ts(ts1)
+    dt2 = parse_ts(ts2)
     if dt1 is None or dt2 is None:
         return 0.0
     return abs((dt2 - dt1).total_seconds() / 3600.0)

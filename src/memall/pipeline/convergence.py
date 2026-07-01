@@ -21,6 +21,7 @@ from datetime import datetime, timezone, timedelta
 
 from memall.core.db import get_conn
 from memall.pipeline.util import _smart_subject
+from memall.core.utils import now_iso, unwrap
 
 logger = logging.getLogger(__name__)
 
@@ -29,28 +30,12 @@ def _short_id() -> str:
     return "dt_" + uuid.uuid4().hex[:8]
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _unwrap(value):
-    """Unwrap {value: X, _meta: {...}} → bare X.
-
-    cleanup.py's _migrate_value() wraps metadata fields in a versioned
-    envelope during the nightly sweep.  All reads of discussion metadata
-    must unwrap to get the actual data.
-    """
-    if isinstance(value, dict) and "_meta" in value and "value" in value:
-        return value["value"]
-    return value
-
-
-def _unwrap_meta(meta: dict, key: str):
+def unwrap_meta(meta: dict, key: str):
     """Unwrap a single metadata key; return default (empty list) if absent."""
     raw = meta.get(key)
     if raw is None:
         return [] if key in ("participants", "options", "open_questions", "action_items") else ""
-    return _unwrap(raw)
+    return unwrap(raw)
 
 
 # ── Discussion CRUD (L5 + edges) ──
@@ -81,7 +66,7 @@ def create_discussion(
     participants_list = [normalize_agent_name(p) for p in (participants or [])]
     conn = get_conn()
     try:
-        now = _now()
+        now = now_iso()
         uid = _short_id()
         subject = f"[讨论] {title}"[:200]
 
@@ -177,12 +162,12 @@ def get_discussion(discussion_id: int) -> dict:
                 "subject": disc["subject"],
                 "content": disc["content"],
                 "status": meta.get("status", "active"),
-                "options": _unwrap_meta(meta, "options"),
-                "open_questions": _unwrap_meta(meta, "open_questions"),
-                "action_items": _unwrap_meta(meta, "action_items"),
-                "participants": _unwrap_meta(meta, "participants"),
+                "options": unwrap_meta(meta, "options"),
+                "open_questions": unwrap_meta(meta, "open_questions"),
+                "action_items": unwrap_meta(meta, "action_items"),
+                "participants": unwrap_meta(meta, "participants"),
                 "created_at": disc["created_at"],
-                "conclusion": _unwrap_meta(meta, "conclusion"),
+                "conclusion": unwrap_meta(meta, "conclusion"),
                 "converged_at": meta.get("converged_at", ""),
             },
             "responses": [dict(r) for r in responses],
@@ -220,9 +205,9 @@ def list_active_discussions() -> list[dict]:
             results.append({
                 "memory_id": r["id"],
                 "subject": r["subject"],
-                "participants": _unwrap_meta(meta, "participants"),
+                "participants": unwrap_meta(meta, "participants"),
                 "responded_agents": responded_agents,
-                "action_items": _unwrap_meta(meta, "action_items"),
+                "action_items": unwrap_meta(meta, "action_items"),
                 "response_count": count,
                 "created_at": r["created_at"],
             })
@@ -261,7 +246,7 @@ def list_all_discussions() -> list[dict]:
                 "subject": r["subject"],
                 "summary": r["summary"] or r["content"][:200] if r["content"] else "",
                 "status": meta.get("status", "active"),
-                "participants": _unwrap_meta(meta, "participants"),
+                "participants": unwrap_meta(meta, "participants"),
                 "responded_agents": responded_agents,
                 "response_count": count,
                 "created_at": r["created_at"],
@@ -295,7 +280,7 @@ def _converge_single(conn, disc: dict) -> dict:
         return {"warning": "no responses, can not converge"}
 
     # Check if all participants have responded
-    participants = _unwrap_meta(meta, "participants") or []
+    participants = unwrap_meta(meta, "participants") or []
     if participants and len(participants) > 1:
         responded_agents = set()
         for resp in responses:
@@ -326,7 +311,7 @@ def confirm_discussion(
     agent_name = normalize_agent_name(agent_name)
     conn = get_conn()
     try:
-        now = _now()
+        now = now_iso()
 
         # Fetch the discussion
         row = conn.execute(
@@ -372,7 +357,7 @@ def confirm_discussion(
         conn.commit()
 
         # ── Auto-converge: check if all participants have responded ──
-        participants = _unwrap_meta(disc_meta, "participants") or []
+        participants = unwrap_meta(disc_meta, "participants") or []
 
         # Fetch ALL responses so far
         responses = conn.execute(
@@ -396,7 +381,7 @@ def confirm_discussion(
                 # Not all participants have responded yet — do NOT converge
                 conn.execute(
                     "UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
-                    (json.dumps(disc_meta), _now(), discussion_id),
+                    (json.dumps(disc_meta), now_iso(), discussion_id),
                 )
                 conn.commit()
                 return {
@@ -449,12 +434,12 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
     if meta.get("status") != "active":
         return {"warning": "already " + str(meta.get("status"))}
 
-    now = _now()
-    action_items = _unwrap_meta(meta, "action_items")
+    now = now_iso()
+    action_items = unwrap_meta(meta, "action_items")
     title = re.sub(r'^(\[\?\?\] |\[讨论\] )', '', disc.get("subject", ""))
 
     # Collect participant names (used as fallback assignees for string action_items)
-    participants = _unwrap_meta(meta, "participants") or []
+    participants = unwrap_meta(meta, "participants") or []
 
     # Aggregate latest stances from responses (simplified: just the confirming agent)
     latest: dict[str, dict] = {}
@@ -474,7 +459,7 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
     )
 
     # ?? 2. Create L4 decision ??
-    conclusion = _unwrap_meta(meta, "conclusion")
+    conclusion = unwrap_meta(meta, "conclusion")
     stances_lines = []
     for agent, s in latest.items():
         stance = s.get("stance", "confirm")

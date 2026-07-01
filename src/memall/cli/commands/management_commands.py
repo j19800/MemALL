@@ -360,21 +360,30 @@ def cmd_doctor(args):
     if args.fix:
         fix_conn = get_conn()
         try:
-            fix_conn.execute("DELETE FROM edges WHERE source_id NOT IN (SELECT id FROM memories)")
-            # Fix: supersedes is JSON array — clean orphan IDs in Python
-            sup_rows = fix_conn.execute(
-                "SELECT id, supersedes FROM memories WHERE supersedes IS NOT NULL AND supersedes != '[]'"
-            ).fetchall()
-            for r in sup_rows:
-                try:
-                    sup_list = json.loads(r["supersedes"]) if isinstance(r["supersedes"], str) else []
-                    clean = [s for s in sup_list if fix_conn.execute("SELECT 1 FROM memories WHERE id = ?", (s,)).fetchone()]
-                    if len(clean) != len(sup_list):
-                        fix_conn.execute("UPDATE memories SET supersedes = ? WHERE id = ?",
-                                         (json.dumps(clean, ensure_ascii=False), r["id"]))
-                except (json.JSONDecodeError, TypeError):
-                    fix_conn.execute("UPDATE memories SET supersedes = '[]' WHERE id = ?", (r["id"],))
-            fix_conn.commit()
+            # Disable FK enforcement: supersedes stores JSON arrays but the
+            # column was historically INTEGER REFERENCES memories(id).  The
+            # migration 021_fix_supersedes_column_type fixes the schema, but
+            # databases created before that migration still have the old type.
+            fk_was_on = fix_conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            fix_conn.execute("PRAGMA foreign_keys=OFF")
+            try:
+                fix_conn.execute("DELETE FROM edges WHERE source_id NOT IN (SELECT id FROM memories)")
+                # Fix: supersedes is JSON array — clean orphan IDs in Python
+                sup_rows = fix_conn.execute(
+                    "SELECT id, supersedes FROM memories WHERE supersedes IS NOT NULL AND supersedes != '[]'"
+                ).fetchall()
+                for r in sup_rows:
+                    try:
+                        sup_list = json.loads(r["supersedes"]) if isinstance(r["supersedes"], str) else []
+                        clean = [s for s in sup_list if fix_conn.execute("SELECT 1 FROM memories WHERE id = ?", (s,)).fetchone()]
+                        if len(clean) != len(sup_list):
+                            fix_conn.execute("UPDATE memories SET supersedes = ? WHERE id = ?",
+                                             (json.dumps(clean, ensure_ascii=False), r["id"]))
+                    except (json.JSONDecodeError, TypeError):
+                        fix_conn.execute("UPDATE memories SET supersedes = '[]' WHERE id = ?", (r["id"],))
+                fix_conn.commit()
+            finally:
+                fix_conn.execute(f"PRAGMA foreign_keys={'ON' if fk_was_on else 'OFF'}")
             rebuild_fts(fix_conn)
             print("Fix applied: orphan records cleaned, FTS rebuilt.")
         finally:

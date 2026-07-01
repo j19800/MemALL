@@ -46,6 +46,13 @@ def tokenize(text: str) -> list:
     ]
 
 
+def jaccard(a: set, b: set) -> float:
+    """Jaccard similarity coefficient for two sets."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
 def compute_tfidf(docs: list) -> list:
     """Compute TF-IDF vectors for a list of documents.
 

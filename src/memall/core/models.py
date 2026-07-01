@@ -3,10 +3,6 @@ from typing import Optional
 from datetime import datetime, timezone
 
 
-def _now():
-    return datetime.now(timezone.utc).isoformat()
-
-
 @dataclass
 class Memory:
     id: Optional[int] = None

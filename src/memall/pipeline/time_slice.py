@@ -15,9 +15,10 @@ import math
 import sqlite3
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+
 
 from memall.core.db import get_conn
+from memall.core.utils import parse_ts
 
 logger = logging.getLogger(__name__)
 
@@ -65,25 +66,6 @@ def _get_window_bounds(slice_key: str, granularity: str) -> tuple[str, str]:
         else:
             end = datetime(year, month + 1, 1)
         return (start.isoformat(), end.isoformat())
-
-
-def _parse_ts(ts_str: str) -> Optional[datetime]:
-    """Parse ISO timestamp string to timezone-aware datetime."""
-    if not ts_str:
-        return None
-    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
-        try:
-            dt = datetime.strptime(ts_str[:26], fmt)
-            return dt.replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-    try:
-        dt = datetime.fromisoformat(ts_str)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
-        return None
 
 
 def _count_keywords(content: str, keywords: list[str]) -> int:
@@ -333,7 +315,7 @@ def _update_temporal_weights(conn, memory_ids: list[int]) -> int:
         if not row:
             continue
 
-        occurred = _parse_ts(row["occurred_at"])
+        occurred = parse_ts(row["occurred_at"])
         if not occurred:
             continue
 
@@ -419,7 +401,7 @@ def time_slice_step() -> dict:
             for r in rows:
                 agent = r["agent_name"] or "system"
                 occurred = r["occurred_at"]
-                dt = _parse_ts(occurred)
+                dt = parse_ts(occurred)
                 if dt is None:
                     continue
                 day_key = _get_slice_key(dt, "day")

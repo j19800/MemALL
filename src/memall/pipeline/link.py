@@ -1,18 +1,12 @@
 import re
 from memall.core.db import pool_conn
-from memall.core.nlp import tokenize
+from memall.core.nlp import tokenize, jaccard
 
 JACCARD_THRESHOLD = 0.6
 MAX_EDGES_PER_MEMORY = 10
 _EDGES_SCAN_LIMIT = 50000
 _PRUNE_GROUP_LIMIT = 10000
 _MEMORY_BATCH_LIMIT = 2000
-
-
-def _jaccard(a: set, b: set) -> float:
-    if not a or not b:
-        return 0
-    return len(a & b) / len(a | b)
 
 
 RELATION_PATTERNS = [
@@ -124,7 +118,7 @@ def link_step() -> int:
                 if edge_count.get(b["id"], 0) >= MAX_EDGES_PER_MEMORY:
                     continue
 
-                sim = _jaccard(tokens_map[a["id"]], tokens_map[b["id"]])
+                sim = jaccard(tokens_map[a["id"]], tokens_map[b["id"]])
                 rel = None
                 if sim >= JACCARD_THRESHOLD:
                     rel = _infer_relation(a["content"], b["content"])
