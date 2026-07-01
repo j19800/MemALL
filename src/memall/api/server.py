@@ -52,7 +52,7 @@ app = FastAPI(title="memall", version="0.1.2",
 _security_scheme = HTTPBearer(auto_error=False)
 
 # Paths that don't require auth
-_PUBLIC_PATHS = frozenset({"/", "/docs", "/redoc", "/openapi.json", "/api/routes"})
+_PUBLIC_PATHS = frozenset({"/", "/docs", "/redoc", "/openapi.json", "/api/routes", "/health", "/favicon.ico"})
 
 
 def _get_api_token() -> str:
@@ -96,6 +96,8 @@ app.add_middleware(
 async def auth_middleware(request: Request, call_next):
     """Verify Bearer token on all non-public routes."""
     path = request.url.path
+    if request.method == "OPTIONS":
+        return await call_next(request)
     if path in _PUBLIC_PATHS or path.startswith(("/docs", "/redoc", "/openapi.json", "/static")):
         return await call_next(request)
 

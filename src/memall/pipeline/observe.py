@@ -379,8 +379,9 @@ def reflection_dashboard(days: int = 30) -> dict:
                 q = meta.get("quality", "medium")
                 if isinstance(q, dict):
                     q = q.get("value", "medium")
-                if q in quality:
-                    quality[q] += 1
+                if not isinstance(q, str) or q not in quality:
+                    q = "medium"
+                quality[q] += 1
             except (json.JSONDecodeError, TypeError):
                 logger.warning("observe.py: quality parse error", exc_info=True)
 

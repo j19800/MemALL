@@ -6,7 +6,8 @@
 
 ### Fixed
 
-- **session.py stale reference**: Removed `injection.get("graph_relations", {})` formatting code after removing the key from auto_inject return. (`src/memall/pipeline/session.py`)
+- **observe.py quality parse error**: `reflection_dashboard()` 中 quality 字段可能为双层嵌套 dict（如 `{"value": {"value": "high", ...}}`），导致 `if q in quality` 抛出 `TypeError: unhashable type: 'dict'`。添加兜底类型检查，非字符串或不在白名单中时 fallback 为 "medium"。 (`src/memall/pipeline/observe.py`)
+- **server.py OPTIONS 401**: CORS 预检请求 (OPTIONS) 不带 Authorization header，auth 中间件直接返回 401。添加 `request.method == "OPTIONS"` 提前放行。同时将 `/health` 和 `/favicon.ico` 加入公开路径白名单。 (`src/memall/api/server.py`)
 
 ## [v0.1.40] - 2026-07-02
 
