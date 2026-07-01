@@ -1,3 +1,13 @@
+## [v0.1.41] - 2026-07-02
+
+### Changed
+
+- **auto_inject 瘦身 — 移除 3 个低价值扫描段**: Removed L9 Distillations (section 3), Semantic Fragments TF-IDF (section 6), and GRAPH edges live query (section 14) from `auto_inject()` — 三重无消费方扫描: L9 与 L6/L7 重叠、TF-IDF 计算贵且仅用 agent_name 做信号、GRAPH 原始边数据 agent 无法消费。同时移除 session.py 中对应的 GRAPH 格式化代码。 (`src/memall/mcp/federation_tools.py`, `src/memall/pipeline/session.py`)
+
+### Fixed
+
+- **session.py stale reference**: Removed `injection.get("graph_relations", {})` formatting code after removing the key from auto_inject return. (`src/memall/pipeline/session.py`)
+
 ## [v0.1.40] - 2026-07-02
 
 ### Fixed

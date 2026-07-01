@@ -19,7 +19,6 @@ import sqlite3
 from datetime import datetime, timezone
 
 from memall.core.db import get_conn
-from memall.core.nlp import compute_tfidf, cosine_sim
 from memall.pipeline.convergence import check_pending_discussions
 from memall.federation.family import get_family_db_path, init_family_db
 from memall.federation.conflict import detect_conflicts, list_conflicts
@@ -243,23 +242,7 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject l7_lessons failed", exc_info=True)
 
-        # ── 3. L9 Distillations (knowledge summaries by category) ──
-        distillations = []
-        rows = conn.execute(
-            "SELECT id, content, summary, category, created_at FROM memories "
-            "WHERE agent_name = ? AND level = 'L9' AND LENGTH(TRIM(content)) > 10 "
-            "ORDER BY created_at DESC LIMIT 5",
-            (agent_name,),
-        ).fetchall()
-        for r in rows:
-            distillations.append({
-                "id": r["id"],
-                "summary": r["summary"] or r["content"][:300],
-                "category": r["category"],
-                "distilled_at": r["created_at"],
-            })
-
-        # ── 4. Pending Suggestions ──
+        # ── 3. Pending Suggestions ──
         suggestions_list = []
         rows = conn.execute(
             "SELECT id, content, category, created_at FROM suggestions "
@@ -273,43 +256,13 @@ def auto_inject(agent_name: str) -> dict:
                 "created_at": r["created_at"],
             })
 
-        # ── 5. Persona Evolution Trend ──
+        # ── 4. Persona Evolution Trend ──
         try:
             evolution = get_evolution(agent_name, window_days=30)
         except Exception:
             evolution = {"error": "evolution data not available", "agent_name": agent_name}
 
-        # ── 6. Recent semantic fragments (top 5 by TF-IDF relevance) ──
-        rows = conn.execute(
-            "SELECT id, content, category, subject, summary FROM memories "
-            "WHERE agent_name = ? AND LENGTH(TRIM(content)) > 10 "
-            "ORDER BY created_at DESC LIMIT 20",
-            (agent_name,),
-        ).fetchall()
-
-        fragments = []
-        for r in rows:
-            fragments.append({
-                "id": r["id"],
-                "content": r["content"][:300],
-                "category": r["category"],
-                "subject": r["subject"],
-            })
-
-        # Filter top fragments by TF-IDF relevance to agent name
-        if len(fragments) > 5:
-            texts = [agent_name] + [f["content"][:200] for f in fragments]
-            tfidf_docs = compute_tfidf(texts)
-            if tfidf_docs and len(tfidf_docs) > 1:
-                scored = []
-                for i, f in enumerate(fragments):
-                    if i + 1 < len(tfidf_docs):
-                        sim = cosine_sim(tfidf_docs[0], tfidf_docs[i + 1])
-                        scored.append((sim, f))
-                scored.sort(key=lambda x: -x[0])
-                fragments = [f for _, f in scored[:5]]
-
-        # ── 7. L1/L7 Identity Traits ──
+        # ── 5. L1/L7 Identity Traits ──
         identity_traits = {"l1_identity": [], "l7_preferences": []}
         try:
             row = conn.execute(
@@ -361,7 +314,7 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject identity_traits failed", exc_info=True)
 
-        # ── 8. Pending L5 tasks assigned to this agent ──
+        # ── 6. Pending L5 tasks assigned to this agent ──
         pending_tasks = []
         try:
             rows = conn.execute(
@@ -374,14 +327,14 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject pending_tasks failed", exc_info=True)
 
-        # ── 9. Pending discussions for this agent ──
+        # ── 7. Pending discussions for this agent ──
         pending_discussions = []
         try:
             pending_discussions = check_pending_discussions(agent_name)
         except Exception:
             logger.warning("auto_inject check_pending_discussions failed", exc_info=True)
 
-        # ── 10. L3 Workflow Skills (usable by any agent) ──
+        # ── 8. L3 Workflow Skills (usable by any agent) ──
         workflow_skills = []
         try:
             # L3 scope: agent=own agent only, family/shared=all agents, NULL=agent (backward compat)
@@ -416,7 +369,7 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject workflow_skills failed", exc_info=True)
 
-        # ── 11. L2 Timeline Events (recent happenings) ──
+        # ── 9. L2 Timeline Events (recent happenings) ──
         timeline_events = []
         try:
             rows = conn.execute(
@@ -435,7 +388,7 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject timeline_events failed", exc_info=True)
 
-        # ── 12. L4 Decision Arcs ──
+        # ── 10. L4 Decision Arcs ──
         decision_arcs = {"open": [], "in_progress": [], "closed": []}
         try:
             rows = conn.execute(
@@ -457,7 +410,7 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject decision_arcs failed", exc_info=True)
 
-        # ── 13. L10 Panoramic Overview (terminal, comprehensive) ──
+        # ── 11. L10 Panoramic Overview (terminal, comprehensive) ──
         panoramic_overview = []
         try:
             rows = conn.execute(
@@ -476,57 +429,7 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject panoramic_overview failed", exc_info=True)
 
-        # ── 14. [GRAPH] Edges live query (replaces old L8 keyword query) ──
-        graph_relations = {}
-        try:
-            # A — Time-window counts
-            cnt_row = conn.execute(
-                "SELECT "
-                "SUM(CASE WHEN created_at >= datetime('now', '-1 day') THEN 1 ELSE 0 END) as last_24h, "
-                "SUM(CASE WHEN created_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END) as last_7d, "
-                "COUNT(*) as total FROM edges"
-            ).fetchone()
-            counts = {"last_24h": cnt_row["last_24h"], "last_7d": cnt_row["last_7d"], "total": cnt_row["total"]}
-
-            # B — Type distribution
-            type_rows = conn.execute(
-                "SELECT relation_type, COUNT(*) as cnt FROM edges "
-                "GROUP BY relation_type ORDER BY cnt DESC"
-            ).fetchall()
-            types = [{"type": r["relation_type"], "count": r["cnt"]} for r in type_rows]
-
-            # C — Recent 5 edges (IDs only, no JOIN)
-            recent_rows = conn.execute(
-                "SELECT source_id, target_id, relation_type FROM edges "
-                "ORDER BY id DESC LIMIT 5"
-            ).fetchall()
-            recent = [{"source": r["source_id"], "target": r["target_id"], "type": r["relation_type"]} for r in recent_rows]
-
-            # D — Hub nodes (top 5 most connected)
-            hub_rows = conn.execute(
-                "SELECT node_id, COUNT(*) as edge_count FROM ("
-                "SELECT source_id as node_id FROM edges "
-                "UNION ALL "
-                "SELECT target_id as node_id FROM edges"
-                ") GROUP BY node_id ORDER BY edge_count DESC LIMIT 5"
-            ).fetchall()
-            hub_ids = [r["node_id"] for r in hub_rows]
-            hubs = []
-            if hub_ids:
-                ph = ",".join("?" for _ in hub_ids)
-                subject_map = {
-                    r["id"]: r["subject"] or f"#{r['id']}"
-                    for r in conn.execute(
-                        f"SELECT id, subject FROM memories WHERE id IN ({ph})", hub_ids
-                    ).fetchall()
-                }
-                hubs = [{"id": r["node_id"], "subject": subject_map.get(r["node_id"], f"#{r['node_id']}"), "edge_count": r["edge_count"]} for r in hub_rows]
-
-            graph_relations = {"counts": counts, "types": types, "recent": recent, "hubs": hubs}
-        except Exception:
-            logger.warning("auto_inject graph_relations failed", exc_info=True)
-
-        # ── 15. L11 Domain Knowledge (strategy / business / domain insights) ──
+        # ── 12. L11 Domain Knowledge (strategy / business / domain insights) ──
         domain_knowledge = []
         try:
             rows = conn.execute(
@@ -545,7 +448,7 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject domain_knowledge failed", exc_info=True)
 
-        # ── 16. L4 recent summaries (global, for session_start) ──
+        # ── 13. L4 recent summaries (global, for session_start) ──
         l4_recent_global = []
         try:
             rows = conn.execute(
@@ -567,7 +470,7 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject l4_recent failed", exc_info=True)
 
-        # ── 17. L5 active todos (global, for session_start) ──
+        # ── 14. L5 active todos (global, for session_start) ──
         l5_active_global = []
         try:
             rows = conn.execute(
@@ -597,7 +500,7 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject l5_active failed", exc_info=True)
 
-        # ── 18. BEHAVIOR patterns (agent-specific, for session_start) ──
+        # ── 15. BEHAVIOR patterns (agent-specific, for session_start) ──
         behavior_patterns = []
         try:
             rows = conn.execute(
@@ -625,9 +528,7 @@ def auto_inject(agent_name: str) -> dict:
             "evolution_trend": evolution,
             "recent_reflections": reflections[:5],
             "l7_lessons": l7_lessons,
-            "knowledge_summaries": distillations[:5],
             "pending_actions": suggestions_list[:5],
-            "semantic_fragments": fragments[:5],
             "identity_traits": identity_traits,
             "pending_tasks": pending_tasks,
             "pending_discussions": pending_discussions,
@@ -635,7 +536,6 @@ def auto_inject(agent_name: str) -> dict:
             "timeline_events": timeline_events,
             "decision_arcs": decision_arcs,
             "panoramic_overview": panoramic_overview,
-            "graph_relations": graph_relations,
             "domain_knowledge": domain_knowledge,
             "l4_recent_global": l4_recent_global,
             "l5_active_global": l5_active_global,
