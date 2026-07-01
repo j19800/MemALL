@@ -6,6 +6,7 @@ Stores 512-dim float32 vectors in memory_embeddings table + vec0 virtual table.
 import hashlib
 import logging
 import sqlite3
+import threading
 from datetime import datetime, timezone
 
 import numpy as np
@@ -22,20 +23,53 @@ _MODEL = None
 _MODEL_NAME = "BAAI/bge-small-zh-v1.5"
 
 # Declare optional dependency: sentence-transformers for text embedding
-try:
-    import sentence_transformers  # noqa: F401 — lightweight existence check
-    _HAS_ST = True
-except ImportError:
-    _HAS_ST = False
-    logger.info(
-        "sentence-transformers not installed; vector search unavailable. "
-        "Install with: pip install sentence-transformers"
-    )
+# NOTE: import is deferred to _get_model() because sentence_transformers pulls in
+# torch which can hang on some Windows configurations during module-level import.
+_HAS_ST: bool | None = None  # None = untried, False = unavailable, True = available
+
+
+def _check_st_available(timeout: float = 5.0) -> bool:
+    """Check if sentence-transformers is importable (cached after first call).
+
+    Uses a daemon thread with timeout because ``import sentence_transformers``
+    can hang indefinitely on some Windows configurations (torch init).
+    """
+    global _HAS_ST
+    if _HAS_ST is not None:
+        return _HAS_ST
+    result = [False]
+    done = threading.Event()
+
+    def _probe():
+        try:
+            import sentence_transformers  # noqa: F401
+            result[0] = True
+        except ImportError:
+            pass
+        done.set()
+
+    t = threading.Thread(target=_probe, daemon=True)
+    t.start()
+    if not done.wait(timeout=timeout):
+        logger.warning(
+            "sentence-transformers import timed out (%.1fs); vector search unavailable",
+            timeout,
+        )
+        _HAS_ST = False
+        return False
+
+    _HAS_ST = result[0]
+    if not _HAS_ST:
+        logger.info(
+            "sentence-transformers not installed; vector search unavailable. "
+            "Install with: pip install sentence-transformers"
+        )
+    return _HAS_ST
 
 
 def _get_model():
     """Lazy-load the SentenceTransformer model (cached after first call)."""
-    if not _HAS_ST:
+    if not _check_st_available():
         raise ImportError(
             "sentence-transformers is required for embedding. "
             "Install with: pip install sentence-transformers"

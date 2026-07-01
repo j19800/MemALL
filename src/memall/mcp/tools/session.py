@@ -12,7 +12,10 @@ def _format_l7_instructions(injection: dict) -> str:
     if lesson_list:
         lines.append("【行为准则（L7 经验教训）】")
         for i, item in enumerate(lesson_list, 1):
-            lines.append(f"  {i}. {item.get('lesson', '')[:200]}")
+            txt = item.get('lesson', '')[:200]
+            w = item.get('weight', 1)
+            badge = f" [x{w}]" if w > 1 else ""
+            lines.append(f"  {i}. {txt}{badge}")
         lines.append("")
 
     # L7 Preferences from identity_profile

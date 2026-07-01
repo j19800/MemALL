@@ -517,7 +517,11 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
             # [LESSONS] L7 learned patterns (from L6 reflection distill)
             l7_lessons = injection.get("l7_lessons", [])
             if l7_lessons:
-                lessons_tips = " · ".join(l["lesson"][:80] for l in l7_lessons[:3])
+                def _fmt_lesson(l):
+                    txt = l["lesson"][:80]
+                    w = l.get("weight", 1)
+                    return f"{txt}[x{w}]" if w > 1 else txt
+                lessons_tips = " · ".join(_fmt_lesson(l) for l in l7_lessons[:3])
                 fmt_parts.append(f"[LESSONS] {lessons_tips}")
 
 # [WORKFLOW] L3 workflow skills — available tools/routines

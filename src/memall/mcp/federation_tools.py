@@ -223,10 +223,10 @@ def auto_inject(agent_name: str) -> dict:
         l7_lessons = []
         try:
             rows = conn.execute(
-                "SELECT id, content, category, created_at FROM memories "
+                "SELECT id, content, category, weight, created_at FROM memories "
                 "WHERE agent_name = ? AND level = 'L7' "
                 "AND LENGTH(TRIM(content)) > 10 "
-                "ORDER BY created_at DESC LIMIT 5",
+                "ORDER BY weight DESC, created_at DESC LIMIT 5",
                 (agent_name,),
             ).fetchall()
             for r in rows:
@@ -237,6 +237,7 @@ def auto_inject(agent_name: str) -> dict:
                     "id": r["id"],
                     "lesson": lesson_text,
                     "category": r["category"],
+                    "weight": r["weight"] or 1,
                     "learned_at": r["created_at"],
                 })
         except Exception:

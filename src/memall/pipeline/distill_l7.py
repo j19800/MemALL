@@ -103,16 +103,47 @@ def distill_l7_step() -> dict:
                 if dup:
                     continue
 
-                l7_id = capture(
-                    {
-                        "content": l7_content,
-                        "subject": f"lesson: {lesson[:60]}",
-                        "category": "reflection",
-                        "level": "L7",
-                        "owner": "system",
-                        "agent_name": agent,
-                    }
-                )
+                # Content-prefix matching: if same normalized prefix (first 40 chars)
+                # exists, weight++ instead of creating a new entry
+                prefix_key = lesson[:40].lower().strip()
+                conn_pfx = get_conn()
+                try:
+                    existing = conn_pfx.execute(
+                        "SELECT id, content, weight FROM memories "
+                        "WHERE level = 'L7' AND LOWER(SUBSTR(TRIM(REPLACE(content, '[L7 教训] ', '')), 1, 40)) = ? "
+                        "LIMIT 1",
+                        (prefix_key,),
+                    ).fetchone()
+                except sqlite3.OperationalError:
+                    existing = None
+                finally:
+                    conn_pfx.close()
+
+                if existing:
+                    new_weight = (existing["weight"] or 1) + 1
+                    conn_upd = get_conn()
+                    try:
+                        conn_upd.execute(
+                            "UPDATE memories SET weight = ?, content = ?, updated_at = datetime('now') WHERE id = ?",
+                            (new_weight, l7_content, existing["id"]),
+                        )
+                        conn_upd.commit()
+                    finally:
+                        conn_upd.close()
+                    src_id = existing["id"]
+                    created_l7 += 1
+                    logger.info("distill_l7: content-prefix matched → weight=%d (mem_id=%d)", new_weight, existing["id"])
+                else:
+                    src_id = capture(
+                        {
+                            "content": l7_content,
+                            "subject": f"lesson: {lesson[:60]}",
+                            "category": "reflection",
+                            "level": "L7",
+                            "owner": "system",
+                            "agent_name": agent,
+                        }
+                    )
 
                 # Record edge: L7 → derived_l7_from → L6
                 conn3 = get_conn()
@@ -120,13 +151,11 @@ def distill_l7_step() -> dict:
                     conn3.execute(
                         "INSERT OR IGNORE INTO edges (source_id, target_id, relation_type, weight, metadata) "
                         "VALUES (?, ?, 'derived_l7_from', 1.0, '{}')",
-                        (l7_id, row["id"]),
+                        (src_id, row["id"]),
                     )
                     conn3.commit()
                 finally:
                     conn3.close()
-
-                created_l7 += 1
 
             except sqlite3.Error:
                 logger.warning("distill_l7.py: silent error", exc_info=True)

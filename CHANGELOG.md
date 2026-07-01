@@ -1,3 +1,18 @@
+## [v0.1.39] - 2026-07-01
+
+### Added
+
+- **L7 weight/accumulation system**: Repeated lessons gain weight and influence session behavior proportionally:
+  - `accumulate_key` parameter in `capture()` — caller-specified key stored in metadata; same key on a later L7 capture → weight++ instead of duplicate
+  - Content-prefix matching in `distill_l7.py` — auto-detects repeated lesson patterns by first 40 chars of normalized content and increments weight
+  - Weight-ordered injection: `auto_inject()` now `ORDER BY weight DESC, created_at DESC` so heavier lessons appear first
+  - Weight badges `[xN]` shown in session [LESSONS] and behavioral instructions (`src/memall/core/thin_waist.py`, `src/memall/mcp/federation_tools.py`, `src/memall/mcp/tools/session.py`, `src/memall/pipeline/session.py`, `src/memall/pipeline/distill_l7.py`)
+
+### Fixed
+
+- **`sentence_transformers` import hang on Windows**: deferred `import sentence_transformers` from module level to `_get_model()` with a 5-second thread timeout guard. The package was installed but its import (pulling in torch) hung indefinitely. `from memall.graph.embeddings import EMBED_DIM` now returns instantly. (`src/memall/graph/embeddings.py`)
+- **L7 accumulate_key content_hash staleness**: weight++ path now updates `content_hash` alongside content to prevent stale hash collisions with subsequent content-hash dedup. (`src/memall/core/thin_waist.py`)
+
 ## [v0.1.38] - 2026-07-01
 
 ### Changed

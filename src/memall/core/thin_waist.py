@@ -255,7 +255,7 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
     return result
 
 
-def capture(data: MemoryInput | dict | str, **overrides) -> int:
+def capture(data: MemoryInput | dict | str, accumulate_key: str | None = None, **overrides) -> int:
     if isinstance(data, str):
         data = MemoryInput(content=data)
     elif isinstance(data, dict):
@@ -328,6 +328,18 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
             existing_meta["source"] = "capture_api"
         data.metadata = existing_meta
 
+    # Store accumulate_key in metadata for future matching
+    if accumulate_key:
+        if isinstance(data.metadata, dict):
+            data.metadata["accumulate_key"] = accumulate_key
+        else:
+            try:
+                existing_meta = json.loads(data.metadata or "{}")
+            except json.JSONDecodeError:
+                existing_meta = {}
+            existing_meta["accumulate_key"] = accumulate_key
+            data.metadata = existing_meta
+
     quality_entry = {
         "value": quality_result,
         "_meta": {"version": 1, "written_at": now},
@@ -354,6 +366,23 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
             )
             conn.commit()
             return existing["id"]
+
+        # L7 accumulate_key: same pattern corrected again → weight++
+        if accumulate_key and data.level == "L7":
+            pattern = f'"accumulate_key": "{accumulate_key}"'
+            dup = conn.execute(
+                "SELECT id, weight FROM memories WHERE level = 'L7' AND metadata LIKE ? LIMIT 1",
+                (f"%{pattern}%",),
+            ).fetchone()
+            if dup:
+                new_weight = (dup["weight"] or 1) + 1
+                conn.execute(
+                    "UPDATE memories SET weight = ?, content = ?, content_hash = ?, updated_at = ?, access_count = access_count + 1 WHERE id = ?",
+                    (new_weight, data.content, h, now, dup["id"]),
+                )
+                conn.commit()
+                logger.info("capture: L7 accumulate_key '%s' → weight=%d (mem_id=%d)", accumulate_key, new_weight, dup["id"])
+                return dup["id"]
 
         # L5 duplicate check: same agent + subject → merge metadata, don't duplicate
         if data.level == "L5" and data.agent_name and data.subject:
@@ -419,7 +448,7 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
             data.visibility = _get_allowed_write_visibility(conn, data.agent_name, data.visibility)
 
         occurred = data.occurred_at or now
-        supersedes = data.supersedes if data.supersedes and data.supersedes != "[]" else None
+        supersedes = data.supersedes if data.supersedes and data.supersedes != "[]" else '[]'
         try:
             cur = conn.execute(
                 """INSERT INTO memories
@@ -465,9 +494,10 @@ def capture(data: MemoryInput | dict | str, **overrides) -> int:
 
         # Auto-persist embedding for new memory (best-effort, never blocks capture)
         try:
-            from memall.graph.embeddings import _auto_embed
-            _auto_embed(conn, mem_id, data.content, h)
-            conn.commit()
+            from memall.graph.embeddings import _auto_embed, _check_st_available
+            if _check_st_available():
+                _auto_embed(conn, mem_id, data.content, h)
+                conn.commit()
         except Exception:
             logger.warning("embedding auto-embed failed (install sentence-transformers for vector search)", exc_info=True)
 
