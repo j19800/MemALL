@@ -1,3 +1,10 @@
+## [v0.1.40] - 2026-07-02
+
+### Fixed
+
+- **auto_inject L1/L7 dual-source inconsistency**: Added `memories` table fallback in `auto_inject()` section 7 for L1 identity records (from `classify_step`) and L7 lessons (from `distill_l7_step`), with dedup against existing `identity_profile` data. Ensures session [PROFILE] captures all sources even when `identity_step` hasn't processed them. (`src/memall/mcp/federation_tools.py`)
+- **session.py comment cleanup**: Removed stale reference to old L8 keyword query. (`src/memall/pipeline/session.py`)
+
 ## [v0.1.39] - 2026-07-01
 
 ### Added

@@ -333,6 +333,43 @@ def auto_inject(agent_name: str) -> dict:
                         "decision_ratio": feats.get("decision_ratio", 0),
                         "domain_breadth": feats.get("domain_breadth", 0),
                     }
+
+            # Supplement L1 from memories table (catches classify_step assignments
+            # that identity_step hasn't processed yet)
+            try:
+                l1_rows = conn.execute(
+                    "SELECT content FROM memories "
+                    "WHERE agent_name = ? AND level = 'L1' AND LENGTH(TRIM(content)) > 10 "
+                    "ORDER BY created_at DESC LIMIT 5",
+                    (agent_name,),
+                ).fetchall()
+                l1_seen = {t["snippet"] for t in identity_traits["l1_identity"] if t.get("snippet")}
+                for r in l1_rows:
+                    snippet = r["content"][:100]
+                    if snippet not in l1_seen:
+                        l1_seen.add(snippet)
+                        identity_traits["l1_identity"].append({"type": "memory_l1", "snippet": snippet})
+            except Exception:
+                logger.warning("auto_inject l1_memories fallback failed", exc_info=True)
+
+            # Supplement L7 from memories table (catches distill_l7_step lessons)
+            try:
+                l7_rows = conn.execute(
+                    "SELECT content FROM memories "
+                    "WHERE agent_name = ? AND level = 'L7' AND LENGTH(TRIM(content)) > 10 "
+                    "ORDER BY weight DESC, created_at DESC LIMIT 5",
+                    (agent_name,),
+                ).fetchall()
+                l7_seen = {t["snippet"] for t in identity_traits["l7_preferences"] if t.get("snippet")}
+                for r in l7_rows:
+                    snippet = (r["content"] or "")[:100]
+                    if snippet.startswith('[L7 '):
+                        snippet = snippet.split(']', 1)[-1].strip()
+                    if snippet not in l7_seen:
+                        l7_seen.add(snippet)
+                        identity_traits["l7_preferences"].append({"type": "memory_l7", "snippet": snippet})
+            except Exception:
+                logger.warning("auto_inject l7_memories fallback failed", exc_info=True)
         except Exception:
             logger.warning("auto_inject identity_traits failed", exc_info=True)
 

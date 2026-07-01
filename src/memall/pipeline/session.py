@@ -565,7 +565,7 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 tops = " · ".join(d["subject"] for d in domain[:2] if d.get("subject"))
                 fmt_parts.append(f"[DOMAIN] {tops}")
 
-            # [GRAPH] edges live query — replaces old L8 keyword query
+            # [GRAPH] edges live query for hub nodes and relation types
             graph = injection.get("graph_relations", {})
             counts = graph.get("counts", {}) if isinstance(graph, dict) else {}
             if counts.get("total", 0) > 0:
