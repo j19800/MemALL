@@ -2,7 +2,7 @@
 
 ### Changed
 
-- **auto_inject 瘦身 — 移除 3 个低价值扫描段**: Removed L9 Distillations (section 3), Semantic Fragments TF-IDF (section 6), and GRAPH edges live query (section 14) from `auto_inject()` — 三重无消费方扫描: L9 与 L6/L7 重叠、TF-IDF 计算贵且仅用 agent_name 做信号、GRAPH 原始边数据 agent 无法消费。同时移除 session.py 中对应的 GRAPH 格式化代码。 (`src/memall/mcp/federation_tools.py`, `src/memall/pipeline/session.py`)
+- **auto_inject 再砍 2 个低价值段**: Removed Persona Evolution Trend (30天画像演化, agent session_start 不需要知道历史趋势) 和 L2 Timeline Events (全局查询不按 agent_name 过滤, 噪音大信号弱) from `auto_inject()`, 同时移除 session.py 中对应的 [TIMELINE] 格式化代码。auto_inject 从原始 18 段精简至 13 段。 (`src/memall/mcp/federation_tools.py`, `src/memall/pipeline/session.py`)
 
 ### Fixed
 

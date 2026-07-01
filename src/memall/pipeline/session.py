@@ -532,12 +532,6 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
             if bhv_lines:
                 fmt_parts.append(f"[BEHAVIOR] {bhv_lines[0]}")
 
-            # [TIMELINE] L2 recent events
-            timeline = injection.get("timeline_events", [])
-            if timeline:
-                events = " · ".join(t["subject"] for t in timeline[:3] if t.get("subject"))
-                fmt_parts.append(f"[TIMELINE] {events}")
-
             # [DECISIONS] L4 decision arcs
             darcs = injection.get("decision_arcs", {})
             open_dec = darcs.get("open", [])

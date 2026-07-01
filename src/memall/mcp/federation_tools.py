@@ -198,7 +198,7 @@ def auto_inject(agent_name: str) -> dict:
     conn = get_conn()
     try:
         # ── 1. Agent Profile ──
-        from memall.pipeline.persona import generate_persona, get_evolution
+        from memall.pipeline.persona import generate_persona
         persona = generate_persona(agent_name)
 
         # ── 2. L6 Reflections (corrections / lessons learned) ──
@@ -256,13 +256,7 @@ def auto_inject(agent_name: str) -> dict:
                 "created_at": r["created_at"],
             })
 
-        # ── 4. Persona Evolution Trend ──
-        try:
-            evolution = get_evolution(agent_name, window_days=30)
-        except Exception:
-            evolution = {"error": "evolution data not available", "agent_name": agent_name}
-
-        # ── 5. L1/L7 Identity Traits ──
+        # ── 4. L1/L7 Identity Traits ──
         identity_traits = {"l1_identity": [], "l7_preferences": []}
         try:
             row = conn.execute(
@@ -314,7 +308,7 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject identity_traits failed", exc_info=True)
 
-        # ── 6. Pending L5 tasks assigned to this agent ──
+        # ── 5. Pending L5 tasks assigned to this agent ──
         pending_tasks = []
         try:
             rows = conn.execute(
@@ -327,14 +321,14 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject pending_tasks failed", exc_info=True)
 
-        # ── 7. Pending discussions for this agent ──
+        # ── 6. Pending discussions for this agent ──
         pending_discussions = []
         try:
             pending_discussions = check_pending_discussions(agent_name)
         except Exception:
             logger.warning("auto_inject check_pending_discussions failed", exc_info=True)
 
-        # ── 8. L3 Workflow Skills (usable by any agent) ──
+        # ── 7. L3 Workflow Skills (usable by any agent) ──
         workflow_skills = []
         try:
             # L3 scope: agent=own agent only, family/shared=all agents, NULL=agent (backward compat)
@@ -369,26 +363,7 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject workflow_skills failed", exc_info=True)
 
-        # ── 9. L2 Timeline Events (recent happenings) ──
-        timeline_events = []
-        try:
-            rows = conn.execute(
-                "SELECT id, subject, content, category, created_at FROM memories "
-                "WHERE level = 'L2' "
-                "ORDER BY created_at DESC LIMIT 5",
-            ).fetchall()
-            for r in rows:
-                timeline_events.append({
-                    "id": r["id"],
-                    "subject": r["subject"][:60],
-                    "summary": (r["content"] or "")[:120],
-                    "category": r["category"],
-                    "at": r["created_at"],
-                })
-        except Exception:
-            logger.warning("auto_inject timeline_events failed", exc_info=True)
-
-        # ── 10. L4 Decision Arcs ──
+        # ── 8. L4 Decision Arcs ──
         decision_arcs = {"open": [], "in_progress": [], "closed": []}
         try:
             rows = conn.execute(
@@ -410,7 +385,7 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject decision_arcs failed", exc_info=True)
 
-        # ── 11. L10 Panoramic Overview (terminal, comprehensive) ──
+        # ── 9. L10 Panoramic Overview (terminal, comprehensive) ──
         panoramic_overview = []
         try:
             rows = conn.execute(
@@ -429,7 +404,7 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject panoramic_overview failed", exc_info=True)
 
-        # ── 12. L11 Domain Knowledge (strategy / business / domain insights) ──
+        # ── 10. L11 Domain Knowledge (strategy / business / domain insights) ──
         domain_knowledge = []
         try:
             rows = conn.execute(
@@ -448,7 +423,7 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject domain_knowledge failed", exc_info=True)
 
-        # ── 13. L4 recent summaries (global, for session_start) ──
+        # ── 11. L4 recent summaries (global, for session_start) ──
         l4_recent_global = []
         try:
             rows = conn.execute(
@@ -470,7 +445,7 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject l4_recent failed", exc_info=True)
 
-        # ── 14. L5 active todos (global, for session_start) ──
+        # ── 12. L5 active todos (global, for session_start) ──
         l5_active_global = []
         try:
             rows = conn.execute(
@@ -500,7 +475,7 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject l5_active failed", exc_info=True)
 
-        # ── 15. BEHAVIOR patterns (agent-specific, for session_start) ──
+        # ── 13. BEHAVIOR patterns (agent-specific, for session_start) ──
         behavior_patterns = []
         try:
             rows = conn.execute(
@@ -525,7 +500,6 @@ def auto_inject(agent_name: str) -> dict:
         result = {
             "agent_name": agent_name,
             "persona": persona,
-            "evolution_trend": evolution,
             "recent_reflections": reflections[:5],
             "l7_lessons": l7_lessons,
             "pending_actions": suggestions_list[:5],
@@ -533,7 +507,6 @@ def auto_inject(agent_name: str) -> dict:
             "pending_tasks": pending_tasks,
             "pending_discussions": pending_discussions,
             "workflow_skills": workflow_skills,
-            "timeline_events": timeline_events,
             "decision_arcs": decision_arcs,
             "panoramic_overview": panoramic_overview,
             "domain_knowledge": domain_knowledge,
