@@ -7,6 +7,7 @@ Implements MCP 2025-03-26 Streamable HTTP spec:
 
 import asyncio
 import concurrent.futures
+import hmac
 import json
 import logging
 import os
@@ -75,7 +76,7 @@ async def _check_auth(request: web.Request) -> bool:
         _log.warning("MCP HTTP auth disabled — set MEMALL_MCP_TOKEN or MEMALL_AUTH_TOKEN for production")
         return True
     auth = request.headers.get("Authorization", "")
-    ok = auth == f"Bearer {_MCP_TOKEN}"
+    ok = hmac.compare_digest(auth, f"Bearer {_MCP_TOKEN}")
     if not ok:
         _log.warning("Auth failed for %s %s from %s", request.method, request.path, request.remote)
     return ok

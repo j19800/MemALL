@@ -6,6 +6,14 @@
 - **Constant-time token comparison**: `!=` replaced with `hmac.compare_digest()` in both `auth_middleware` and `verify_token` dependency to prevent timing attacks. (`src/memall/api/server.py`)
 - **SSE wildcard CORS**: `Access-Control-Allow-Origin: *` on SSE endpoint restricted to `http://127.0.0.1:9876`. (`src/memall/mcp/http_transport.py`)
 
+### Changed
+
+- **3-in-1 HTTP server merge**: 3 separate HTTP servers (FastAPI on 8199, aiohttp gateway on 9919, MCP Streamable HTTP on 9876) merged into a single `MemAllGateway` aiohttp server on port 9919. Unified middleware chain (CORS + auth + rate-limit + max body size) replaces 3 independent implementations. All 52 REST API endpoints converted from FastAPI to aiohttp handlers. MCP routes (POST/GET /mcp, GET /metrics) integrated with lazy imports to avoid circular dependency. Entry points updated: `memall serve --http` and `start_server.py` both launch the unified gateway. (`src/memall/gateway.py`, `src/memall/api/server.py`, `src/memall/api/start_server.py`, `src/memall/cli/commands/management_commands.py`, `src/memall/mcp/http_transport.py`)
+
+### Security
+
+- **MCP HTTP constant-time comparison**: `auth == f"Bearer {_MCP_TOKEN}"` replaced with `hmac.compare_digest()` in `http_transport.py` to prevent timing attacks. (`src/memall/mcp/http_transport.py`)
+
 ### Added
 
 - **Rate limiting on FastAPI server (8199)**: Added `rate_limit_middleware` — 60/min POST, 100/min GET per client IP, reusing existing `SlidingWindowRateLimiter`. (`src/memall/api/server.py`)

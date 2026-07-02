@@ -1,5 +1,7 @@
-"""Start MemALL API server with correct database path.
-Patches DB_PATH to use the symlink (bypasses TRAE sandbox virtualization)."""
+"""Start unified MemALL HTTP server (gateway) on port 8199.
+
+Patches DB_PATH to use the symlink (bypasses TRAE sandbox virtualization).
+"""
 import logging
 import sys, os
 from pathlib import Path
@@ -26,5 +28,5 @@ except Exception as e:
     logger.error("Error opening DB: %s", e, exc_info=True)
     raise
 
-from memall.api.server import serve_http
-serve_http(port=8199)
+from memall.gateway import MemAllGateway
+MemAllGateway(port=8199).start()

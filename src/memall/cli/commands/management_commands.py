@@ -800,8 +800,8 @@ def cmd_onboarding(args):
 
 def cmd_serve(args):
     if args.http:
-        from memall.api.server import serve_http
-        serve_http(port=args.port)
+        from memall.gateway import MemAllGateway
+        MemAllGateway(port=args.port).start()
     else:
         from memall.mcp.server import serve
         serve()

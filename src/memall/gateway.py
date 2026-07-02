@@ -6,8 +6,11 @@ and pairing, and federated cross-device queries.
 """
 
 import asyncio
+import concurrent.futures
+import hmac
 import json
 import logging
+import os
 import re
 import secrets
 import socket
@@ -29,7 +32,7 @@ def _safe_int(val: Any, default: int = 0) -> int:
 
 from aiohttp import web, ClientSession, ClientTimeout
 
-from memall.core.db import pool_conn, get_conn
+from memall.core.db import pool_conn, get_conn, init_db
 from memall.core.thin_waist import (
     capture,
     retrieve,
@@ -49,6 +52,33 @@ from memall.mcp.models import (
     DiscussionCreateInput,
     DiscussionRespondInput,
 )
+from memall.core.thin_waist import (
+    capture, retrieve, connect, traverse, timeline,
+    smart_store, store_batch, update, vector_search,
+)
+from memall.core.models import MemoryInput
+from memall.pipeline.session import session_start, session_end, session_summary
+from memall.pipeline.persona import generate_persona, get_evolution
+from memall.pipeline.ask import ContextAssembler
+from memall.pipeline.forget import (
+    forget_expired, forget_low_value, forget_review, forget_stats, forget_step,
+)
+from memall.pipeline.adaptive import adaptive_step, adaptive_report
+from memall.pipeline.security import (
+    audit_sensitive, set_permission, check_access,
+    list_agents_by_permission, security_score,
+)
+from memall.pipeline.ops import (
+    merge_memories, split_memory, tag_memory, batch_tag,
+    batch_archive, batch_restore, deduplicate,
+)
+from memall.mcp.federation_tools import (
+    fed_query, fed_publish, fed_conflicts, auto_inject, auto_extract,
+)
+from memall.pipeline.observe import reflection_dashboard
+from memall.pipeline.pipeline import run_pipeline
+from memall.migrations import get_migration_status, run_migrations
+from memall.core.db import db_stats, optimize_db, vacuum_db, get_conn, DB_PATH
 
 
 logger = logging.getLogger("memall.gateway")
@@ -108,7 +138,13 @@ _CORS_HEADERS = {
 }
 
 # Allowed CORS origins (local clients only)
-_CORS_ALLOWED_ORIGINS = {"http://127.0.0.1:9919", "http://localhost:9919"}
+_CORS_ALLOWED_ORIGINS = {"http://127.0.0.1:9919", "http://localhost:9919", "http://127.0.0.1:8199"}
+
+# Thread pool for synchronous MCP tool calls (keeps event loop responsive)
+_MCP_TOOL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=12)
+_MCP_TOOL_HEAVY = concurrent.futures.ThreadPoolExecutor(max_workers=2)  # slow ops
+_MCP_TOOL_TIMEOUT = 120  # max seconds for a single tool call
+_MCP_HEAVY_TIMEOUT = 600  # max seconds for heavy operations
 
 
 def esc_html(text: str) -> str:
@@ -123,7 +159,7 @@ def _epoch_narrative(mems: list) -> str:
     from collections import Counter
     cats = Counter()
     for m in mems:
-        c = (m.get("category") or "general").strip()
+        c = (getattr(m, "category", "general") or "general").strip()
         if c and c != "general":
             cats[c] += 1
     if not cats:
@@ -159,12 +195,47 @@ def _require_auth(request: web.Request, auth_token: str) -> Optional[web.Respons
     provided = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
     if not provided:
         provided = request.query.get("token", "")
-    if provided != auth_token:
+    if not hmac.compare_digest(provided, auth_token):
         return web.json_response(
             {"error": "unauthorized", "message": "valid Bearer token required"},
             status=401,
         )
     return None
+
+
+_DEBT_SCAN_CACHE = Path.home() / ".memall" / "debt_scan_cache.json"
+
+
+def _ok(data=None):
+    return {"success": True, "data": data}
+
+
+def _load_debt_cache():
+    if _DEBT_SCAN_CACHE.exists():
+        try:
+            return json.loads(_DEBT_SCAN_CACHE.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    return None
+
+
+def _save_debt_cache(data: dict):
+    _DEBT_SCAN_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    prev = _load_debt_cache() or {}
+    history = prev.get("history", [])
+    scan = data.get("scan", {})
+    if scan:
+        history.append({
+            "scan_time": scan.get("scan_time", ""),
+            "line_count": scan.get("line_count", 0),
+            "total": sum(scan.get("counts", {}).values()),
+            "density": scan.get("density", 0),
+            "severity_summary": scan.get("severity_summary", ""),
+            "counts": scan.get("counts", {}),
+        })
+        history = history[-20:]
+    data["history"] = history
+    _DEBT_SCAN_CACHE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 class MemAllGateway:
@@ -225,6 +296,12 @@ class MemAllGateway:
         """在新线程中运行异步事件循环"""
         asyncio.set_event_loop(self._loop)
         self._app = web.Application(middlewares=[self._auth_middleware], client_max_size=10 * 1024 * 1024)
+        # ── MCP startup: force correct DB_PATH and ensure DB exists ──
+        from memall.core import db as _memall_db
+        _user_home = os.environ.get("USERPROFILE") or str(Path.home())
+        _correct_path = os.path.join(_user_home, ".memall", "data.db")
+        _memall_db.DB_PATH = Path(_correct_path)
+        init_db()
         self._setup_routes(self._app)
         self._runner = web.AppRunner(self._app)
         self._loop.run_until_complete(self._runner.setup())
@@ -235,6 +312,9 @@ class MemAllGateway:
     async def _cleanup(self) -> None:
         """清理 aiohttp runner 并停止事件循环"""
         await self._runner.cleanup()
+        # Shutdown MCP thread pools
+        _MCP_TOOL_EXECUTOR.shutdown(wait=False)
+        _MCP_TOOL_HEAVY.shutdown(wait=False)
         self._loop.stop()
 
     # ── Route registration ──
@@ -252,7 +332,7 @@ class MemAllGateway:
     async def _auth_middleware(self, request: web.Request,
                                handler: Any) -> web.Response:
         """Require a valid Bearer token on all endpoints except /health, /pair and OPTIONS."""
-        if request.method == "OPTIONS" or request.path in ("/health", "/pair", "/dashboard", "/graph", "/artifact", "/features"):
+        if request.method == "OPTIONS" or request.path in ("/health", "/pair", "/dashboard", "/graph", "/artifact", "/features", "/metrics", "/mcp", "/static", "/v30", "/favicon.ico", "/timeline", "/api/timeline"):
             return await handler(request)
         err = _require_auth(request, self._auth_token)
         if err is not None:
@@ -262,7 +342,11 @@ class MemAllGateway:
         client_ip = request.remote or "unknown"
         rl = get_rate_limiter()
         if request.method == "POST":
-            limit = getattr(self, "_rate_limit_post", 30)
+            # MCP JSON-RPC endpoint gets a higher limit (60/min)
+            if request.path == "/mcp":
+                limit = getattr(self, "_rate_limit_mcp", 60)
+            else:
+                limit = getattr(self, "_rate_limit_post", 30)
             if not rl.allow(client_ip, limit=limit):
                 return web.json_response(
                     {"error": "rate limit exceeded"}, status=429,
@@ -309,6 +393,71 @@ class MemAllGateway:
         app.router.add_post("/profile", self._handle_profile)
         app.router.add_post("/federation/events", self._handle_federation_event)
         app.router.add_post("/pair", self._handle_pair)
+        # MCP Streamable HTTP routes
+        app.router.add_post("/mcp", self._handle_mcp_post)
+        app.router.add_get("/mcp", self._handle_mcp_sse)
+        app.router.add_get("/metrics", self._handle_metrics)
+        # REST API routes (from server.py merge)
+        app.router.add_post("/memories", self._handle_api_capture)
+        app.router.add_get("/memories", self._handle_root_list_memories)
+        app.router.add_get("/memories/search", self._handle_api_search)
+        app.router.add_get("/memories/vector-search", self._handle_api_vector_search)
+        app.router.add_put("/memories", self._handle_api_update)
+        app.router.add_post("/memories/smart-store", self._handle_api_smart_store)
+        app.router.add_post("/memories/batch", self._handle_api_batch_store)
+        app.router.add_get("/memories/stats", self._handle_api_memories_stats)
+        app.router.add_get("/memories/{memory_id}", self._handle_api_get_memory)
+        app.router.add_get("/timeline/api", self._handle_api_timeline)
+        app.router.add_post("/edges", self._handle_api_edges)
+        app.router.add_get("/graph/{node_id}", self._handle_api_graph_traverse)
+        app.router.add_get("/graph/search", self._handle_api_graph_search)
+        app.router.add_get("/persona/{agent_name}", self._handle_api_persona)
+        app.router.add_get("/persona/{agent_name}/profile", self._handle_api_persona_profile)
+        app.router.add_post("/ask", self._handle_api_ask)
+        app.router.add_post("/sessions", self._handle_api_session_start)
+        app.router.add_post("/sessions/{session_id}/end", self._handle_api_session_end)
+        app.router.add_get("/sessions/{session_id}", self._handle_api_session_summary)
+        app.router.add_get("/sessions", self._handle_api_sessions_list)
+        app.router.add_get("/federation/query", self._handle_api_fed_query)
+        app.router.add_post("/federation/publish", self._handle_api_fed_publish)
+        app.router.add_get("/federation/conflicts", self._handle_api_fed_conflicts)
+        app.router.add_post("/federation/inject/{agent_name}", self._handle_api_fed_inject)
+        app.router.add_post("/federation/extract/{session_id}", self._handle_api_fed_extract)
+        app.router.add_post("/forget", self._handle_api_forget)
+        app.router.add_post("/adaptive", self._handle_api_adaptive)
+        app.router.add_get("/adaptive/report", self._handle_api_adaptive_report)
+        app.router.add_post("/security", self._handle_api_security)
+        app.router.add_post("/ops", self._handle_api_ops)
+        app.router.add_get("/ops/dedup", self._handle_api_ops_dedup)
+        app.router.add_post("/gateway", self._handle_api_gateway)
+        app.router.add_post("/db/optimize", self._handle_api_db_optimize)
+        app.router.add_get("/agents", self._handle_api_agents)
+        app.router.add_get("/db/stats", self._handle_api_db_stats)
+        app.router.add_post("/db/vacuum", self._handle_api_db_vacuum)
+        app.router.add_get("/debt/stats", self._handle_api_debt_stats)
+        app.router.add_post("/debt/scan", self._handle_api_debt_scan)
+        app.router.add_get("/reflection/dashboard", self._handle_api_reflection_dashboard)
+        app.router.add_post("/reflection/interact", self._handle_api_reflection_interact)
+        app.router.add_post("/pipeline/run", self._handle_api_run_pipeline)
+        app.router.add_get("/migrations/status", self._handle_api_migration_status)
+        app.router.add_post("/migrations/run", self._handle_api_run_migrations)
+        # v30 API
+        app.router.add_get("/v30api/memories", self._handle_v30_list_memories)
+        app.router.add_get("/v30api/memories/stats", self._handle_v30_memories_stats)
+        app.router.add_get("/v30api/memories/{memory_id}", self._handle_v30_get_memory)
+        app.router.add_delete("/v30api/memories/{memory_id}", self._handle_v30_delete_memory)
+        app.router.add_post("/v30api/memories", self._handle_v30_create_memory)
+        app.router.add_put("/v30api/memories/{memory_id}", self._handle_v30_update_memory)
+        # Frontend
+        app.router.add_get("/", self._handle_serve_frontend)
+        app.router.add_get("/api/routes", self._handle_api_routes)
+        # Static file mounts
+        _frontend_dir = Path(__file__).resolve().parent.parent.parent.parent / "frontend"
+        if _frontend_dir.exists() and (_frontend_dir / "index.html").exists():
+            app.router.add_static("/static", str(_frontend_dir), name="frontend_static")
+        _v30_dir = Path(__file__).resolve().parent.parent.parent.parent / "desktop" / "v30"
+        if _v30_dir.exists():
+            app.router.add_static("/v30", str(_v30_dir), name="v30_frontend")
         # Catch-all OPTIONS for CORS preflight
         app.router.add_route("OPTIONS", "/{tail:.*}", self._handle_options)
 
@@ -2065,6 +2214,861 @@ class MemAllGateway:
             source=data.get("source", "hub"),
         )
         return web.json_response({"status": "ok", "result": result}, headers=_cors_headers(request))
+
+    # ── REST API handlers (from server.py merge) ──
+
+    # --- Core CRUD ---
+
+    async def _handle_api_capture(self, request: web.Request) -> web.Response:
+        """POST /memories — store a memory."""
+        data = await request.json()
+        mid = capture(MemoryInput(**data))
+        return web.json_response({"id": mid, "status": "ok"}, headers=_cors_headers(request))
+
+    async def _handle_api_search(self, request: web.Request) -> web.Response:
+        """GET /memories/search — search memories."""
+        query = request.query.get("query", "")
+        owner = request.query.get("owner", "")
+        agent_name = request.query.get("agent_name", "")
+        category = request.query.get("category", "")
+        limit = _safe_int(request.query.get("limit", "20"))
+        results = retrieve(query, owner=owner, agent_name=agent_name, category=category, limit=limit)
+        if not isinstance(results, list):
+            results = [results] if results else []
+        conn2 = get_conn()
+        try:
+            extra = {}
+            for r in results[:limit]:
+                row = conn2.execute("SELECT subject, summary, project, created_at, updated_at, tags, metadata, access_count FROM memories WHERE id = ?", (r.id,)).fetchone()
+                extra[r.id] = dict(row) if row else {}
+        except Exception:
+            extra = {}
+        finally:
+            conn2.close()
+        result_list = [
+            {"id": r.id, "content": r.content[:200] if r.content else "",
+             "subject": (e := extra.get(r.id, {})).get("subject", ""),
+             "summary": e.get("summary", ""), "category": r.category, "level": r.level,
+             "agent_name": r.agent_name, "project": e.get("project", ""),
+             "tags": e.get("tags", "[]"), "metadata": e.get("metadata", "{}"),
+             "access_count": e.get("access_count", 0),
+             "created_at": e.get("created_at", r.occurred_at or ""),
+             "updated_at": e.get("updated_at", "")}
+            for r in results
+        ]
+        return web.json_response(result_list, headers=_cors_headers(request))
+
+    async def _handle_api_vector_search(self, request: web.Request) -> web.Response:
+        """GET /memories/vector-search — semantic vector search."""
+        query = request.query.get("query", "")
+        top_k = _safe_int(request.query.get("top_k", "10"))
+        return web.json_response(vector_search(query, top_k), headers=_cors_headers(request))
+
+    async def _handle_api_update(self, request: web.Request) -> web.Response:
+        """PUT /memories — update a memory."""
+        data = await request.json()
+        memory_id = data.get("memory_id", 0)
+        kwargs = {k: v for k, v in data.items() if v is not None and k != "memory_id"}
+        ok = update(memory_id, **kwargs)
+        return web.json_response({"status": "ok" if ok else "error"}, headers=_cors_headers(request))
+
+    async def _handle_api_smart_store(self, request: web.Request) -> web.Response:
+        """POST /memories/smart-store — store with dedup."""
+        data = await request.json()
+        return web.json_response(smart_store(**data), headers=_cors_headers(request))
+
+    async def _handle_api_batch_store(self, request: web.Request) -> web.Response:
+        """POST /memories/batch — batch store."""
+        items = await request.json()
+        return web.json_response(store_batch(items), headers=_cors_headers(request))
+
+    async def _handle_api_memories_stats(self, request: web.Request) -> web.Response:
+        """GET /memories/stats — memory statistics."""
+        conn = get_conn()
+        total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        recent = conn.execute("SELECT COUNT(*) FROM memories WHERE created_at >= datetime('now', '-24 hours')").fetchone()[0]
+        by_level = dict(conn.execute("SELECT level, COUNT(*) as cnt FROM memories GROUP BY level").fetchall())
+        conn.close()
+        return web.json_response(
+            {"success": True, "data": {"total": total, "total_memories": total, "recent_24h": recent, "by_level": by_level, "total_links": 0, "total_agents": len(by_level)}},
+            headers=_cors_headers(request))
+
+    async def _handle_api_get_memory(self, request: web.Request) -> web.Response:
+        """GET /memories/{memory_id} — get a memory by ID."""
+        memory_id = request.match_info.get("memory_id", "")
+        try:
+            mid = int(memory_id)
+        except ValueError:
+            return web.json_response({"error": "invalid id"}, status=400, headers=_cors_headers(request))
+        r = retrieve(mid)
+        if not r:
+            return web.json_response({"error": "not found"}, status=404, headers=_cors_headers(request))
+        return web.json_response(
+            {"id": r.id, "content": r.content, "category": r.category, "level": r.level,
+             "agent_name": r.agent_name, "subject": r.subject, "summary": r.summary,
+             "created_at": r.created_at},
+            headers=_cors_headers(request))
+
+    async def _handle_api_timeline(self, request: web.Request) -> web.Response:
+        """GET /timeline — get time-ordered memories."""
+        query = request.query.get("query", "")
+        hours = _safe_int(request.query.get("hours", "24"))
+        category = request.query.get("category", "")
+        project = request.query.get("project", "")
+        limit = _safe_int(request.query.get("limit", "50"))
+        days = request.query.get("days", None)
+        items = timeline(query=query, hours=hours, category=category, project=project, limit=limit, days=_safe_int(days) if days else None)
+        return web.json_response(
+            [{"id": r.id, "content": r.content, "category": r.category, "level": r.level, "occurred_at": r.occurred_at} for r in items],
+            headers=_cors_headers(request))
+
+    # --- Graph & Relations ---
+
+    async def _handle_api_edges(self, request: web.Request) -> web.Response:
+        """POST /edges — create relationship."""
+        data = await request.json()
+        eid = connect(source_id=data.get("source_id", 0), target_id=data.get("target_id", 0),
+                      relation_type=data.get("relation_type", "refines"), weight=data.get("weight", 1.0))
+        return web.json_response({"id": eid, "status": "ok"}, headers=_cors_headers(request))
+
+    async def _handle_api_graph_traverse(self, request: web.Request) -> web.Response:
+        """GET /graph/{node_id} — traverse knowledge graph."""
+        node_id = _safe_int(request.match_info.get("node_id", "0"))
+        depth = min(_safe_int(request.query.get("depth", "1")), 5)
+        relation_filter = request.query.get("relation_filter", "")
+        thread_aware = request.query.get("thread_aware", "false").lower() == "true"
+        kwargs = {"node_id": node_id, "depth": depth}
+        if relation_filter:
+            kwargs["relation_filter"] = relation_filter
+        if thread_aware:
+            kwargs["thread_aware"] = True
+        return web.json_response(_ok(traverse(**kwargs)), headers=_cors_headers(request))
+
+    async def _handle_api_graph_search(self, request: web.Request) -> web.Response:
+        """GET /graph/search — alias for traverse."""
+        node_id = _safe_int(request.query.get("node_id", "0"))
+        depth = min(_safe_int(request.query.get("depth", "1")), 5)
+        relation_filter = request.query.get("relation_filter", "")
+        kwargs = {"node_id": node_id, "depth": depth}
+        if relation_filter:
+            kwargs["relation_filter"] = relation_filter
+        return web.json_response(_ok(traverse(**kwargs)), headers=_cors_headers(request))
+
+    # --- Persona & Insights ---
+
+    async def _handle_api_persona(self, request: web.Request) -> web.Response:
+        """GET /persona/{agent_name} — get agent persona."""
+        agent_name = request.match_info.get("agent_name", "")
+        evolution = request.query.get("evolution", "false").lower() == "true"
+        window_days = _safe_int(request.query.get("window_days", "30"))
+        p = generate_persona(agent_name)
+        if evolution:
+            p["evolution"] = get_evolution(agent_name, window_days)
+        return web.json_response(p, headers=_cors_headers(request))
+
+    async def _handle_api_persona_profile(self, request: web.Request) -> web.Response:
+        """GET /persona/{agent_name}/profile — full 3-layer profile."""
+        agent_name = request.match_info.get("agent_name", "")
+        return web.json_response(generate_profile_3layer(agent_name), headers=_cors_headers(request))
+
+    async def _handle_api_ask(self, request: web.Request) -> web.Response:
+        """POST /ask — query digital twin."""
+        data = await request.json()
+        result = ContextAssembler.ask(
+            query=data.get("question", ""), mode=data.get("mode", "stance"),
+            subject=data.get("agent_name", ""), scope=data.get("scope", "local"),
+        )
+        return web.json_response(result, headers=_cors_headers(request))
+
+    # --- Session Management ---
+
+    async def _handle_api_session_start(self, request: web.Request) -> web.Response:
+        """POST /sessions — start a new session."""
+        data = await request.json()
+        return web.json_response(
+            session_start(agent_name=data.get("agent_name", ""), auto_inject=data.get("auto_inject", True)),
+            headers=_cors_headers(request))
+
+    async def _handle_api_session_end(self, request: web.Request) -> web.Response:
+        """POST /sessions/{session_id}/end — end a session."""
+        session_id = request.match_info.get("session_id", "")
+        data = await request.json() if request.can_read_body else {}
+        return web.json_response(
+            session_end(session_id, auto_extract=data.get("auto_extract", False)),
+            headers=_cors_headers(request))
+
+    async def _handle_api_session_summary(self, request: web.Request) -> web.Response:
+        """GET /sessions/{session_id} — get session summary."""
+        session_id = request.match_info.get("session_id", "")
+        return web.json_response(session_summary(session_id=session_id), headers=_cors_headers(request))
+
+    async def _handle_api_sessions_list(self, request: web.Request) -> web.Response:
+        """GET /sessions — list recent sessions."""
+        agent_name = request.query.get("agent_name", "")
+        limit = _safe_int(request.query.get("limit", "5"))
+        return web.json_response(session_summary(agent_name=agent_name, limit=limit), headers=_cors_headers(request))
+
+    # --- Federation ---
+
+    async def _handle_api_fed_query(self, request: web.Request) -> web.Response:
+        """GET /federation/query — cross-agent query."""
+        return web.json_response(fed_query(
+            request.query.get("query", ""), request.query.get("agent_name", ""),
+            request.query.get("category", ""), request.query.get("trust_level", ""),
+            _safe_int(request.query.get("limit", "20"))), headers=_cors_headers(request))
+
+    async def _handle_api_fed_publish(self, request: web.Request) -> web.Response:
+        """POST /federation/publish — publish memory to shared space."""
+        data = await request.json()
+        return web.json_response(fed_publish(data.get("memory_id", 0), data.get("source_agent", ""),
+                                              data.get("trust_level", "family"), data.get("category", "")),
+                                 headers=_cors_headers(request))
+
+    async def _handle_api_fed_conflicts(self, request: web.Request) -> web.Response:
+        """GET /federation/conflicts — list unresolved conflicts."""
+        limit = _safe_int(request.query.get("limit", "20"))
+        return web.json_response(fed_conflicts(limit), headers=_cors_headers(request))
+
+    async def _handle_api_fed_inject(self, request: web.Request) -> web.Response:
+        """POST /federation/inject/{agent_name} — auto-inject agent context."""
+        agent_name = request.match_info.get("agent_name", "")
+        return web.json_response(auto_inject(agent_name), headers=_cors_headers(request))
+
+    async def _handle_api_fed_extract(self, request: web.Request) -> web.Response:
+        """POST /federation/extract/{session_id} — auto-extract session facts."""
+        session_id = request.match_info.get("session_id", "")
+        return web.json_response(auto_extract(session_id), headers=_cors_headers(request))
+
+    # --- Forgetting & Adaptive ---
+
+    async def _handle_api_forget(self, request: web.Request) -> web.Response:
+        """POST /forget — automatic forgetting."""
+        data = await request.json()
+        days = data.get("days", 90)
+        agent = data.get("agent_name")
+        actions = {
+            "expired": lambda: forget_expired(days, agent),
+            "low_value": lambda: forget_low_value(agent),
+            "review": lambda: forget_review(days, agent),
+            "stats": lambda: forget_stats(),
+            "all": lambda: forget_step(days, agent),
+        }
+        fn = actions.get(data.get("action", ""))
+        return web.json_response(fn() if fn else {"error": f"unknown action: {data.get('action')}"},
+                                 headers=_cors_headers(request))
+
+    async def _handle_api_adaptive(self, request: web.Request) -> web.Response:
+        """POST /adaptive — run adaptive subsystem."""
+        data = await request.json()
+        agent_name = data.get("agent_name")
+        return web.json_response(adaptive_step(agent_name=agent_name) if agent_name else adaptive_report(),
+                                 headers=_cors_headers(request))
+
+    async def _handle_api_adaptive_report(self, request: web.Request) -> web.Response:
+        """GET /adaptive/report — adaptive status report."""
+        return web.json_response(adaptive_report(), headers=_cors_headers(request))
+
+    # --- Security Governance ---
+
+    async def _handle_api_security(self, request: web.Request) -> web.Response:
+        """POST /security — security governance."""
+        data = await request.json()
+        action = data.get("action", "")
+        actions = {
+            "audit": lambda: audit_sensitive(agent_name=data.get("agent_name")),
+            "permit": lambda: set_permission(data.get("agent_name"), data.get("level")),
+            "check": lambda: check_access(data.get("requester"), data.get("target")),
+            "score": lambda: security_score(),
+            "list": lambda: list_agents_by_permission(data.get("level")),
+        }
+        fn = actions.get(action)
+        if not fn:
+            return web.json_response({"error": f"unknown action: {action}"}, headers=_cors_headers(request))
+        try:
+            return web.json_response(fn(), headers=_cors_headers(request))
+        except Exception as e:
+            return web.json_response({"error": str(e)}, headers=_cors_headers(request))
+
+    # --- Memory Operations ---
+
+    async def _handle_api_ops(self, request: web.Request) -> web.Response:
+        """POST /ops — memory operations."""
+        data = await request.json()
+        action = data.get("action", "")
+        actions = {
+            "merge": lambda: merge_memories(data.get("source_id"), data.get("target_id")),
+            "split": lambda: split_memory(data.get("memory_id"), data.get("delimiter")),
+            "tag": lambda: tag_memory(data.get("memory_id"), data.get("tags"), data.get("mode", "add")),
+            "batch_tag": lambda: batch_tag(data.get("agent_name"), data.get("category"), data.get("tags"), data.get("mode", "add")),
+            "archive": lambda: batch_archive(data.get("agent_name"), data.get("days")),
+            "restore": lambda: batch_restore(data.get("agent_name")),
+            "dedup": lambda: deduplicate(data.get("agent_name"), data.get("threshold", 0.85)),
+        }
+        fn = actions.get(action)
+        return web.json_response(fn() if fn else {"error": f"unknown action: {action}"},
+                                 headers=_cors_headers(request))
+
+    async def _handle_api_ops_dedup(self, request: web.Request) -> web.Response:
+        """GET /ops/dedup — check for duplicates."""
+        return web.json_response({"note": "Use POST /ops with action=dedup to execute"},
+                                 headers=_cors_headers(request))
+
+    # --- Gateway (self-operations) ---
+
+    async def _handle_api_gateway(self, request: web.Request) -> web.Response:
+        """POST /gateway — gateway operations."""
+        data = await request.json()
+        action = data.get("action", "")
+        from memall.gateway import export_bundle, discover_peers, list_peers, federated_retrieve
+        actions = {
+            "export": lambda: export_bundle(data.get("agent_name")),
+            "discover": lambda: discover_peers(timeout=5),
+            "peers": lambda: list_peers(),
+            "federated": lambda: federated_retrieve(data.get("query"), data.get("max_peers", 3)),
+        }
+        fn = actions.get(action)
+        if fn:
+            return web.json_response(fn(), headers=_cors_headers(request))
+        port = data.get("port", 9919)
+        return web.json_response(
+            {"error": f"gateway action '{action}' available via aiohttp server on port {port}"},
+            headers=_cors_headers(request))
+
+    # --- Database Maintenance ---
+
+    async def _handle_api_db_optimize(self, request: web.Request) -> web.Response:
+        """POST /db/optimize — analyze, vacuum, optimize."""
+        return web.json_response(optimize_db(), headers=_cors_headers(request))
+
+    async def _handle_api_agents(self, request: web.Request) -> web.Response:
+        """GET /agents — list all agents."""
+        from memall.core.thin_waist import _pool_conn
+        with _pool_conn() as conn:
+            rows = conn.execute(
+                "SELECT agent_name, COUNT(*) as cnt FROM memories WHERE agent_name != '' AND agent_name IS NOT NULL GROUP BY agent_name ORDER BY cnt DESC"
+            ).fetchall()
+            return web.json_response(_ok([{"name": r["agent_name"], "count": r["cnt"]} for r in rows]),
+                                     headers=_cors_headers(request))
+
+    async def _handle_api_db_stats(self, request: web.Request) -> web.Response:
+        """GET /db/stats — database statistics."""
+        return web.json_response(db_stats(), headers=_cors_headers(request))
+
+    async def _handle_api_db_vacuum(self, request: web.Request) -> web.Response:
+        """POST /db/vacuum — reclaim disk space."""
+        return web.json_response(vacuum_db(), headers=_cors_headers(request))
+
+    # --- Debt ---
+
+    async def _handle_api_debt_stats(self, request: web.Request) -> web.Response:
+        """GET /debt/stats — debt dashboard statistics."""
+        stats = db_stats()
+        tables = stats.get("tables", {})
+        total_memories = tables.get("memories", 0)
+        total_edges = tables.get("edges", 0)
+        total_agents = tables.get("identities", 0)
+        file_size_mb = stats.get("file_size_mb", 0)
+        conn = get_conn()
+        try:
+            level_rows = conn.execute(
+                "SELECT level, COUNT(*) as cnt FROM memories WHERE level IS NOT NULL AND level != '' GROUP BY level ORDER BY level"
+            ).fetchall()
+            cat_rows = conn.execute(
+                "SELECT category, COUNT(*) as cnt FROM memories WHERE category IS NOT NULL AND category != '' GROUP BY category ORDER BY cnt DESC"
+            ).fetchall()
+        finally:
+            conn.close()
+        level_dist = {str(r["level"]): r["cnt"] for r in level_rows}
+        cat_dist = {str(r["category"]): r["cnt"] for r in cat_rows}
+        archive_path = Path(str(Path.home() / ".memall" / "archive.db"))
+        archive_count = 0
+        if archive_path.exists():
+            import sqlite3
+            try:
+                aconn = sqlite3.connect(str(archive_path))
+                archive_count = aconn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+                aconn.close()
+            except Exception:
+                logger.warning("archive.db stats query failed", exc_info=True)
+        cached = _load_debt_cache()
+        scan = cached.get("scan", {}) if cached else {}
+        counts = scan.get("counts", {}) if scan else {}
+        debt = {
+            "s0_count": counts.get("critical", 0), "s1_count": counts.get("major", 0),
+            "s2_count": counts.get("minor", 0), "s3_count": counts.get("info", 0),
+            "total": sum(counts.values()),
+            "scan_time": scan.get("scan_time", "") if scan else "",
+            "line_count": scan.get("line_count", 0) if scan else 0,
+            "density": scan.get("density", 0) if scan else 0,
+            "severity_summary": scan.get("severity_summary", "") if scan else "",
+            "details": scan.get("details", []) if scan else [],
+            "file_summary": scan.get("file_summary", []) if scan else [],
+            "history": cached.get("history", []) if cached else [],
+        }
+        return web.json_response({
+            "total_memories": total_memories, "total_edges": total_edges, "total_agents": total_agents,
+            "file_size_mb": file_size_mb, "level_distribution": level_dist, "category_distribution": cat_dist,
+            "archive_count": archive_count, "scanned": cached is not None, "debt": debt,
+        }, headers=_cors_headers(request))
+
+    async def _handle_api_debt_scan(self, request: web.Request) -> web.Response:
+        """POST /debt/scan — run live debt scan."""
+        try:
+            project_root = Path(__file__).resolve().parent.parent.parent.parent
+            scan_py = project_root / "debt" / "scan.py"
+            import sys as _sys
+            _sys.path.insert(0, str(project_root))
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("debt_scanner", str(scan_py))
+            scanner = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(scanner)
+            result = scanner.scan_known_patterns()
+            line_count = scanner.count_lines()
+            counts = result["counts"]
+            details = result["details"]
+            total = sum(counts.values())
+            kloc = line_count / 1000
+            density = round(float(total) / kloc, 2) if kloc > 0 else 0
+            parts = []
+            for k, v in [("critical", counts.get("critical", 0)), ("major", counts.get("major", 0)), ("minor", counts.get("minor", 0)), ("info", counts.get("info", 0))]:
+                if v:
+                    parts.append(f"{v} {k.capitalize()}")
+            severity_summary = " / ".join(parts) if parts else "All clean"
+            file_map = {}
+            for d in details:
+                m = re.match(r'^\s*\[(\w+)\]\s*([^:]+):(\d+)\s*[—–-]\s*(.+)', d)
+                if m:
+                    sev = m.group(1).lower()
+                    fpath = m.group(2)
+                    entry = file_map.setdefault(fpath, {"critical": 0, "major": 0, "minor": 0, "info": 0})
+                    if sev in entry:
+                        entry[sev] += 1
+            file_summary = [{"path": fpath, "total": sum(sv.values()), **sv} for fpath, sv in sorted(file_map.items(), key=lambda x: -sum(x[1].values()))]
+            scan_result = {
+                "scan_time": datetime.now(timezone.utc).isoformat(),
+                "line_count": line_count, "counts": counts, "details": details,
+                "density": density, "severity_summary": severity_summary, "file_summary": file_summary,
+            }
+            _save_debt_cache({"scan": scan_result})
+            return web.json_response(scan_result, headers=_cors_headers(request))
+        except Exception as e:
+            import traceback
+            return web.json_response({"error": str(e), "traceback": traceback.format_exc()},
+                                     headers=_cors_headers(request))
+
+    # --- Reflection / L6 ---
+
+    async def _handle_api_reflection_dashboard(self, request: web.Request) -> web.Response:
+        """GET /reflection/dashboard — L6 reflection dashboard."""
+        days = _safe_int(request.query.get("days", "30"))
+        return web.json_response(_ok(reflection_dashboard(days=days)), headers=_cors_headers(request))
+
+    async def _handle_api_reflection_interact(self, request: web.Request) -> web.Response:
+        """POST /reflection/interact — interact with L6 reflection."""
+        body = await request.json()
+        memory_id = body["memory_id"]
+        action = body["action"]
+        context = body.get("context", "")
+        conn = get_conn()
+        try:
+            row = conn.execute("SELECT id, level, metadata FROM memories WHERE id = ?", (memory_id,)).fetchone()
+            if not row:
+                return web.json_response({"error": f"memory {memory_id} not found"}, status=404, headers=_cors_headers(request))
+            if row["level"] != "L6":
+                return web.json_response({"error": f"memory {memory_id} is not L6"}, status=400, headers=_cors_headers(request))
+            meta = json.loads(row["metadata"]) if row["metadata"] else {}
+            interactions = meta.get("interactions", [])
+            interactions.append({"action": action, "context": context, "timestamp": datetime.now(timezone.utc).isoformat()})
+            meta["interactions"] = interactions
+            conn.execute("UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
+                         (json.dumps(meta), datetime.now(timezone.utc).isoformat(), memory_id))
+            conn.commit()
+            return web.json_response({"status": "ok", "memory_id": memory_id, "action": action, "total_interactions": len(interactions)},
+                                     headers=_cors_headers(request))
+        finally:
+            conn.close()
+
+    # --- Pipeline ---
+
+    async def _handle_api_run_pipeline(self, request: web.Request) -> web.Response:
+        """POST /pipeline/run — run memory pipeline."""
+        data = await request.json() if request.can_read_body else {}
+        return web.json_response(run_pipeline(
+            include_reflect=data.get("include_reflect", True),
+            include_distill=data.get("include_distill", True),
+            include_integrate=data.get("include_integrate", True),
+            include_persona=data.get("include_persona", True),
+            include_archive=data.get("include_archive", True),
+        ), headers=_cors_headers(request))
+
+    # --- Migrations ---
+
+    async def _handle_api_migration_status(self, request: web.Request) -> web.Response:
+        """GET /migrations/status — migration status."""
+        conn = get_conn()
+        try:
+            return web.json_response(get_migration_status(conn), headers=_cors_headers(request))
+        finally:
+            conn.close()
+
+    async def _handle_api_run_migrations(self, request: web.Request) -> web.Response:
+        """POST /migrations/run — run pending migrations."""
+        conn = get_conn()
+        try:
+            result = run_migrations(conn, db_path=str(DB_PATH))
+            conn.commit()
+            return web.json_response(result, headers=_cors_headers(request))
+        finally:
+            conn.close()
+
+    # --- Root memories list (v30 compat: returns JSON for API clients) ---
+
+    async def _handle_root_list_memories(self, request: web.Request) -> web.Response:
+        """GET /memories — list memories (JSON for API)."""
+        hours = _safe_int(request.query.get("hours", "8760"))
+        limit = _safe_int(request.query.get("limit", "50"))
+        offset = _safe_int(request.query.get("offset", "0"))
+        level = request.query.get("level", "")
+        conn = get_conn()
+        try:
+            where = "1=1"
+            params = []
+            if level:
+                where += " AND level = ?"
+                params.append(level)
+            total = conn.execute(f"SELECT COUNT(*) FROM memories WHERE {where}", params).fetchone()[0]
+            rows = conn.execute(
+                f"SELECT id, content, subject as title, level, agent_name, category, project, summary, tags, created_at, updated_at, access_count, metadata FROM memories WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+                params + [limit, offset]
+            ).fetchall()
+            return web.json_response({"success": True, "data": {"items": [dict(r) for r in rows], "total": total}},
+                                     headers=_cors_headers(request))
+        finally:
+            conn.close()
+
+    # --- v30 API ---
+
+    async def _handle_v30_list_memories(self, request: web.Request) -> web.Response:
+        """GET /v30api/memories — list with filters."""
+        hours = _safe_int(request.query.get("hours", "8760"))
+        limit = _safe_int(request.query.get("limit", "50"))
+        offset = _safe_int(request.query.get("offset", "0"))
+        page = _safe_int(request.query.get("page", "1"))
+        per_page = _safe_int(request.query.get("per_page", "50"))
+        level = request.query.get("level", "")
+        q = request.query.get("q", "")
+        agent = request.query.get("agent", "")
+        category = request.query.get("category", "")
+        period = request.query.get("period", "")
+        sort_by = request.query.get("sort_by", "created_at")
+        sort_order = request.query.get("sort_order", "desc")
+        conn = get_conn()
+        try:
+            where = "1=1"
+            params = []
+            if level:
+                where += " AND level = ?"
+                params.append(level)
+            if q:
+                where += " AND (content LIKE ? OR subject LIKE ? OR agent_name LIKE ? OR category LIKE ?)"
+                like = f"%{q}%"
+                params += [like, like, like, like]
+            if agent:
+                where += " AND agent_name = ?"
+                params.append(agent)
+            if category:
+                where += " AND category = ?"
+                params.append(category)
+            if period:
+                period_days = {"today": 0, "3d": 3, "week": 7, "month": 30}
+                days = period_days.get(period)
+                if days is not None:
+                    where += " AND created_at >= ?"
+                    params.append((datetime.now(timezone.utc) - timedelta(days=days)).isoformat())
+            total = conn.execute(f"SELECT COUNT(*) FROM memories WHERE {where}", params).fetchone()[0]
+            allowed_sort = {"id", "created_at", "updated_at", "level", "agent_name", "category", "project", "access_count"}
+            col = sort_by if sort_by in allowed_sort else "created_at"
+            dir_ = "DESC" if sort_order.lower() == "desc" else "ASC"
+            use_page = page > 1 or per_page != 50
+            if use_page:
+                limit = per_page
+                offset = (page - 1) * per_page
+            rows = conn.execute(
+                f"SELECT id, content, subject as title, level, agent_name, category, project, summary, tags, created_at, updated_at, access_count, metadata FROM memories WHERE {where} ORDER BY {col} {dir_} LIMIT ? OFFSET ?",
+                params + [limit, offset]
+            ).fetchall()
+            return web.json_response(_ok({"items": [dict(r) for r in rows], "total": total, "page": page, "per_page": limit}),
+                                     headers=_cors_headers(request))
+        finally:
+            conn.close()
+
+    async def _handle_v30_memories_stats(self, request: web.Request) -> web.Response:
+        """GET /v30api/memories/stats — memory stats."""
+        conn = get_conn()
+        total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        recent = conn.execute("SELECT COUNT(*) FROM memories WHERE created_at >= datetime('now', '-24 hours')").fetchone()[0]
+        by_level = dict(conn.execute("SELECT level, COUNT(*) as cnt FROM memories GROUP BY level").fetchall())
+        edges = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+        conn.close()
+        return web.json_response(_ok({"total": total, "total_memories": total, "recent_24h": recent, "by_level": by_level, "total_links": edges, "total_agents": len(by_level)}),
+                                 headers=_cors_headers(request))
+
+    async def _handle_v30_get_memory(self, request: web.Request) -> web.Response:
+        """GET /v30api/memories/{memory_id} — get one memory."""
+        memory_id = _safe_int(request.match_info.get("memory_id", "0"))
+        conn = get_conn()
+        row = conn.execute("SELECT id, content, subject as title, level, agent_name, category, project, summary, tags, created_at, updated_at, access_count, metadata FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        conn.close()
+        return web.json_response(_ok(dict(row) if row else None), headers=_cors_headers(request))
+
+    async def _handle_v30_delete_memory(self, request: web.Request) -> web.Response:
+        """DELETE /v30api/memories/{memory_id} — delete a memory."""
+        memory_id = _safe_int(request.match_info.get("memory_id", "0"))
+        conn = get_conn()
+        conn.execute("DELETE FROM edges WHERE source_id = ? OR target_id = ?", (memory_id, memory_id))
+        conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+        conn.commit()
+        conn.close()
+        return web.json_response(_ok({"deleted": memory_id}), headers=_cors_headers(request))
+
+    async def _handle_v30_create_memory(self, request: web.Request) -> web.Response:
+        """POST /v30api/memories — create a memory."""
+        body = await request.json()
+        mid = capture(MemoryInput(
+            content=body.get("content", ""), level=body.get("level", "P2"),
+            agent_name=body.get("agent_name", "desktop"), subject=body.get("title", ""),
+            category=body.get("category", "general"), project=body.get("project", ""),
+            summary=body.get("summary", ""),
+        ))
+        return web.json_response(_ok({"id": mid}), headers=_cors_headers(request))
+
+    async def _handle_v30_update_memory(self, request: web.Request) -> web.Response:
+        """PUT /v30api/memories/{memory_id} — update a memory."""
+        memory_id = _safe_int(request.match_info.get("memory_id", "0"))
+        body = await request.json()
+        conn = get_conn()
+        for field in ("content", "level", "category", "project", "summary"):
+            if field in body:
+                conn.execute(f"UPDATE memories SET {field} = ?, updated_at = datetime('now') WHERE id = ?", (body[field], memory_id))
+        if "title" in body:
+            conn.execute("UPDATE memories SET subject = ?, updated_at = datetime('now') WHERE id = ?", (body["title"], memory_id))
+        if "tags" in body:
+            conn.execute("UPDATE memories SET tags = ?, updated_at = datetime('now') WHERE id = ?", (body["tags"], memory_id))
+        conn.commit()
+        conn.close()
+        return web.json_response(_ok({"id": memory_id}), headers=_cors_headers(request))
+
+    # --- Frontend ---
+
+    async def _handle_serve_frontend(self, request: web.Request) -> web.Response:
+        """GET / — serve frontend index.html if available."""
+        _frontend_dir = Path(__file__).resolve().parent.parent.parent.parent / "frontend"
+        if _frontend_dir.exists() and (_frontend_dir / "index.html").exists():
+            index = _frontend_dir / "index.html"
+            return web.Response(text=index.read_text(encoding="utf-8"), content_type="text/html",
+                                headers=_cors_headers(request))
+        return web.json_response({"status": "ok", "frontend": "not found"}, headers=_cors_headers(request))
+
+    async def _handle_api_routes(self, request: web.Request) -> web.Response:
+        """GET /api/routes — list available API routes."""
+        routes_list = []
+        for route in self._app.router.routes():
+            if hasattr(route, "method") and hasattr(route, "resource"):
+                path = str(route.resource)
+                routes_list.append({"method": route.method, "path": path})
+        return web.json_response({"routes": routes_list}, headers=_cors_headers(request))
+
+    # ── MCP Streamable HTTP handlers ──
+
+    async def _handle_mcp_post(self, request: web.Request) -> web.Response:
+        """POST /mcp — JSON-RPC request/response (MCP Streamable HTTP)."""
+        from memall.mcp.adapter import TOOL_DEFINITIONS, handle_call, _intercept, consume_session_note
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response(
+                {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}},
+                status=400,
+            )
+
+        req_id = body.get("id")
+        method = body.get("method", "")
+        params = body.get("params", {})
+
+        if req_id is None:
+            return web.json_response({}, status=202)
+
+        # ── Initialize ──
+        if method == "initialize":
+            from memall.onboarding import _get_status
+            identity_path = os.path.join(os.path.expanduser("~"), ".memall", "identity.json")
+            user_id = "default"
+            actor_id = "unknown"
+            try:
+                if os.path.exists(identity_path):
+                    with open(identity_path, encoding="utf-8") as f:
+                        ident = json.load(f)
+                    user_id = ident.get("user_id", "default")
+                    actor_id = ident.get("actor_id", "unknown")
+            except Exception as e:
+                logger.warning("Failed to read identity.json: %s", e)
+            try:
+                onboarding_status = _get_status(user_id)
+                onboarding_completed = bool(onboarding_status.get("completed"))
+                onboarding_step = onboarding_status.get("current_step", 1)
+            except Exception:
+                onboarding_completed = False
+                onboarding_step = 1
+            logger.info("Initialize: user=%s actor=%s", user_id, actor_id)
+            return web.json_response({
+                "jsonrpc": "2.0", "id": req_id,
+                "result": {
+                    "serverInfo": {
+                        "name": "memall",
+                        "version": "0.1.0",
+                        "user_id": user_id,
+                        "actor_id": actor_id,
+                    },
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {"tools": {"listChanged": True}},
+                    "memall": {
+                        "onboarding_required": not onboarding_completed,
+                        "onboarding_step": onboarding_step,
+                        "onboarding_user_id": user_id,
+                    },
+                },
+            })
+
+        # ── Ping ──
+        if method == "ping":
+            return web.json_response({"jsonrpc": "2.0", "id": req_id, "result": {}})
+
+        # ── Tools/List ──
+        if method == "tools/list":
+            return web.json_response({
+                "jsonrpc": "2.0", "id": req_id,
+                "result": {"tools": TOOL_DEFINITIONS},
+            })
+
+        # ── Tools/Call ──
+        if method == "tools/call":
+            tool_name = params.get("name", "")
+            arguments = params.get("arguments", {})
+            _arg_preview = str(arguments.get("action", "") or arguments.get("query", "") or arguments.get("id", ""))
+            logger.info("Call tool: %s %s", tool_name, _arg_preview[:60])
+
+            _HEAVY_ACTIONS = frozenset({
+                "run_pipeline", "index_rebuild", "adaptive",
+                "gateway", "hub_sync", "persona_profile",
+            })
+            _HEAVY_TOOLS = frozenset({"memall_system", "memall_write"})
+            action = arguments.get("action", "")
+            is_heavy = (
+                tool_name in _HEAVY_TOOLS and action in _HEAVY_ACTIONS
+            ) or (
+                tool_name == "memall_write" and action == "forget"
+            )
+            if is_heavy:
+                _pool = _MCP_TOOL_HEAVY
+                _timeout = _MCP_HEAVY_TIMEOUT
+            else:
+                _pool = _MCP_TOOL_EXECUTOR
+                _timeout = _MCP_TOOL_TIMEOUT
+
+            def _run_tool():
+                result_str = handle_call(tool_name, arguments)
+                _intercept(tool_name, arguments, result_str)
+                result_data = json.loads(result_str)
+                content = [{"type": "text", "text": json.dumps(result_data, ensure_ascii=False)}]
+                agent_name = arguments.get("agent_name", "")
+                if agent_name:
+                    try:
+                        from memall.core.db import get_conn as _get_conn
+                        _nconn = _get_conn()
+                        task_count = _nconn.execute(
+                            "SELECT COUNT(*) as c FROM memories WHERE level='L5' AND category='task' "
+                            "AND agent_name=? AND json_extract(metadata, '$.status')='active'",
+                            (agent_name,),
+                        ).fetchone()["c"]
+                        _nconn.close()
+                        if task_count > 0:
+                            content.append({
+                                "type": "text",
+                                "text": f"[NOTIFICATION] 你有 {task_count} 个待完成任务。"
+                            })
+                    except Exception:
+                        logger.warning("MCP tool notification error", exc_info=True)
+                session_note = consume_session_note()
+                if session_note:
+                    content.append({"type": "text", "text": session_note})
+                return content
+
+            try:
+                loop = asyncio.get_running_loop()
+                content = await asyncio.wait_for(
+                    loop.run_in_executor(_pool, _run_tool),
+                    timeout=_timeout,
+                )
+                return web.json_response({
+                    "jsonrpc": "2.0", "id": req_id,
+                    "result": {"content": content},
+                })
+            except asyncio.TimeoutError:
+                logger.error("Tool %s timed out after %ss", tool_name, _timeout)
+                return web.json_response({
+                    "jsonrpc": "2.0", "id": req_id,
+                    "error": {"code": -32603, "message": f"tool {tool_name} timed out after {_timeout}s"},
+                })
+            except Exception as e:
+                logger.error("Tool %s failed: %s", tool_name, e, exc_info=True)
+                return web.json_response({
+                    "jsonrpc": "2.0", "id": req_id,
+                    "error": {"code": -32603, "message": str(e)},
+                })
+
+        # ── SetLevel ──
+        if method == "setLevel":
+            level = params.get("level", "info")
+            logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+            return web.json_response({"jsonrpc": "2.0", "id": req_id, "result": {}})
+
+        return web.json_response({
+            "jsonrpc": "2.0", "id": req_id,
+            "error": {"code": -32601, "message": f"unknown method: {method}"},
+        })
+
+    async def _handle_mcp_sse(self, request: web.Request) -> web.Response:
+        """GET /mcp — SSE subscription for tool list change notifications."""
+        from memall.mcp.adapter import TOOL_DEFINITIONS
+        response = web.StreamResponse(
+            status=200, reason="OK",
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "http://127.0.0.1:9919",
+            },
+        )
+        await response.prepare(request)
+        event = {"type": "tool_list_changed", "tools": [_t["name"] for _t in TOOL_DEFINITIONS]}
+        await response.write(f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode())
+        try:
+            while True:
+                await asyncio.sleep(30)
+                await response.write(b": heartbeat\n\n")
+        except (ConnectionResetError, ConnectionAbortedError, ConnectionError):
+            logger.info("SSE client disconnected")
+        except asyncio.CancelledError:
+            logger.info("SSE task cancelled")
+        except Exception:
+            logger.warning("SSE unexpected error", exc_info=True)
+        return response
+
+    async def _handle_metrics(self, request: web.Request) -> web.Response:
+        """GET /metrics — return process metrics as JSON."""
+        from memall.core.metrics import get_metrics
+        snapshot = await asyncio.to_thread(lambda: get_metrics().snapshot())
+        return web.json_response(snapshot, headers=_cors_headers(request))
 
 
 # ══════════════════════════════════════════════════════════════════
