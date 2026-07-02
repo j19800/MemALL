@@ -72,5 +72,4 @@ pie title 技术负债按等级分布（13 项）
 | A-01 | gateway.py token 在 query param 中接受 | LAN 环境 + 127.0.0.1 绑定，有意设计 | — | 2026-06-27 |
 | A-02 | gateway.py token 非 timing-safe 比较 | 127.0.0.1 绑定缓解，非公开端口 | — | 2026-06-27 |
 | A-03 | MCP HTTP 默认无 auth | 127.0.0.1 绑定，token 可选配置 | — | 2026-06-27 |
-| A-04 | SSE `Access-Control-Allow-Origin: *` | 仅推送工具列表变更，无敏感数据 | — | 2026-06-27 |
 | A-05 | API server 默认无 auth | 同 MCP 模式，127.0.0.1 绑定 | — | 2026-06-27 |

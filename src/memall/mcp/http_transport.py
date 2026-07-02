@@ -270,7 +270,7 @@ async def handle_sse(request: web.Request) -> web.Response:
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Origin": "http://127.0.0.1:9876",
         },
     )
     await response.prepare(request)

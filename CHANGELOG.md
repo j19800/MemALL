@@ -1,4 +1,21 @@
-## [v0.1.41] - 2026-07-02
+## [v0.1.42] - 2026-07-02
+
+### Security
+
+- **SQL injection in traverse()**: `traverse()` used f-string interpolation for `WHERE id IN ({ids})` — switched to parameterized query with `?` placeholders. (`src/memall/core/thin_waist.py`)
+- **Constant-time token comparison**: `!=` replaced with `hmac.compare_digest()` in both `auth_middleware` and `verify_token` dependency to prevent timing attacks. (`src/memall/api/server.py`)
+- **SSE wildcard CORS**: `Access-Control-Allow-Origin: *` on SSE endpoint restricted to `http://127.0.0.1:9876`. (`src/memall/mcp/http_transport.py`)
+
+### Added
+
+- **Rate limiting on FastAPI server (8199)**: Added `rate_limit_middleware` — 60/min POST, 100/min GET per client IP, reusing existing `SlidingWindowRateLimiter`. (`src/memall/api/server.py`)
+- **Max request size on FastAPI server**: Added `max_request_size_middleware` rejecting requests with Content-Length > 10 MB. (`src/memall/api/server.py`)
+
+### Changed
+
+- **Cached `_get_api_token()`**: Token read once per process lifetime instead of per-request config read. (`src/memall/api/server.py`)
+- **ConnectionPool thread race fix**: `_conn_tids` access in `get()` wrapped with `self._lock` for thread safety. (`src/memall/core/db.py`)
+- **FTS5 trigger init optimization**: `init_db()` now checks trigger existence before executing FTS5_TRIGGERS, avoiding redundant `CREATE TRIGGER IF NOT EXISTS` on every connection. (`src/memall/core/db.py`)
 
 ### Changed
 

@@ -335,7 +335,12 @@ def init_db(conn=None, migrate=True, db_path_for_backup: str = ""):
         close = True
     try:
         conn.executescript(SCHEMA_SQL)
-        conn.executescript(FTS5_TRIGGERS)
+        # Only execute FTS5 triggers if they haven't been set up yet
+        _fts_triggers_done = conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'memories_%'"
+        ).fetchone()[0]
+        if _fts_triggers_done < 3:
+            conn.executescript(FTS5_TRIGGERS)
         if migrate:
             # Formal migration system (GAP-7: auto-migration on pip upgrade)
             try:
@@ -460,16 +465,15 @@ class ConnectionPool:
 
         # The returned connection may belong to a different thread —
         # discard it and create a new one for the current thread.
-        # _created is not incremented because the discarded connection
-        # was already counted when it was first created.
         cur_tid = threading.get_ident()
-        if self._conn_tids.get(id(conn)) != cur_tid:
-            self._conn_tids.pop(id(conn), None)
-            try:
-                conn.close()
-            except sqlite3.ProgrammingError:
-                pass  # can't close connection owned by another thread
-            return self._new_conn()
+        with self._lock:
+            if self._conn_tids.get(id(conn)) != cur_tid:
+                self._conn_tids.pop(id(conn), None)
+                try:
+                    conn.close()
+                except sqlite3.ProgrammingError:
+                    pass  # can't close connection owned by another thread
+                return self._new_conn()
 
         return conn
 

@@ -1007,9 +1007,10 @@ def traverse(node_id: int, depth: int = 1, relation_filter: Optional[str] = None
                     next_level.add(tgt)
 
             if next_level:
-                ids = ",".join(str(x) for x in seen)
+                ph = ",".join("?" for _ in seen)
                 node_rows = conn.execute(
-                    f"SELECT id, content, subject, category, level, summary, confidence FROM memories WHERE id IN ({ids})"
+                    f"SELECT id, content, subject, category, level, summary, confidence FROM memories WHERE id IN ({ph})",
+                    tuple(seen),
                 ).fetchall()
                 for nr in node_rows:
                     nodes[nr["id"]] = {

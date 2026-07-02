@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
-import json, re, logging
+import json, re, logging, hmac, time
 import importlib.util
 from datetime import datetime, timezone
 
@@ -54,29 +54,34 @@ _security_scheme = HTTPBearer(auto_error=False)
 # Paths that don't require auth
 _PUBLIC_PATHS = frozenset({"/", "/docs", "/redoc", "/openapi.json", "/api/routes", "/health", "/favicon.ico"})
 
+_MAX_REQUEST_SIZE = 10 * 1024 * 1024  # 10 MB
+
+_cached_api_token: str | None = None
+
 
 def _get_api_token() -> str:
-    """Read the configured API token. Returns empty string if not set (open access)."""
+    """Read the configured API token. Cached for process lifetime."""
+    global _cached_api_token
+    if _cached_api_token is not None:
+        return _cached_api_token
     try:
         from memall.config import get_config
-        return get_config("gateway.secret_key", "")
+        _cached_api_token = get_config("gateway.secret_key", "")
     except Exception as e:
         logger.warning(f"Failed to read gateway.secret_key from config: {e}; falling back to token file")
-    token_file = Path.home() / ".memall" / "api_token.txt"
-    if token_file.exists():
-        return token_file.read_text(encoding="utf-8").strip()
-    return ""
+        token_file = Path.home() / ".memall" / "api_token.txt"
+        _cached_api_token = token_file.read_text(encoding="utf-8").strip() if token_file.exists() else ""
+    return _cached_api_token
 
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(_security_scheme)):
     """FastAPI dependency: verify Bearer token on all non-public endpoints."""
     token = _get_api_token()
     if not token:
-        # No token configured → allow (open access, but warn)
         return
     if credentials is None:
         raise HTTPException(status_code=401, detail="Missing Authorization header")
-    if credentials.credentials != token:
+    if not hmac.compare_digest(credentials.credentials, token):
         raise HTTPException(status_code=403, detail="Invalid API token")
 
 
@@ -88,6 +93,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── Rate limiting middleware ──
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """Rate limit: 60 POST/min, 100 GET/min per client IP."""
+    from memall.core.rate_limiter import get_rate_limiter
+    client_ip = request.client.host if request.client else "unknown"
+    limit = 60 if request.method == "POST" else 100
+    if not get_rate_limiter().allow(client_ip, limit=limit):
+        return JSONResponse(status_code=429, content={"error": "rate limit exceeded"})
+    return await call_next(request)
+
+
+# ── Max request size middleware ──
+
+@app.middleware("http")
+async def max_request_size_middleware(request: Request, call_next):
+    """Reject requests with Content-Length exceeding 10 MB."""
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > _MAX_REQUEST_SIZE:
+        return JSONResponse(status_code=413, content={"error": "request entity too large"})
+    return await call_next(request)
 
 
 # ── Bearer token auth middleware ──
@@ -109,7 +138,7 @@ async def auth_middleware(request: Request, call_next):
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         return JSONResponse(status_code=401, content={"error": "Missing Authorization: Bearer <token> header"})
-    if auth_header[len("Bearer "):] != token:
+    if not hmac.compare_digest(auth_header[len("Bearer "):], token):
         return JSONResponse(status_code=403, content={"error": "Invalid API token"})
 
     return await call_next(request)
