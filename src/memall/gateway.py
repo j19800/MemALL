@@ -2255,7 +2255,8 @@ class MemAllGateway:
         days = request.query.get("days", None)
         items = timeline(query=query, hours=hours, category=category, project=project, limit=limit, days=_safe_int(days) if days else None)
         return web.json_response(
-            [{"id": r.id, "content": r.content, "category": r.category, "level": r.level, "occurred_at": r.occurred_at} for r in items],
+            [{"id": r.id, "content": r.content, "category": r.category, "level": r.level,
+              "occurred_at": r.occurred_at, "memory_status": getattr(r, "memory_status", None)} for r in items],
             )
 
     # --- Graph & Relations ---

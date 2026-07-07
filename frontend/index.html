@@ -156,6 +156,13 @@ td .tag{
   font-size:11px;font-weight:600;
   background:var(--bg-tag);color:var(--text-secondary)
 }
+.status-badge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;white-space:nowrap}
+.status-badge.status-normal{background:#e5e7eb;color:#6b7280}
+.status-badge.status-conflict{background:#fef2f2;color:#dc2626;border:1px solid #fca5a5}
+.status-badge.status-dormant{background:#f1f5f9;color:#64748b}
+.status-badge.status-superseded{background:#f0f0ff;color:#7c3aed;border:1px solid #c4b5fd}
+.status-badge.status-archived{background:#f0fdf4;color:#16a34a}
+.status-badge.status-other{background:#fef9f0;color:#d97706}
 .data-table{width:100%;border-collapse:collapse;font-size:13px}
 .data-table th,.data-table td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);color:var(--text-secondary)}
 .data-table th{color:var(--text-muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px;background:var(--bg-card);position:sticky;top:0}
@@ -642,6 +649,9 @@ pre{font-family:inherit;white-space:pre-wrap;word-break:break-word}
           <div class="stat-card"><div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></div><div class="stat-value" id="statL6Recent">-</div><div class="stat-label">近24h反思</div></div>
           <div class="stat-card"><div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div><div class="stat-value" id="statL6Chain">-</div><div class="stat-label">修正链(矛/调)</div></div>
           <div class="stat-card" id="statDebtCard" style="display:none"><div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M12 1l9 4v6c0 5.5-3.8 10.7-9 12-5.2-1.3-9-6.5-9-12V5l9-4z"/><path d="M9.1 8.5l2.9 2.9 2.9-2.9" stroke="currentColor" stroke-width="1.5" fill="none"/></svg></div><div class="stat-value" id="statDebtTotal">-</div><div class="stat-label" id="statDebtLabel">技术负债</div></div>
+          <div class="stat-card"><div class="stat-icon" style="color:#f87171"><svg viewBox="0 0 24 24"><path d="M12 9v2m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg></div><div class="stat-value" id="statConflict">0</div><div class="stat-label" style="color:#f87171">⚠ 冲突</div></div>
+          <div class="stat-card"><div class="stat-icon" style="color:#94a3b8"><svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M12 11V7m0 7h.01"/></svg></div><div class="stat-value" id="statDormant">0</div><div class="stat-label" style="color:#94a3b8">💤 休眠</div></div>
+          <div class="stat-card"><div class="stat-icon" style="color:#a78bfa"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 1-3.2 19.4L2 22l.6-5.2A10 10 0 0 1 12 2z"/><path d="M12 6v4l3 2"/></svg></div><div class="stat-value" id="statSuperseded">0</div><div class="stat-label" style="color:#a78bfa">↩ 已替代</div></div>
         </div>
         <div class="dash-grid">
           <div class="chart-container">
@@ -660,7 +670,7 @@ pre{font-family:inherit;white-space:pre-wrap;word-break:break-word}
         <div class="table-wrap dash-full">
           <div class="table-title">最近记忆</div>
           <table id="recentTable">
-            <thead><tr><th>ID</th><th>内容</th><th>Level</th><th>分类</th><th>Agent</th><th>时间</th></tr></thead>
+            <thead><tr><th>ID</th><th>内容</th><th>Level</th><th>分类</th><th>Agent</th><th>状态</th><th>时间</th></tr></thead>
             <tbody id="recentTbody"></tbody>
           </table>
           <div class="empty-state" id="recentEmpty" style="display:none">
@@ -726,6 +736,7 @@ pre{font-family:inherit;white-space:pre-wrap;word-break:break-word}
                 <th>内容</th>
                 <th class="sortable" onclick="memSort('agent_name')">Agent <span class="sort-icon" id="sort-agent_name"></span></th>
                 <th class="sortable" onclick="memSort('category')">分类 <span class="sort-icon" id="sort-category"></span></th>
+                <th>状态</th>
                 <th>标签</th>
                 <th class="sortable" onclick="memSort('created_at')">创建时间 <span class="sort-icon" id="sort-created_at"></span></th>
                 <th>操作</th>
@@ -854,6 +865,12 @@ function fmtDate(d){
   catch(e){return d}
 }
 function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,120)+'px'}
+function statusBadge(s){
+  if(!s) return '<span class="status-badge status-normal">normal</span>';
+  var map = {conflict:'status-conflict',dormant:'status-dormant',superseded:'status-superseded',archived:'status-archived',active:'status-active'};
+  var cls = map[s.toLowerCase()] || 'status-other';
+  return '<span class="status-badge '+cls+'">'+esc(s)+'</span>';
+}
 function toggleSidebar(){
   document.getElementById('sidebar').classList.toggle('open');
   document.getElementById('sidebarOverlay').classList.toggle('open');
@@ -1271,6 +1288,12 @@ function doLoadDashboard(){
     document.getElementById('statDbSize').textContent = sz.toFixed(2) + ' MB';
     document.getElementById('topbarInfo').textContent = '记忆总数: ' + mem;
 
+    // Memory status counts
+    var sc = data.memory_status_counts || {};
+    document.getElementById('statConflict').textContent = sc.conflict || 0;
+    document.getElementById('statDormant').textContent = sc.dormant || 0;
+    document.getElementById('statSuperseded').textContent = sc.superseded || 0;
+
     // Draw level chart
     if(t) drawLevelChart(t);
     if(t) drawCategoryChart(t);
@@ -1319,6 +1342,7 @@ function doLoadDashboard(){
         '<td><span class="tag '+lvClass+'">'+esc(level)+'</span></td>'+
         '<td>'+esc(m.category||m.memory_type||'-')+'</td>'+
         '<td>'+esc(m.agent_name||'-')+'</td>'+
+        '<td>'+statusBadge(m.memory_status)+'</td>'+
         '<td>'+fmtDate(m.created_at||m.timestamp)+'</td></tr>';
     }).join('');
   }).catch(function(e){});
@@ -1688,7 +1712,7 @@ function searchMemories(){
 
   var tbody = document.getElementById('memTbody');
   var count = document.getElementById('memCount');
-  tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px"><div class="spinner"></div><span>Loading...</span></td></tr>';
+  tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:40px"><div class="spinner"></div><span>Loading...</span></td></tr>';
 
   if(doAsk && q){
     api('POST','/ask',{question:q,history:[]}).then(function(askData){
@@ -1706,7 +1730,7 @@ function searchMemories(){
     memSortField = 'id'; memSortDir = -1;
     renderMemTable();
   }).catch(function(err){
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text-muted)">Load failed</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text-muted)">Load failed</td></tr>';
   });
 }
 
@@ -1727,7 +1751,7 @@ function renderMemTable(){
   document.getElementById('memNextBtn').disabled = memPage >= totalPages;
   var tbody = document.getElementById('memTbody');
   if(page.length===0){
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text-muted)">No matching memories</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text-muted)">No matching memories</td></tr>';
     return;
   }
   tbody.innerHTML = page.map(function(m){
@@ -1748,6 +1772,7 @@ function renderMemTable(){
       '<td><div style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+preview+'">'+(subject||preview)+'</div></td>'+
       '<td>'+agent+'</td>'+
       '<td>'+cat+'</td>'+
+      '<td>'+statusBadge(m.memory_status)+'</td>'+
       '<td style="max-width:150px">'+tagHtml+'</td>'+
       '<td class="text-muted" style="font-size:12px;white-space:nowrap">'+fmtDate(created)+'</td>'+
       '<td><button class="btn btn-text btn-sm" onclick="event.stopPropagation();showMemDetail('+id+')">detail</button></td>'+
@@ -1789,6 +1814,7 @@ function showMemDetail(id){
       '<div class="field"><div class="field-label">内容</div><div class="field-value"><pre>'+esc(m.content||'')+'</pre></div></div>'+
       '<div class="field"><div class="field-label">Agent</div><div class="field-value">'+esc(m.agent_name||'-')+'</div></div>'+
       '<div class="field"><div class="field-label">分类</div><div class="field-value">'+esc(m.category||'-')+'</div></div>'+
+      '<div class="field"><div class="field-label">状态</div><div class="field-value">'+statusBadge(m.memory_status)+'</div></div>'+
       '<div class="field"><div class="field-label">项目</div><div class="field-value">'+esc(m.project||'-')+'</div></div>'+
       '<div class="field"><div class="field-label">创建时间</div><div class="field-value">'+esc(m.created_at||m.timestamp||'-')+'</div></div>'+
       '<div class="field"><div class="field-label">更新时间</div><div class="field-value">'+esc(m.updated_at||'-')+'</div></div>'+

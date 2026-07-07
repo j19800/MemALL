@@ -697,6 +697,13 @@ def db_stats(db_path: "str | None" = None) -> dict:
                 f"SELECT COUNT(*) FROM [{name}]"
             ).fetchone()[0]
             tables[name] = cnt
+
+        # Memory status distribution
+        status_rows = conn.execute(
+            "SELECT COALESCE(memory_status, 'normal') as status, COUNT(*) as cnt "
+            "FROM memories GROUP BY memory_status ORDER BY cnt DESC"
+        ).fetchall()
+        memory_status_counts = {r["status"]: r["cnt"] for r in status_rows}
     finally:
         conn.close()
 
@@ -705,6 +712,7 @@ def db_stats(db_path: "str | None" = None) -> dict:
         "file_size_mb": file_mb,
         "wal_size_mb": wal_mb,
         "tables": tables,
+        "memory_status_counts": memory_status_counts,
     }
 
 

@@ -1,3 +1,9 @@
+## [v0.1.47] - 2026-07-08
+
+### Added
+
+- **Frontend alignment for memory_status**: Three new dashboard stat cards (conflict ⚠, dormant 💤, superseded ↩) populated from `/db/stats` `memory_status_counts`. Memory status badge column with color-coded pills (red=conflict, gray=dormant, purple=superseded) added to dashboard recent memories table, search memories table, and detail modal. Backend returns `memory_status` in `/timeline` items and `memory_status_counts` in `/db/stats`. (`frontend/index.html`, `src/memall/gateway.py`, `src/memall/core/db.py`)
+
 ## [v0.1.46] - 2026-07-08
 
 ### Added
