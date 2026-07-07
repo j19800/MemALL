@@ -1,3 +1,11 @@
+## [v0.1.46] - 2026-07-08
+
+### Added
+
+- **Conflict awareness in build_context**: `dream_scan()` now sets `memory_status='conflict'` on contradicting memories, and `_build_tier2()` surfaces them in Tier 2 candidates so agents can see unresolved contradictions. (`src/memall/pipeline/dream.py`, `src/memall/core/context_assembler.py`)
+- **Hybrid retrieval for build_context Tier 2**: When `sentence-transformers` is available, Tier 2 fuses TF-IDF scores with vec0 semantic similarity via RRF (`rrf_k=60`). Gracefully degrades to TF-IDF-only when the model is unavailable. (`src/memall/core/context_assembler.py`)
+- **Memory lifecycle pipeline**: New background `lifecycle_step()` with 4 phases — embedding-based clustering of L4/L6 into similarity groups, cluster → L9 distillation, `memory_status='superseded'` marking, and `memory_status='dormant'` marking for stale low-confidence memories. Registered as a daily scheduler task. (`src/memall/pipeline/lifecycle.py`, `src/memall/plugins/scheduler.py`)
+
 ## [v0.1.45] - 2026-07-08
 
 ### Changed

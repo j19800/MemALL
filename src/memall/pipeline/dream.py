@@ -184,6 +184,16 @@ def dream_scan(conn, new_mem_id: int, agent_name: str, content: str,
         })
         logger.info("dream: memory #%d contradicts #%d (%s)", new_mem_id, row["id"], verdict)
 
+        # Mark both memories with conflict status for agent visibility
+        conn.execute(
+            "UPDATE memories SET memory_status = 'conflict' WHERE id = ?",
+            (new_mem_id,),
+        )
+        conn.execute(
+            "UPDATE memories SET memory_status = 'conflict' WHERE id = ? AND memory_status IS NULL",
+            (row["id"],),
+        )
+
         # Limit to 3 conflicts per capture to avoid noise
         if len(conflicts) >= 3:
             break

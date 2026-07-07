@@ -99,7 +99,7 @@ def _build_tier1(agent_name: str, conn) -> list[str]:
 
 
 def _build_tier2(agent_name: str, query: str, conn) -> list[str]:
-    """Tier 2 — relevance-scored: L4 sessions + L6 reflections (if query)."""
+    """Tier 2 — relevance-scored: L4 sessions + L6 reflections + conflicts (if query)."""
     lines: list[str] = []
 
     rows = conn.execute(
@@ -109,13 +109,28 @@ def _build_tier2(agent_name: str, query: str, conn) -> list[str]:
         (agent_name,),
     ).fetchall()
 
-    if not rows:
-        return []
-
     candidates = []
     for r in rows:
         text = r["summary"] or r["content"] or ""
         candidates.append({"id": r["id"], "text": text, "level": r["level"], "cat": r["category"], "at": r["created_at"]})
+
+    # Also fetch conflict-flagged memories so agents see contradictions
+    conflict_rows = conn.execute(
+        "SELECT id, content, level, category, created_at FROM memories "
+        "WHERE LOWER(agent_name)=LOWER(?) AND memory_status='conflict' "
+        "ORDER BY created_at DESC LIMIT 10",
+        (agent_name,),
+    ).fetchall()
+    for r in conflict_rows:
+        # Deduplicate: skip if already in candidates
+        if not any(c["id"] == r["id"] for c in candidates):
+            candidates.append({
+                "id": r["id"],
+                "text": r["content"][:300],
+                "level": r["level"],
+                "cat": r["category"],
+                "at": r["created_at"],
+            })
 
     if query and len(candidates) > 1:
         texts = [query] + [c["text"][:500] for c in candidates]
@@ -127,6 +142,30 @@ def _build_tier2(agent_name: str, query: str, conn) -> list[str]:
             candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
         except Exception:
             pass  # fall through to recency order
+
+        # Hybrid: fuse vec0 semantic scores via RRF when available
+        try:
+            from memall.graph.embeddings import _check_st_available
+            if _check_st_available():
+                from memall.graph.retrieve import _query_embed, _vec0_knn
+                query_vec = _query_embed(query)
+                if query_vec is not None:
+                    vec_results = _vec0_knn(conn, query_vec, len(candidates) * 2)
+                    vec_scores = {vr["memory_id"]: vr["score"] for vr in vec_results}
+                    if vec_scores:
+                        rrf_k = 60
+                        tfidf_ranked = list(candidates)
+                        for i, c in enumerate(tfidf_ranked):
+                            c["rrf_tfidf"] = 1.0 / (rrf_k + i + 1)
+                        vec_ranked = sorted(vec_scores.items(), key=lambda x: -x[1])
+                        vec_rank_map = {mid: rank for rank, (mid, _) in enumerate(vec_ranked)}
+                        for c in candidates:
+                            vr = vec_rank_map.get(c["id"])
+                            c["rrf_vec"] = 1.0 / (rrf_k + vr + 1) if vr is not None else 0
+                            c["score"] = c.get("rrf_tfidf", 0) + c.get("rrf_vec", 0)
+                        candidates.sort(key=lambda x: -x.get("score", 0))
+        except Exception:
+            pass  # graceful degradation → keep existing TF-IDF order
 
     for c in candidates:
         prefix = "[Session]" if c["level"] == "L4" else "[Reflection]"

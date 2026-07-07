@@ -196,6 +196,23 @@ def _daily_security_audit() -> None:
         logger.warning("Daily audit error: %s", e)
 
 
+def _daily_lifecycle() -> None:
+    """Run memory lifecycle pipeline (built-in daily task)."""
+    try:
+        from memall.pipeline.lifecycle import lifecycle_step
+
+        result = lifecycle_step()
+        logger.info(
+            "Daily lifecycle: clusters=%d, distilled=%d, superseded=%d, dormant=%d",
+            result.get("clusters", 0),
+            result.get("distilled", 0),
+            result.get("superseded", 0),
+            result.get("dormant", 0),
+        )
+    except Exception as e:
+        logger.warning("Daily lifecycle error: %s", e)
+
+
 def create_default_scheduler() -> TaskScheduler:
     """Create a TaskScheduler pre-loaded with built-in daily tasks.
 
@@ -210,6 +227,8 @@ def create_default_scheduler() -> TaskScheduler:
     sched = TaskScheduler()
     sched.add_task("daily_forget", _daily_forget, forget_interval, run_immediately=False)
     sched.add_task("daily_security", _daily_security_audit, audit_interval, run_immediately=False)
+    lifecycle_interval = get_config("scheduler.lifecycle_interval", 86400)
+    sched.add_task("daily_lifecycle", _daily_lifecycle, lifecycle_interval, run_immediately=False)
     return sched
 
 
