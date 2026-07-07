@@ -32,6 +32,10 @@ def _safe_int(val: Any, default: int = 0) -> int:
 
 from aiohttp import web, ClientSession, ClientTimeout
 
+from memall.gateway_utils import (
+    esc_html, _density_color, _cors_headers, _require_auth, _ok,
+    _load_debt_cache, _save_debt_cache, _CORS_HEADERS, _CORS_ALLOWED_ORIGINS,
+)
 from memall.core.db import pool_conn, get_conn, init_db
 from memall.core.thin_waist import (
     capture,
@@ -132,26 +136,11 @@ def _save_peers(peers: List[Dict[str, Any]]) -> None:
 # 1. Local HTTP Gateway (aiohttp async)
 # ══════════════════════════════════════════════════════════════════
 
-_CORS_HEADERS = {
-    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-}
-
-# Allowed CORS origins (local clients only)
-_CORS_ALLOWED_ORIGINS = {"http://127.0.0.1:9919", "http://localhost:9919", "http://127.0.0.1:8199"}
-
 # Thread pool for synchronous MCP tool calls (keeps event loop responsive)
 _MCP_TOOL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=12)
 _MCP_TOOL_HEAVY = concurrent.futures.ThreadPoolExecutor(max_workers=2)  # slow ops
 _MCP_TOOL_TIMEOUT = 120  # max seconds for a single tool call
 _MCP_HEAVY_TIMEOUT = 600  # max seconds for heavy operations
-
-
-def esc_html(text: str) -> str:
-    """Escape HTML special characters."""
-    if not text:
-        return ""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 def _epoch_narrative(mems: list) -> str:
@@ -169,73 +158,19 @@ def _epoch_narrative(mems: list) -> str:
     return "核心：" + " · ".join(parts)
 
 
-def _density_color(count: int, max_count: int) -> str:
-    """Return a green-scale hex color based on density ratio."""
-    ratio = count / max_count if max_count > 0 else 0
-    r = int(0x2e * ratio + 0xe8 * (1 - ratio))
-    g = int(0x7d * ratio + 0xf5 * (1 - ratio))
-    b = int(0x32 * ratio + 0xe9 * (1 - ratio))
-    return f"#{r:02x}{g:02x}{b:02x}"
-
-
-def _cors_headers(request: web.Request) -> Dict[str, str]:
-    """Build CORS headers, echoing Origin if it's in the allowed list."""
+@web.middleware
+async def _cors_middleware(request: web.Request, handler) -> web.Response:
+    """Add CORS headers to every response automatically."""
+    try:
+        response = await handler(request)
+    except web.HTTPException as exc:
+        response = exc
     origin = request.headers.get("Origin", "")
     if origin in _CORS_ALLOWED_ORIGINS:
-        return {**_CORS_HEADERS, "Access-Control-Allow-Origin": origin}
-    return _CORS_HEADERS  # No Access-Control-Allow-Origin = block by default
-
-
-def _require_auth(request: web.Request, auth_token: str) -> Optional[web.Response]:
-    """Return a 401 Response if the request does not carry a valid token, else None.
-
-    The token can be provided via the ``Authorization: Bearer <token>``
-    header or the ``token`` query parameter.
-    """
-    provided = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    if not provided:
-        provided = request.query.get("token", "")
-    if not hmac.compare_digest(provided, auth_token):
-        return web.json_response(
-            {"error": "unauthorized", "message": "valid Bearer token required"},
-            status=401,
-        )
-    return None
-
-
-_DEBT_SCAN_CACHE = Path.home() / ".memall" / "debt_scan_cache.json"
-
-
-def _ok(data=None):
-    return {"success": True, "data": data}
-
-
-def _load_debt_cache():
-    if _DEBT_SCAN_CACHE.exists():
-        try:
-            return json.loads(_DEBT_SCAN_CACHE.read_text(encoding="utf-8"))
-        except Exception:
-            return None
-    return None
-
-
-def _save_debt_cache(data: dict):
-    _DEBT_SCAN_CACHE.parent.mkdir(parents=True, exist_ok=True)
-    prev = _load_debt_cache() or {}
-    history = prev.get("history", [])
-    scan = data.get("scan", {})
-    if scan:
-        history.append({
-            "scan_time": scan.get("scan_time", ""),
-            "line_count": scan.get("line_count", 0),
-            "total": sum(scan.get("counts", {}).values()),
-            "density": scan.get("density", 0),
-            "severity_summary": scan.get("severity_summary", ""),
-            "counts": scan.get("counts", {}),
-        })
-        history = history[-20:]
-    data["history"] = history
-    _DEBT_SCAN_CACHE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Methods"] = _CORS_HEADERS["Access-Control-Allow-Methods"]
+    response.headers["Access-Control-Allow-Headers"] = _CORS_HEADERS["Access-Control-Allow-Headers"]
+    return response
 
 
 class MemAllGateway:
@@ -295,7 +230,7 @@ class MemAllGateway:
     def _run_async(self) -> None:
         """在新线程中运行异步事件循环"""
         asyncio.set_event_loop(self._loop)
-        self._app = web.Application(middlewares=[self._auth_middleware], client_max_size=10 * 1024 * 1024)
+        self._app = web.Application(middlewares=[_cors_middleware, self._auth_middleware], client_max_size=10 * 1024 * 1024)
         # ── MCP startup: force correct DB_PATH and ensure DB exists ──
         from memall.core import db as _memall_db
         _user_home = os.environ.get("USERPROFILE") or str(Path.home())
@@ -350,14 +285,14 @@ class MemAllGateway:
             if not rl.allow(client_ip, limit=limit):
                 return web.json_response(
                     {"error": "rate limit exceeded"}, status=429,
-                    headers={"Retry-After": "60", **_cors_headers(request)},
+                    headers={"Retry-After": "60"},
                 )
         else:
             limit = getattr(self, "_rate_limit_get", 100)
             if not rl.allow(client_ip, limit=limit):
                 return web.json_response(
                     {"error": "rate limit exceeded"}, status=429,
-                    headers={"Retry-After": "60", **_cors_headers(request)},
+                    headers={"Retry-After": "60"},
                 )
 
         return await handler(request)
@@ -464,7 +399,7 @@ class MemAllGateway:
     # ── CORS preflight ──
 
     async def _handle_options(self, request: web.Request) -> web.Response:
-        return web.Response(status=204, headers=_cors_headers(request))
+        return web.Response(status=204,)
 
     # ── Handlers ──
 
@@ -480,8 +415,7 @@ class MemAllGateway:
                 "uptime": round(uptime_s, 1),
                 "memory_count": mc,
             },
-            headers=_cors_headers(request),
-        )
+                    )
 
     # ── HTML pages (user-facing, no MCP dependency) ──
 
@@ -1111,8 +1045,7 @@ class MemAllGateway:
                 "types": [{"type": r["relation_type"], "count": r["cnt"], "pct": round(r["cnt"] / total * 100, 1)} for r in type_rows],
                 "hubs": [{"id": r["node_id"], "subject": hub_map.get(r["node_id"], f"#{r['node_id']}"), "edge_count": r["edge_count"]} for r in hub_rows],
             },
-            headers=_cors_headers(request),
-        )
+                    )
 
     async def _handle_todos(self, request: web.Request) -> web.Response:
         from memall.pipeline.task_lifecycle import list_active_tasks, list_blocked_tasks
@@ -1408,7 +1341,7 @@ class MemAllGateway:
             "agent_name": agent_name,
             "granularity": granularity,
             "slices": [dict(r) for r in rows],
-        }, headers=_cors_headers(request))
+        },)
 
     # ── API: timeline density (daily memory counts for heatmap) ──
 
@@ -1435,7 +1368,7 @@ class MemAllGateway:
         return web.json_response({
             "days": len(rows),
             "density": [{"date": r["slice_key"], "count": r["memory_count"]} for r in rows],
-        }, headers=_cors_headers(request))
+        },)
 
     # ── API: epoch-structured timeline ──
 
@@ -1538,7 +1471,7 @@ class MemAllGateway:
         return web.json_response({
             "epochs": result_epochs,
             "total_memories": len(results),
-        }, headers=_cors_headers(request))
+        },)
 
     # ── API: epochs JSON ──
 
@@ -1551,7 +1484,7 @@ class MemAllGateway:
         return web.json_response({
             "epochs": [dict(r) for r in rows],
             "count": len(rows),
-        }, headers=_cors_headers(request))
+        },)
 
     async def _handle_api_epochs_agent(self, request: web.Request) -> web.Response:
         agent_name = request.match_info.get("agent_name", "").strip().lower()
@@ -1564,7 +1497,7 @@ class MemAllGateway:
         return web.json_response({
             "agent_name": agent_name,
             "epochs": [dict(r) for r in rows],
-        }, headers=_cors_headers(request))
+        },)
 
     # ── API: decision arcs ──
 
@@ -1626,7 +1559,7 @@ class MemAllGateway:
             "arcs": arcs,
             "stats": status_counts,
             "stale_count": stale_count,
-        }, headers=_cors_headers(request))
+        },)
 
     async def _handle_api_arcs_detail(self, request: web.Request) -> web.Response:
         try:
@@ -1672,7 +1605,7 @@ class MemAllGateway:
             "reflections": [dict(r) for r in reflections],
             "arc_status": decision["arc_status"],
             "stale": stale,
-        }, headers=_cors_headers(request))
+        },)
 
     async def _handle_api_epoch_arcs(self, request: web.Request) -> web.Response:
         try:
@@ -1723,7 +1656,7 @@ class MemAllGateway:
             "closed": status_counts["closed"],
             "closure_rate": closure_rate,
             "arcs": arc_list,
-        }, headers=_cors_headers(request))
+        },)
 
     async def _handle_discussions(self, request: web.Request) -> web.Response:
         """HTML page: list all discussion topics with status badges."""
@@ -1768,23 +1701,23 @@ class MemAllGateway:
         """JSON: list all active L5 discussions."""
         from memall.pipeline.convergence import list_active_discussions
         topics = list_active_discussions()
-        return web.json_response({"topics": topics}, headers=_cors_headers(request))
+        return web.json_response({"topics": topics},)
 
     async def _handle_api_discussion_detail(self, request: web.Request) -> web.Response:
         """JSON: full detail for a single L5 discussion including all responses."""
         topic_id = request.match_info.get("topic_id", "")
         from memall.pipeline.convergence import get_discussion
         result = get_discussion(int(topic_id))
-        return web.json_response(result, headers=_cors_headers(request))
+        return web.json_response(result,)
 
     async def _handle_api_discussion_create(self, request: web.Request) -> web.Response:
         """JSON: create a new L5 discussion and return memory_id."""
         data = await self._read_json(request)
         if not data:
-            return web.json_response({"error": "invalid JSON"}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": "invalid JSON"}, status=400,)
         validated, err = self._validate(data, DiscussionCreateInput)
         if err:
-            return web.json_response({"error": err}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": err}, status=400,)
         from memall.pipeline.convergence import create_discussion
         result = create_discussion(
             title=validated["title"],
@@ -1796,16 +1729,16 @@ class MemAllGateway:
             participants=validated.get("participants", []),
             timeout_hours=validated.get("timeout_hours", 24),
         )
-        return web.json_response(result, headers=_cors_headers(request))
+        return web.json_response(result,)
 
     async def _handle_api_discussion_respond(self, request: web.Request) -> web.Response:
         """JSON: record an agent's response via L5 P2 + edge."""
         data = await self._read_json(request)
         if not data:
-            return web.json_response({"error": "invalid JSON"}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": "invalid JSON"}, status=400,)
         validated, err = self._validate(data, DiscussionRespondInput)
         if err:
-            return web.json_response({"error": err}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": err}, status=400,)
         from memall.pipeline.convergence import confirm_discussion
         result = confirm_discussion(
             discussion_id=validated["discussion_id"],
@@ -1813,7 +1746,7 @@ class MemAllGateway:
             stance=validated["stance"],
             note=validated.get("arguments", ""),
         )
-        return web.json_response(result, headers=_cors_headers(request))
+        return web.json_response(result,)
 
     async def _handle_timeline_html(self, request: web.Request) -> web.Response:
         days = _safe_int(request.query.get("days", 7))
@@ -2075,10 +2008,10 @@ class MemAllGateway:
     async def _handle_capture(self, request: web.Request) -> web.Response:
         data = await self._read_json(request)
         if data is None:
-            return web.json_response({"error": "invalid JSON body"}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": "invalid JSON body"}, status=400,)
         validated, err = self._validate(data, CaptureInput)
         if err:
-            return web.json_response({"error": err}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": err}, status=400,)
         try:
             inp = MemoryInput(
                 content=validated["content"],
@@ -2087,17 +2020,17 @@ class MemAllGateway:
                 level=validated["level"],
             )
             mid = capture(inp)
-            return web.json_response({"id": mid, "status": "ok"}, headers=_cors_headers(request))
+            return web.json_response({"id": mid, "status": "ok"},)
         except Exception as exc:
-            return web.json_response({"error": str(exc)}, status=500, headers=_cors_headers(request))
+            return web.json_response({"error": str(exc)}, status=500,)
 
     async def _handle_retrieve(self, request: web.Request) -> web.Response:
         data = await self._read_json(request)
         if data is None:
-            return web.json_response({"error": "invalid JSON body"}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": "invalid JSON body"}, status=400,)
         validated, err = self._validate(data, RetrieveInput)
         if err:
-            return web.json_response({"error": err}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": err}, status=400,)
         try:
             results = retrieve(
                 query=validated.get("query", ""),
@@ -2109,31 +2042,31 @@ class MemAllGateway:
                  "category": r.category, "level": r.level, "confidence": r.confidence}
                 for r in results
             ]
-            return web.json_response({"results": items, "count": len(items)}, headers=_cors_headers(request))
+            return web.json_response({"results": items, "count": len(items)},)
         except Exception as exc:
-            return web.json_response({"error": str(exc)}, status=500, headers=_cors_headers(request))
+            return web.json_response({"error": str(exc)}, status=500,)
 
     async def _handle_traverse(self, request: web.Request) -> web.Response:
         data = await self._read_json(request)
         if data is None:
-            return web.json_response({"error": "invalid JSON body"}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": "invalid JSON body"}, status=400,)
         validated, err = self._validate(data, TraverseInput)
         if err:
-            return web.json_response({"error": err}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": err}, status=400,)
         try:
             result = traverse(validated["node_id"], depth=validated["depth"],
                                thread_aware=validated.get("thread_aware", False))
-            return web.json_response(result, headers=_cors_headers(request))
+            return web.json_response(result,)
         except Exception as exc:
-            return web.json_response({"error": str(exc)}, status=500, headers=_cors_headers(request))
+            return web.json_response({"error": str(exc)}, status=500,)
 
     async def _handle_timeline(self, request: web.Request) -> web.Response:
         data = await self._read_json(request)
         if data is None:
-            return web.json_response({"error": "invalid JSON body"}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": "invalid JSON body"}, status=400,)
         validated, err = self._validate(data, TimelineInput)
         if err:
-            return web.json_response({"error": err}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": err}, status=400,)
         try:
             results = timeline(
                 query=validated.get("query", ""),
@@ -2141,44 +2074,42 @@ class MemAllGateway:
             )
             return web.json_response(
                 {"results": results, "count": len(results)},
-                headers=_cors_headers(request),
-            )
+                            )
         except Exception as exc:
             return web.json_response(
-                {"error": str(exc)}, status=500, headers=_cors_headers(request)
+                {"error": str(exc)}, status=500,
             )
 
     async def _handle_profile(self, request: web.Request) -> web.Response:
         data = await self._read_json(request)
         if data is None:
-            return web.json_response({"error": "invalid JSON body"}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": "invalid JSON body"}, status=400,)
         validated, err = self._validate(data, PersonaProfileInput)
         if err:
-            return web.json_response({"error": err}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": err}, status=400,)
         try:
             agent = validated.get("agent_name")
             if not agent:
                 return web.json_response(
                     {"error": "agent_name is required"},
                     status=400,
-                    headers=_cors_headers(request),
-                )
+                                    )
             profile = generate_profile_3layer(agent)
             layer = validated.get("layer")
             if layer and layer in profile:
                 return web.json_response(
-                    {layer: profile[layer]}, headers=_cors_headers(request)
+                    {layer: profile[layer]},
                 )
-            return web.json_response(profile, headers=_cors_headers(request))
+            return web.json_response(profile,)
         except Exception as exc:
             return web.json_response(
-                {"error": str(exc)}, status=500, headers=_cors_headers(request)
+                {"error": str(exc)}, status=500,
             )
 
     async def _handle_pair(self, request: web.Request) -> web.Response:
         data = await self._read_json(request)
         if data is None:
-            return web.json_response({"error": "invalid JSON body"}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": "invalid JSON body"}, status=400,)
         try:
             device_name = data.get("device_name", "unknown")
             remote_addr = request.remote
@@ -2188,11 +2119,10 @@ class MemAllGateway:
                     "peer_name": device_name,
                     "remote_address": remote_addr,
                 },
-                headers=_cors_headers(request),
-            )
+                            )
         except Exception as exc:
             return web.json_response(
-                {"error": str(exc)}, status=500, headers=_cors_headers(request)
+                {"error": str(exc)}, status=500,
             )
 
 
@@ -2204,12 +2134,12 @@ class MemAllGateway:
         """
         data = await self._read_json(request)
         if data is None:
-            return web.json_response({"error": "invalid JSON body"}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": "invalid JSON body"}, status=400,)
 
         target_agent = data.get("target_agent", "")
         content = data.get("content", "")
         if not target_agent or not content:
-            return web.json_response({"error": "target_agent and content are required"}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": "target_agent and content are required"}, status=400,)
 
         from memall.mcp.federation_tools import fed_deliver
         result = fed_deliver(
@@ -2219,7 +2149,7 @@ class MemAllGateway:
             category=data.get("category", "reflection"),
             source=data.get("source", "hub"),
         )
-        return web.json_response({"status": "ok", "result": result}, headers=_cors_headers(request))
+        return web.json_response({"status": "ok", "result": result},)
 
     # ── REST API handlers (from server.py merge) ──
 
@@ -2229,7 +2159,7 @@ class MemAllGateway:
         """POST /memories — store a memory."""
         data = await request.json()
         mid = capture(MemoryInput(**data))
-        return web.json_response({"id": mid, "status": "ok"}, headers=_cors_headers(request))
+        return web.json_response({"id": mid, "status": "ok"},)
 
     async def _handle_api_search(self, request: web.Request) -> web.Response:
         """GET /memories/search — search memories."""
@@ -2262,13 +2192,13 @@ class MemAllGateway:
              "updated_at": e.get("updated_at", "")}
             for r in results
         ]
-        return web.json_response(result_list, headers=_cors_headers(request))
+        return web.json_response(result_list,)
 
     async def _handle_api_vector_search(self, request: web.Request) -> web.Response:
         """GET /memories/vector-search — semantic vector search."""
         query = request.query.get("query", "")
         top_k = _safe_int(request.query.get("top_k", "10"))
-        return web.json_response(vector_search(query, top_k), headers=_cors_headers(request))
+        return web.json_response(vector_search(query, top_k),)
 
     async def _handle_api_update(self, request: web.Request) -> web.Response:
         """PUT /memories — update a memory."""
@@ -2276,17 +2206,17 @@ class MemAllGateway:
         memory_id = data.get("memory_id", 0)
         kwargs = {k: v for k, v in data.items() if v is not None and k != "memory_id"}
         ok = update(memory_id, **kwargs)
-        return web.json_response({"status": "ok" if ok else "error"}, headers=_cors_headers(request))
+        return web.json_response({"status": "ok" if ok else "error"},)
 
     async def _handle_api_smart_store(self, request: web.Request) -> web.Response:
         """POST /memories/smart-store — store with dedup."""
         data = await request.json()
-        return web.json_response(smart_store(**data), headers=_cors_headers(request))
+        return web.json_response(smart_store(**data),)
 
     async def _handle_api_batch_store(self, request: web.Request) -> web.Response:
         """POST /memories/batch — batch store."""
         items = await request.json()
-        return web.json_response(store_batch(items), headers=_cors_headers(request))
+        return web.json_response(store_batch(items),)
 
     async def _handle_api_memories_stats(self, request: web.Request) -> web.Response:
         """GET /memories/stats — memory statistics."""
@@ -2297,7 +2227,7 @@ class MemAllGateway:
         conn.close()
         return web.json_response(
             {"success": True, "data": {"total": total, "total_memories": total, "recent_24h": recent, "by_level": by_level, "total_links": 0, "total_agents": len(by_level)}},
-            headers=_cors_headers(request))
+            )
 
     async def _handle_api_get_memory(self, request: web.Request) -> web.Response:
         """GET /memories/{memory_id} — get a memory by ID."""
@@ -2305,15 +2235,15 @@ class MemAllGateway:
         try:
             mid = int(memory_id)
         except ValueError:
-            return web.json_response({"error": "invalid id"}, status=400, headers=_cors_headers(request))
+            return web.json_response({"error": "invalid id"}, status=400,)
         r = retrieve(mid)
         if not r:
-            return web.json_response({"error": "not found"}, status=404, headers=_cors_headers(request))
+            return web.json_response({"error": "not found"}, status=404,)
         return web.json_response(
             {"id": r.id, "content": r.content, "category": r.category, "level": r.level,
              "agent_name": r.agent_name, "subject": r.subject, "summary": r.summary,
              "created_at": r.created_at},
-            headers=_cors_headers(request))
+            )
 
     async def _handle_api_timeline(self, request: web.Request) -> web.Response:
         """GET /timeline — get time-ordered memories."""
@@ -2326,7 +2256,7 @@ class MemAllGateway:
         items = timeline(query=query, hours=hours, category=category, project=project, limit=limit, days=_safe_int(days) if days else None)
         return web.json_response(
             [{"id": r.id, "content": r.content, "category": r.category, "level": r.level, "occurred_at": r.occurred_at} for r in items],
-            headers=_cors_headers(request))
+            )
 
     # --- Graph & Relations ---
 
@@ -2335,7 +2265,7 @@ class MemAllGateway:
         data = await request.json()
         eid = connect(source_id=data.get("source_id", 0), target_id=data.get("target_id", 0),
                       relation_type=data.get("relation_type", "refines"), weight=data.get("weight", 1.0))
-        return web.json_response({"id": eid, "status": "ok"}, headers=_cors_headers(request))
+        return web.json_response({"id": eid, "status": "ok"},)
 
     async def _handle_api_graph_traverse(self, request: web.Request) -> web.Response:
         """GET /graph/{node_id} — traverse knowledge graph."""
@@ -2348,7 +2278,7 @@ class MemAllGateway:
             kwargs["relation_filter"] = relation_filter
         if thread_aware:
             kwargs["thread_aware"] = True
-        return web.json_response(_ok(traverse(**kwargs)), headers=_cors_headers(request))
+        return web.json_response(_ok(traverse(**kwargs)),)
 
     async def _handle_api_graph_search(self, request: web.Request) -> web.Response:
         """GET /graph/search — alias for traverse."""
@@ -2358,7 +2288,7 @@ class MemAllGateway:
         kwargs = {"node_id": node_id, "depth": depth}
         if relation_filter:
             kwargs["relation_filter"] = relation_filter
-        return web.json_response(_ok(traverse(**kwargs)), headers=_cors_headers(request))
+        return web.json_response(_ok(traverse(**kwargs)),)
 
     # --- Persona & Insights ---
 
@@ -2370,12 +2300,12 @@ class MemAllGateway:
         p = generate_persona(agent_name)
         if evolution:
             p["evolution"] = get_evolution(agent_name, window_days)
-        return web.json_response(p, headers=_cors_headers(request))
+        return web.json_response(p,)
 
     async def _handle_api_persona_profile(self, request: web.Request) -> web.Response:
         """GET /persona/{agent_name}/profile — full 3-layer profile."""
         agent_name = request.match_info.get("agent_name", "")
-        return web.json_response(generate_profile_3layer(agent_name), headers=_cors_headers(request))
+        return web.json_response(generate_profile_3layer(agent_name),)
 
     async def _handle_api_ask(self, request: web.Request) -> web.Response:
         """POST /ask — query digital twin."""
@@ -2384,7 +2314,7 @@ class MemAllGateway:
             query=data.get("question", ""), mode=data.get("mode", "stance"),
             subject=data.get("agent_name", ""), scope=data.get("scope", "local"),
         )
-        return web.json_response(result, headers=_cors_headers(request))
+        return web.json_response(result,)
 
     # --- Session Management ---
 
@@ -2393,7 +2323,7 @@ class MemAllGateway:
         data = await request.json()
         return web.json_response(
             session_start(agent_name=data.get("agent_name", ""), auto_inject=data.get("auto_inject", True)),
-            headers=_cors_headers(request))
+            )
 
     async def _handle_api_session_end(self, request: web.Request) -> web.Response:
         """POST /sessions/{session_id}/end — end a session."""
@@ -2401,18 +2331,18 @@ class MemAllGateway:
         data = await request.json() if request.can_read_body else {}
         return web.json_response(
             session_end(session_id, auto_extract=data.get("auto_extract", False)),
-            headers=_cors_headers(request))
+            )
 
     async def _handle_api_session_summary(self, request: web.Request) -> web.Response:
         """GET /sessions/{session_id} — get session summary."""
         session_id = request.match_info.get("session_id", "")
-        return web.json_response(session_summary(session_id=session_id), headers=_cors_headers(request))
+        return web.json_response(session_summary(session_id=session_id),)
 
     async def _handle_api_sessions_list(self, request: web.Request) -> web.Response:
         """GET /sessions — list recent sessions."""
         agent_name = request.query.get("agent_name", "")
         limit = _safe_int(request.query.get("limit", "5"))
-        return web.json_response(session_summary(agent_name=agent_name, limit=limit), headers=_cors_headers(request))
+        return web.json_response(session_summary(agent_name=agent_name, limit=limit),)
 
     # --- Federation ---
 
@@ -2421,29 +2351,29 @@ class MemAllGateway:
         return web.json_response(fed_query(
             request.query.get("query", ""), request.query.get("agent_name", ""),
             request.query.get("category", ""), request.query.get("trust_level", ""),
-            _safe_int(request.query.get("limit", "20"))), headers=_cors_headers(request))
+            _safe_int(request.query.get("limit", "20"))),)
 
     async def _handle_api_fed_publish(self, request: web.Request) -> web.Response:
         """POST /federation/publish — publish memory to shared space."""
         data = await request.json()
         return web.json_response(fed_publish(data.get("memory_id", 0), data.get("source_agent", ""),
                                               data.get("trust_level", "family"), data.get("category", "")),
-                                 headers=_cors_headers(request))
+                                 )
 
     async def _handle_api_fed_conflicts(self, request: web.Request) -> web.Response:
         """GET /federation/conflicts — list unresolved conflicts."""
         limit = _safe_int(request.query.get("limit", "20"))
-        return web.json_response(fed_conflicts(limit), headers=_cors_headers(request))
+        return web.json_response(fed_conflicts(limit),)
 
     async def _handle_api_fed_inject(self, request: web.Request) -> web.Response:
         """POST /federation/inject/{agent_name} — auto-inject agent context."""
         agent_name = request.match_info.get("agent_name", "")
-        return web.json_response(auto_inject(agent_name), headers=_cors_headers(request))
+        return web.json_response(auto_inject(agent_name),)
 
     async def _handle_api_fed_extract(self, request: web.Request) -> web.Response:
         """POST /federation/extract/{session_id} — auto-extract session facts."""
         session_id = request.match_info.get("session_id", "")
-        return web.json_response(auto_extract(session_id), headers=_cors_headers(request))
+        return web.json_response(auto_extract(session_id),)
 
     # --- Forgetting & Adaptive ---
 
@@ -2461,18 +2391,18 @@ class MemAllGateway:
         }
         fn = actions.get(data.get("action", ""))
         return web.json_response(fn() if fn else {"error": f"unknown action: {data.get('action')}"},
-                                 headers=_cors_headers(request))
+                                 )
 
     async def _handle_api_adaptive(self, request: web.Request) -> web.Response:
         """POST /adaptive — run adaptive subsystem."""
         data = await request.json()
         agent_name = data.get("agent_name")
         return web.json_response(adaptive_step(agent_name=agent_name) if agent_name else adaptive_report(),
-                                 headers=_cors_headers(request))
+                                 )
 
     async def _handle_api_adaptive_report(self, request: web.Request) -> web.Response:
         """GET /adaptive/report — adaptive status report."""
-        return web.json_response(adaptive_report(), headers=_cors_headers(request))
+        return web.json_response(adaptive_report(),)
 
     # --- Security Governance ---
 
@@ -2489,11 +2419,11 @@ class MemAllGateway:
         }
         fn = actions.get(action)
         if not fn:
-            return web.json_response({"error": f"unknown action: {action}"}, headers=_cors_headers(request))
+            return web.json_response({"error": f"unknown action: {action}"},)
         try:
-            return web.json_response(fn(), headers=_cors_headers(request))
+            return web.json_response(fn(),)
         except Exception as e:
-            return web.json_response({"error": str(e)}, headers=_cors_headers(request))
+            return web.json_response({"error": str(e)},)
 
     # --- Memory Operations ---
 
@@ -2512,12 +2442,12 @@ class MemAllGateway:
         }
         fn = actions.get(action)
         return web.json_response(fn() if fn else {"error": f"unknown action: {action}"},
-                                 headers=_cors_headers(request))
+                                 )
 
     async def _handle_api_ops_dedup(self, request: web.Request) -> web.Response:
         """GET /ops/dedup — check for duplicates."""
         return web.json_response({"note": "Use POST /ops with action=dedup to execute"},
-                                 headers=_cors_headers(request))
+                                 )
 
     # --- Gateway (self-operations) ---
 
@@ -2534,17 +2464,17 @@ class MemAllGateway:
         }
         fn = actions.get(action)
         if fn:
-            return web.json_response(fn(), headers=_cors_headers(request))
+            return web.json_response(fn(),)
         port = data.get("port", 9919)
         return web.json_response(
             {"error": f"gateway action '{action}' available via aiohttp server on port {port}"},
-            headers=_cors_headers(request))
+            )
 
     # --- Database Maintenance ---
 
     async def _handle_api_db_optimize(self, request: web.Request) -> web.Response:
         """POST /db/optimize — analyze, vacuum, optimize."""
-        return web.json_response(optimize_db(), headers=_cors_headers(request))
+        return web.json_response(optimize_db(),)
 
     async def _handle_api_agents(self, request: web.Request) -> web.Response:
         """GET /agents — list all agents."""
@@ -2554,15 +2484,15 @@ class MemAllGateway:
                 "SELECT agent_name, COUNT(*) as cnt FROM memories WHERE agent_name != '' AND agent_name IS NOT NULL GROUP BY agent_name ORDER BY cnt DESC"
             ).fetchall()
             return web.json_response(_ok([{"name": r["agent_name"], "count": r["cnt"]} for r in rows]),
-                                     headers=_cors_headers(request))
+                                     )
 
     async def _handle_api_db_stats(self, request: web.Request) -> web.Response:
         """GET /db/stats — database statistics."""
-        return web.json_response(db_stats(), headers=_cors_headers(request))
+        return web.json_response(db_stats(),)
 
     async def _handle_api_db_vacuum(self, request: web.Request) -> web.Response:
         """POST /db/vacuum — reclaim disk space."""
-        return web.json_response(vacuum_db(), headers=_cors_headers(request))
+        return web.json_response(vacuum_db(),)
 
     # --- Debt ---
 
@@ -2615,7 +2545,7 @@ class MemAllGateway:
             "total_memories": total_memories, "total_edges": total_edges, "total_agents": total_agents,
             "file_size_mb": file_size_mb, "level_distribution": level_dist, "category_distribution": cat_dist,
             "archive_count": archive_count, "scanned": cached is not None, "debt": debt,
-        }, headers=_cors_headers(request))
+        },)
 
     async def _handle_api_debt_scan(self, request: web.Request) -> web.Response:
         """POST /debt/scan — run live debt scan."""
@@ -2656,18 +2586,18 @@ class MemAllGateway:
                 "density": density, "severity_summary": severity_summary, "file_summary": file_summary,
             }
             _save_debt_cache({"scan": scan_result})
-            return web.json_response(scan_result, headers=_cors_headers(request))
+            return web.json_response(scan_result,)
         except Exception as e:
             import traceback
             return web.json_response({"error": str(e), "traceback": traceback.format_exc()},
-                                     headers=_cors_headers(request))
+                                     )
 
     # --- Reflection / L6 ---
 
     async def _handle_api_reflection_dashboard(self, request: web.Request) -> web.Response:
         """GET /reflection/dashboard — L6 reflection dashboard."""
         days = _safe_int(request.query.get("days", "30"))
-        return web.json_response(_ok(reflection_dashboard(days=days)), headers=_cors_headers(request))
+        return web.json_response(_ok(reflection_dashboard(days=days)),)
 
     async def _handle_api_reflection_interact(self, request: web.Request) -> web.Response:
         """POST /reflection/interact — interact with L6 reflection."""
@@ -2679,9 +2609,9 @@ class MemAllGateway:
         try:
             row = conn.execute("SELECT id, level, metadata FROM memories WHERE id = ?", (memory_id,)).fetchone()
             if not row:
-                return web.json_response({"error": f"memory {memory_id} not found"}, status=404, headers=_cors_headers(request))
+                return web.json_response({"error": f"memory {memory_id} not found"}, status=404,)
             if row["level"] != "L6":
-                return web.json_response({"error": f"memory {memory_id} is not L6"}, status=400, headers=_cors_headers(request))
+                return web.json_response({"error": f"memory {memory_id} is not L6"}, status=400,)
             meta = json.loads(row["metadata"]) if row["metadata"] else {}
             interactions = meta.get("interactions", [])
             interactions.append({"action": action, "context": context, "timestamp": datetime.now(timezone.utc).isoformat()})
@@ -2690,7 +2620,7 @@ class MemAllGateway:
                          (json.dumps(meta), datetime.now(timezone.utc).isoformat(), memory_id))
             conn.commit()
             return web.json_response({"status": "ok", "memory_id": memory_id, "action": action, "total_interactions": len(interactions)},
-                                     headers=_cors_headers(request))
+                                     )
         finally:
             conn.close()
 
@@ -2705,7 +2635,7 @@ class MemAllGateway:
             include_integrate=data.get("include_integrate", True),
             include_persona=data.get("include_persona", True),
             include_archive=data.get("include_archive", True),
-        ), headers=_cors_headers(request))
+        ),)
 
     # --- Migrations ---
 
@@ -2713,7 +2643,7 @@ class MemAllGateway:
         """GET /migrations/status — migration status."""
         conn = get_conn()
         try:
-            return web.json_response(get_migration_status(conn), headers=_cors_headers(request))
+            return web.json_response(get_migration_status(conn),)
         finally:
             conn.close()
 
@@ -2723,7 +2653,7 @@ class MemAllGateway:
         try:
             result = run_migrations(conn, db_path=str(DB_PATH))
             conn.commit()
-            return web.json_response(result, headers=_cors_headers(request))
+            return web.json_response(result,)
         finally:
             conn.close()
 
@@ -2748,7 +2678,7 @@ class MemAllGateway:
                 params + [limit, offset]
             ).fetchall()
             return web.json_response({"success": True, "data": {"items": [dict(r) for r in rows], "total": total}},
-                                     headers=_cors_headers(request))
+                                     )
         finally:
             conn.close()
 
@@ -2804,7 +2734,7 @@ class MemAllGateway:
                 params + [limit, offset]
             ).fetchall()
             return web.json_response(_ok({"items": [dict(r) for r in rows], "total": total, "page": page, "per_page": limit}),
-                                     headers=_cors_headers(request))
+                                     )
         finally:
             conn.close()
 
@@ -2817,7 +2747,7 @@ class MemAllGateway:
         edges = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
         conn.close()
         return web.json_response(_ok({"total": total, "total_memories": total, "recent_24h": recent, "by_level": by_level, "total_links": edges, "total_agents": len(by_level)}),
-                                 headers=_cors_headers(request))
+                                 )
 
     async def _handle_v30_get_memory(self, request: web.Request) -> web.Response:
         """GET /v30api/memories/{memory_id} — get one memory."""
@@ -2825,7 +2755,7 @@ class MemAllGateway:
         conn = get_conn()
         row = conn.execute("SELECT id, content, subject as title, level, agent_name, category, project, summary, tags, created_at, updated_at, access_count, metadata FROM memories WHERE id = ?", (memory_id,)).fetchone()
         conn.close()
-        return web.json_response(_ok(dict(row) if row else None), headers=_cors_headers(request))
+        return web.json_response(_ok(dict(row) if row else None),)
 
     async def _handle_v30_delete_memory(self, request: web.Request) -> web.Response:
         """DELETE /v30api/memories/{memory_id} — delete a memory."""
@@ -2835,7 +2765,7 @@ class MemAllGateway:
         conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
         conn.commit()
         conn.close()
-        return web.json_response(_ok({"deleted": memory_id}), headers=_cors_headers(request))
+        return web.json_response(_ok({"deleted": memory_id}),)
 
     async def _handle_v30_create_memory(self, request: web.Request) -> web.Response:
         """POST /v30api/memories — create a memory."""
@@ -2846,7 +2776,7 @@ class MemAllGateway:
             category=body.get("category", "general"), project=body.get("project", ""),
             summary=body.get("summary", ""),
         ))
-        return web.json_response(_ok({"id": mid}), headers=_cors_headers(request))
+        return web.json_response(_ok({"id": mid}),)
 
     async def _handle_v30_update_memory(self, request: web.Request) -> web.Response:
         """PUT /v30api/memories/{memory_id} — update a memory."""
@@ -2862,7 +2792,7 @@ class MemAllGateway:
             conn.execute("UPDATE memories SET tags = ?, updated_at = datetime('now') WHERE id = ?", (body["tags"], memory_id))
         conn.commit()
         conn.close()
-        return web.json_response(_ok({"id": memory_id}), headers=_cors_headers(request))
+        return web.json_response(_ok({"id": memory_id}),)
 
     # --- Frontend ---
 
@@ -2872,8 +2802,8 @@ class MemAllGateway:
         if _frontend_dir.exists() and (_frontend_dir / "index.html").exists():
             index = _frontend_dir / "index.html"
             return web.Response(text=index.read_text(encoding="utf-8"), content_type="text/html",
-                                headers=_cors_headers(request))
-        return web.json_response({"status": "ok", "frontend": "not found"}, headers=_cors_headers(request))
+                                )
+        return web.json_response({"status": "ok", "frontend": "not found"},)
 
     async def _handle_api_routes(self, request: web.Request) -> web.Response:
         """GET /api/routes — list available API routes."""
@@ -2882,7 +2812,7 @@ class MemAllGateway:
             if hasattr(route, "method") and hasattr(route, "resource"):
                 path = str(route.resource)
                 routes_list.append({"method": route.method, "path": path})
-        return web.json_response({"routes": routes_list}, headers=_cors_headers(request))
+        return web.json_response({"routes": routes_list},)
 
     # ── MCP Streamable HTTP handlers ──
 
@@ -3074,7 +3004,7 @@ class MemAllGateway:
         """GET /metrics — return process metrics as JSON."""
         from memall.core.metrics import get_metrics
         snapshot = await asyncio.to_thread(lambda: get_metrics().snapshot())
-        return web.json_response(snapshot, headers=_cors_headers(request))
+        return web.json_response(snapshot,)
 
 
 # ══════════════════════════════════════════════════════════════════

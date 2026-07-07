@@ -147,10 +147,11 @@ def dispatch_lifecycle(hook_point: str, blocking: bool = False, **kwargs) -> boo
     Plugin hooks are loaded lazily via ``run_plugin_hook`` to avoid circular
     imports.
 
-    For hook points without a plugin handler, this method automatically records
-    a generic activity event so agents get baseline visibility.  Plugin hooks
-    that receive the event should call ``record_event()`` themselves with a
-    richer description.
+    After dispatching, a baseline activity event is always recorded (except
+    for ``pre_*`` hooks which are internal noise).  When plugins handle the
+    event, their names are included in the baseline record so agents always
+    see something — even if a plugin forgets to call ``record_event()``
+    itself.
 
     Args:
         hook_point: The lifecycle hook constant (HOOK_*).
@@ -169,13 +170,19 @@ def dispatch_lifecycle(hook_point: str, blocking: bool = False, **kwargs) -> boo
 
     # 2. Plugin hooks (lazy import to avoid circular dependencies)
     plugin_func = _HOOK_TO_PLUGIN.get(hook_point)
-    had_plugin = False  # true only if at least one plugin actually handles this
+    plugin_names: list[str] = []
     if plugin_func:
         try:
             from memall.plugins.loader import run_plugin_hook  # noqa: F811
             plugin_results = run_plugin_hook(plugin_func, **kwargs)
-            had_plugin = bool(plugin_results)
-            if blocking and any(r is False for r in plugin_results):
+            # Collect names from plugins that actually responded
+            for pr in plugin_results:
+                if isinstance(pr, dict) and pr.get("plugin"):
+                    plugin_names.append(pr["plugin"])
+            if blocking and any(
+                isinstance(r, dict) and r.get("result") is False
+                for r in plugin_results
+            ):
                 return False
         except Exception:
             logger.exception(
@@ -183,13 +190,16 @@ def dispatch_lifecycle(hook_point: str, blocking: bool = False, **kwargs) -> boo
                 plugin_func, hook_point,
             )
 
-    # 3. Record activity event (skip pre_* hooks — they're internal noise)
+    # 3. Always record a baseline event (skip pre_* hooks — internal noise)
     elapsed_ms = int((time.time() - _t0) * 1000)
-    if not had_plugin and not hook_point.startswith("pre_"):
+    if not hook_point.startswith("pre_"):
         from memall.mcp.hook_effects import record_event  # noqa: F811
+        desc = _describe_lifecycle(hook_point, **kwargs)
+        if plugin_names:
+            desc += f" [plugins: {', '.join(plugin_names)}]"
         record_event(
             hook_point=hook_point,
-            description=_describe_lifecycle(hook_point, **kwargs),
+            description=desc,
             plugin="system",
             elapsed_ms=elapsed_ms,
         )
@@ -204,6 +214,7 @@ _HOOK_DESCRIPTIONS: dict[str, str] = {
     HOOK_POST_RETRIEVE: "Memory retrieved",
     HOOK_POST_SEARCH: "Memory search completed",
     HOOK_POST_PIPELINE: "Pipeline run completed",
+    HOOK_POST_CAPTURE: "Memory captured",
     HOOK_STEP_OK: "Pipeline step completed",
     HOOK_STEP_FAIL: "Pipeline step failed",
 }
@@ -213,13 +224,38 @@ def _describe_lifecycle(hook_point: str, **kwargs) -> str:
     """Build a human-readable description for a lifecycle event."""
     base = _HOOK_DESCRIPTIONS.get(hook_point, f"Hook: {hook_point}")
     # Append contextual info where available
+    parts: list[str] = []
     mem_id = kwargs.get("memory_id")
-    viewer = kwargs.get("viewer") or kwargs.get("agent_name", "")
-    parts = []
     if mem_id:
         parts.append(f"memory #{mem_id}")
+    viewer = kwargs.get("viewer") or kwargs.get("agent_name", "")
     if viewer:
         parts.append(f"agent={viewer}")
+    query = kwargs.get("query")
+    if query and isinstance(query, str) and len(query) <= 80:
+        parts.append(f'query="{query}"')
+    top_k = kwargs.get("top_k") or kwargs.get("limit")
+    if top_k:
+        parts.append(f"top_k={top_k}")
+    results = kwargs.get("results")
+    if isinstance(results, list):
+        parts.append(f"{len(results)} results")
+    result = kwargs.get("result")
+    if isinstance(result, dict):
+        mem_id_r = result.get("memory_id")
+        if mem_id_r:
+            parts.append(f"memory #{mem_id_r}")
+    step_name = kwargs.get("step_name")
+    if step_name:
+        parts.append(f"step={step_name}")
+    entry = kwargs.get("entry")
+    if isinstance(entry, dict):
+        elapsed = entry.get("elapsed_ms")
+        if elapsed:
+            parts.append(f"{elapsed}ms")
+    dry_run = kwargs.get("dry_run")
+    if dry_run is not None:
+        parts.append(f"dry_run={dry_run}")
     if parts:
         base += f" ({', '.join(parts)})"
     return base

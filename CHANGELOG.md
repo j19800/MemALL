@@ -1,3 +1,11 @@
+## [v0.1.44] - 2026-07-07
+
+### Refactor
+
+- **gateway.py CORS middleware**: Extracted 7 utility functions to `gateway_utils.py`, added `_cors_middleware` for automatic CORS header injection, removed ~150 manual `headers=_cors_headers(request)` calls. (`src/memall/gateway.py`, `src/memall/gateway_utils.py`)
+- **Dead code cleanup**: Removed ~25 unused imports across 14 files (api/server.py, core/models.py, core/thin_waist.py, lark/consumer.py, mcp/tools/retrieve.py, pipeline/cluster.py, pipeline/event_processor.py, plugins/loader.py, config.py, cli/handle_call.py). Fixed 2 BOM-encoded files (bridge/run_bridge.py, pipeline/task_lifecycle.py).
+- **print() → logger replacement**: Replaced ~30 `print()` calls with `logger.info()`/`logger.error()` in `backup_restore.py`.
+
 ## [v0.1.43] - 2026-07-07
 
 ### Refactor

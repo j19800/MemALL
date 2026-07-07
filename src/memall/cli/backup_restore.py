@@ -240,44 +240,44 @@ def cmd_backup(args):
         keep_weekly = getattr(args, "keep_weekly", 4) or 4
         result = clean_backups(keep_daily=keep_daily, keep_weekly=keep_weekly)
         if result["status"] == "ok":
-            print(f"Cleanup complete.")
-            print(f"  Kept daily:  {result['kept_daily']}")
-            print(f"  Kept weekly: {result['kept_weekly']}")
+            logger.info("Cleanup complete.")
+            logger.info("  Kept daily:  %s", result['kept_daily'])
+            logger.info("  Kept weekly: %s", result['kept_weekly'])
             if result["deleted"]:
-                print(f"  Deleted: {len(result['deleted'])} files")
+                logger.info("  Deleted: %d files", len(result['deleted']))
                 for d in result["deleted"][:10]:
-                    print(f"    {d}")
+                    logger.info("    %s", d)
                 if len(result["deleted"]) > 10:
-                    print(f"    ... and {len(result['deleted']) - 10} more")
+                    logger.info("    ... and %d more", len(result['deleted']) - 10)
             else:
-                print(f"  Nothing to delete.")
+                logger.info("  Nothing to delete.")
         else:
-            print(f"Error: {result.get('reason', 'unknown')}", file=sys.stderr)
+            logger.error("Error: %s", result.get('reason', 'unknown'))
             sys.exit(1)
         return
 
     if hasattr(args, "list") and args.list:
         backups = list_backups()
         if not backups:
-            print("No backups found.")
+            logger.info("No backups found.")
             return
-        print(f"Backups ({len(backups)}):")
+        logger.info("Backups (%d):", len(backups))
         for b in backups:
             ts = datetime.fromtimestamp(b["mtime"]).strftime("%Y-%m-%d %H:%M")
             size_kb = b["size"] / 1024
-            print(f"  [{b['type']:6s}] {b['date']:12s} {size_kb:8.1f} KB  {ts}")
+            logger.info("  [%6s] %12s %8.1f KB  %s", b['type'], b['date'], size_kb, ts)
         return
 
     # Default: manual backup
     result = backup_db()
     if result["status"] == "ok":
         size_kb = result["size"] / 1024
-        print(f"[OK] Backed up to {result['path']} ({size_kb:.1f} KB)")
+        logger.info("[OK] Backed up to %s (%.1f KB)", result['path'], size_kb)
     elif result["status"] == "no_db":
-        print(f"No database to backup: {result['reason']}", file=sys.stderr)
+        logger.error("No database to backup: %s", result['reason'])
         sys.exit(1)
     else:
-        print(f"Backup failed: {result.get('reason', 'unknown')}", file=sys.stderr)
+        logger.error("Backup failed: %s", result.get('reason', 'unknown'))
         sys.exit(1)
 
 
@@ -291,32 +291,32 @@ def cmd_restore(args):
     elif from_path:
         result = restore_db(from_path)
     else:
-        print("Usage:")
-        print("  memall restore --from daily/YYYY-MM-DD.db   Restore from daily backup")
-        print("  memall restore --from weekly/YYYY-MM-DD.db  Restore from weekly backup")
-        print("  memall restore --auto                        Restore from latest backup")
-        print()
-        print("Tip: current database is auto-backed up to .before-restore.db before restore.")
-        print("Available backups:")
+        logger.info("Usage:")
+        logger.info("  memall restore --from daily/YYYY-MM-DD.db   Restore from daily backup")
+        logger.info("  memall restore --from weekly/YYYY-MM-DD.db  Restore from weekly backup")
+        logger.info("  memall restore --auto                        Restore from latest backup")
+        logger.info("")
+        logger.info("Tip: current database is auto-backed up to .before-restore.db before restore.")
+        logger.info("Available backups:")
         backups = list_backups()
         if not backups:
-            print("  (none)")
+            logger.info("  (none)")
         else:
             for b in backups[:10]:
                 ts = datetime.fromtimestamp(b["mtime"]).strftime("%Y-%m-%d %H:%M")
                 size_kb = b["size"] / 1024
-                print(f"  [{b['type']:6s}] {b['date']:12s} {size_kb:8.1f} KB  {ts}")
+                logger.info("  [%6s] %12s %8.1f KB  %s", b['type'], b['date'], size_kb, ts)
             if len(backups) > 10:
-                print(f"  ... and {len(backups) - 10} more")
+                logger.info("  ... and %d more", len(backups) - 10)
         return
 
     if result["status"] == "ok":
-        print(f"[OK] Database restored from {result['from']}")
+        logger.info("[OK] Database restored from %s", result['from'])
         if result.get("before_restore_backup"):
-            print(f"Pre-restore backup saved to {result['before_restore_backup']}")
+            logger.info("Pre-restore backup saved to %s", result['before_restore_backup'])
         size_kb = result["size"] / 1024
-        print(f"Size: {size_kb:.1f} KB")
-        print(f"Tip: run `memall status` to verify.")
+        logger.info("Size: %.1f KB", size_kb)
+        logger.info("Tip: run `memall status` to verify.")
     else:
-        print(f"Restore failed: {result.get('reason', 'unknown')}", file=sys.stderr)
+        logger.error("Restore failed: %s", result.get('reason', 'unknown'))
         sys.exit(1)

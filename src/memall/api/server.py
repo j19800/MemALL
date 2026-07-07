@@ -8,7 +8,6 @@ from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional
 import json, re, logging
-from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -16,14 +15,9 @@ from memall.core.thin_waist import (
     capture, retrieve, connect, traverse, timeline,
     smart_store, store_batch, update, vector_search,
 )
-from memall.core.models import MemoryInput
-from memall.pipeline.session import session_start, session_end, session_summary
-from memall.pipeline.persona import generate_persona, get_evolution, generate_profile_3layer
-from memall.pipeline.ask import ContextAssembler
 from memall.pipeline.forget import (
     forget_expired, forget_low_value, forget_review, forget_stats, forget_step,
 )
-from memall.pipeline.adaptive import adaptive_step, adaptive_report
 from memall.pipeline.security import (
     audit_sensitive, set_permission, check_access,
     list_agents_by_permission, security_score,

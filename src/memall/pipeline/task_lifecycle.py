@@ -1,4 +1,4 @@
-﻿"""
+"""
 Task lifecycle: execution-side closure for L5 task memories.
 
 The convergence engine produces L5 task memories (category='task') from

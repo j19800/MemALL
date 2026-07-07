@@ -2,7 +2,7 @@ import logging
 import json
 from memall.core.thin_waist import retrieve, vector_search, hybrid_search
 from memall.core.db import get_conn
-from memall.search.intent_router import classify, resolve_mode, SearchIntent
+from memall.search.intent_router import classify, resolve_mode
 logger = logging.getLogger(__name__)
 
 

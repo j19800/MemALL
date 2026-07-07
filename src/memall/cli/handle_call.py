@@ -1,7 +1,6 @@
 """CLI → MCP adapter: lets CLI commands call handle_call() instead of thin_waist directly."""
 
 import json
-import sys
 from collections import namedtuple
 
 from memall.mcp.adapter import handle_call as _mcp_handle

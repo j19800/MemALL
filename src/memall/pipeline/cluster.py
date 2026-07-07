@@ -1,6 +1,6 @@
 import re
 import math
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime, timezone
 from memall.core.db import get_conn
 from memall.core.nlp import tokenize, compute_tfidf, cosine_sim

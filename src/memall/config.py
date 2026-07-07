@@ -8,7 +8,6 @@ variable override (MEMALL_ prefix), and dot-path key access.
 import json
 import logging
 import os
-import sys
 import copy
 from pathlib import Path
 from typing import Any, Dict, Optional, Union

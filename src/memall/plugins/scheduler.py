@@ -233,6 +233,12 @@ def on_pipeline(**kwargs) -> None:
     else:
         logger.info("Pipeline %s finished in %.1fs", status, elapsed)
 
+    _record_plugin_event(
+        "on_pipeline",
+        f"Scheduler: {status} in {elapsed:.1f}s, {oks} ok{f', {fails} failed' if fails else ''}",
+        status="failed" if fails else "ok",
+    )
+
 
 def _check_capture_discussion(memory_id: int) -> dict | None:
     """Check if a newly captured memory relates to a pending discussion.

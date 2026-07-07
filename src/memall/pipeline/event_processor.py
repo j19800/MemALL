@@ -11,7 +11,6 @@ import re
 from datetime import datetime, timezone
 
 from memall.core.db import get_conn
-from memall.core.nlp import tokenize
 from memall.pipeline.classify import _detect_layers, CATEGORY_RULES
 
 logger = logging.getLogger(__name__)

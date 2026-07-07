@@ -3,10 +3,13 @@ Dashboard Plugin — Generate a self-contained HTML dashboard for MemALL.
 """
 
 import json
+import logging
 from pathlib import Path
 from typing import Optional
 
 from memall.core.db import get_conn
+
+logger = logging.getLogger(__name__)
 
 # In-memory capture counter for hook tracking
 _capture_count: int = 0
@@ -199,21 +202,42 @@ tr:last-child td {{ border-bottom:none; }}
     return str(Path(output_path).resolve())
 
 
+# ── Hook activity recording helper ───────────────────────────────────────
+
+def _record_plugin_event(hook_point: str, description: str, status: str = "ok") -> None:
+    """Record a dashboard plugin event into the hook effects ring buffer."""
+    try:
+        from memall.mcp.hook_effects import record_event as _re
+        _re(hook_point=hook_point, description=description, plugin="dashboard", status=status)
+    except Exception:
+        logger.warning("Failed to record dashboard plugin event for %s", hook_point, exc_info=True)
+
+
 # Plugin metadata
 def on_capture(**kwargs) -> None:
     """Increment in-memory capture counter (displayed on dashboard)."""
     global _capture_count
     _capture_count += 1
+    memory_id = kwargs.get("memory_id")
+    detail = f"memory #{memory_id}" if memory_id else f"total captures={_capture_count}"
+    _record_plugin_event("on_capture", f"Capture counter incremented ({detail})")
 
 
 def on_pipeline(**kwargs) -> None:
     """Record pipeline run summary as a module-level dict (for dashboard)."""
     global _last_pipeline
+    status = kwargs.get("status", "?")
+    elapsed = kwargs.get("elapsed", 0)
     _last_pipeline = {
-        "status": kwargs.get("status"),
+        "status": status,
         "results": kwargs.get("results"),
-        "elapsed": kwargs.get("elapsed"),
+        "elapsed": elapsed,
     }
+    _record_plugin_event(
+        "on_pipeline",
+        f"Dashboard recorded pipeline {status} in {elapsed:.1f}s",
+        status="ok" if status == "completed" else "failed",
+    )
 
 
 def register():

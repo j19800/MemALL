@@ -1,4 +1,4 @@
-﻿import sys; sys.path.insert(0, "E:\\MemALL\\src")
+import sys; sys.path.insert(0, "E:\\MemALL\\src")
 import logging, time
 from memall.core.log_setup import configure as configure_logging; configure_logging()
 from memall.bridge.main import BridgeConfig, AgentBridge
