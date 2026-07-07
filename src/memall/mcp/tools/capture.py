@@ -15,5 +15,8 @@ def handle(arguments: dict) -> str:
             content=inp.content,
         )
 
-    mid = do_capture(inp)
-    return json.dumps({"id": mid, "status": "ok"})
+    try:
+        mid = do_capture(inp)
+        return json.dumps({"id": mid, "status": "ok"})
+    except ValueError as e:
+        return json.dumps({"id": None, "status": "rejected", "reason": str(e)})

@@ -78,6 +78,8 @@ def reset_provider() -> None:
 def _register_builtin() -> None:
     from memall.search.faiss_provider import FaissProvider
     register_provider("faiss", FaissProvider)
+    from memall.search.vec0_provider import Vec0Provider
+    register_provider("vec0", Vec0Provider)
 
 
 _register_builtin()

@@ -1,9 +1,11 @@
 import importlib
+import inspect
 import json
 import logging
 import sqlite3
 import time
 from datetime import datetime, timezone
+from functools import partial
 from .metrics import collect_metrics, append_metrics
 from memall.core.db import get_conn
 from memall.core.tracer import span as trace_span
@@ -127,7 +129,15 @@ def _run_step(step_name: str, step_fn, step_results: dict,
     try:
         dispatch_lifecycle(HOOK_PRE_STEP, step_name=step_name, records_before=records_before)
         with trace_span(f"pipeline.{step_name}", "pipeline_step", {"step": step_name}):
-            result = step_fn()
+            # Pass conn to step functions that accept it (avoids extra open/close)
+            if conn is not None:
+                sig = inspect.signature(step_fn)
+                if "conn" in sig.parameters:
+                    result = step_fn(conn=conn)
+                else:
+                    result = step_fn()
+            else:
+                result = step_fn()
         elapsed_ms = int((time.time() - start) * 1000)
         records_after = _count_memories(conn)
 

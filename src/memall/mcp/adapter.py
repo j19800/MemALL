@@ -50,9 +50,7 @@ def handle_call(tool_name: str, arguments: dict) -> str:
         if action not in _SESSION_SKIP_ACTIONS:
             agent_name = arguments.get("agent_name", "")
             if agent_name:
-                from memall.mcp.shared import _READ_ONLY_ACTIONS
-                auto_inject = action not in _READ_ONLY_ACTIONS
-                ensure_session_started(agent_name, auto_inject=auto_inject)
+                ensure_session_started(agent_name, auto_inject=True)
 
     # Pre-tool-use hooks — can block the call
     pre_results = HookRegistry.dispatch(HOOK_PRE_TOOL_USE, tool_name, arguments)
@@ -85,6 +83,10 @@ def handle_call(tool_name: str, arguments: dict) -> str:
     # Inject hook activity into the tool response so agents see async effects
     result = _inject_hook_activity(result)
 
+    # Inject session context for read-only tools (memall_read, memall_persona)
+    if tool_name in {"memall_read", "memall_persona"}:
+        result = _inject_session_context(result)
+
     return result
 
 
@@ -111,4 +113,24 @@ def _inject_hook_activity(result_str: str) -> str:
         return json.dumps(parsed, ensure_ascii=False)
     except Exception:
         logger.debug("hook_activity injection failed (non-fatal)", exc_info=True)
+        return result_str
+
+
+def _inject_session_context(result_str: str) -> str:
+    """Consume the pending session note and inject ``_meta.session_context``
+    into the JSON response for read-only tools.
+    """
+    try:
+        note = consume_session_note()
+        if not note:
+            return result_str
+
+        parsed = json.loads(result_str)
+        if not isinstance(parsed, dict):
+            return result_str
+
+        parsed.setdefault("_meta", {})["session_context"] = note
+        return json.dumps(parsed, ensure_ascii=False)
+    except Exception:
+        logger.debug("session_context injection failed (non-fatal)", exc_info=True)
         return result_str

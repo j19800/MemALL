@@ -1,3 +1,16 @@
+## [v0.1.45] - 2026-07-08
+
+### Changed
+
+- **adapter.py session context injection**: Read-only tool responses (`memall_read`, `memall_persona`) now include `_meta.session_context` via `consume_session_note()` at the adapter layer, so agents see session context without an extra tool call. (`src/memall/mcp/adapter.py`)
+- **context_assembler.py get_persona() rewrite**: Switched from extracting data from formatted context strings to direct DB queries for `recent_decisions`, `derived_insights`, and `active_topics`. Backward-compatible dict format preserved. (`src/memall/core/context_assembler.py`)
+- **vec0_search proxy**: `vector_search()` in `thin_waist.py` now routes through the generic `get_provider(active)` path for any registered search provider. (`src/memall/core/thin_waist.py`)
+
+### Added
+
+- **Vec0 SearchProvider**: New `vec0_provider.py` wrapping sqlite-vec infrastructure as a formal `SearchProvider`, registered as `"vec0"` in the provider registry. Supports `build_index()`, `search()`, `index_status()`, `add_item()`, `remove_item()`, `save()`, `load()`. (`src/memall/search/vec0_provider.py`, `src/memall/search/registry.py`)
+- **Pipeline connection propagation**: Step functions that accept `conn=None` now receive the shared `run_pipeline()` connection via `inspect.signature()` introspection, avoiding redundant DB open/close per step. (`src/memall/pipeline/pipeline.py`)
+
 ## [v0.1.44] - 2026-07-07
 
 ### Refactor

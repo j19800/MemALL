@@ -239,8 +239,11 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
     }
     required = threshold_map.get(data.level or "P2", 5)
 
+    # Minimum content length: content under 15 chars is too short to be meaningful
+    if text_len < 15:
+        gate = "rejected"
     # Level-specific gate: L6 reflections MUST have reasoning >= 2
-    if data.level == "L6" and scores["reasoning"] < 2:
+    elif data.level == "L6" and scores["reasoning"] < 2:
         passed = False
         gate = "rejected"
     elif data.level in ("L4", "L5") and not data.subject:
@@ -341,10 +344,9 @@ def _capture_dedup_check(conn, data: MemoryInput, h: str, now: str, accumulate_k
 
     # L7 accumulate_key: same pattern corrected again → weight++
     if accumulate_key and data.level == "L7":
-        pattern = f'"accumulate_key": "{accumulate_key}"'
         dup = conn.execute(
-            "SELECT id, weight FROM memories WHERE level = 'L7' AND metadata LIKE ? LIMIT 1",
-            (f"%{pattern}%",),
+            "SELECT id, weight FROM memories WHERE level = 'L7' AND accumulate_key = ? LIMIT 1",
+            (accumulate_key,),
         ).fetchone()
         if dup:
             new_weight = (dup["weight"] or 1) + 1
@@ -420,13 +422,21 @@ def _capture_insert_row(conn, data: MemoryInput, h: str, now: str) -> int:
     """Insert the memory row with race-condition fallback on content_hash collision."""
     occurred = data.occurred_at or now
     supersedes = data.supersedes if data.supersedes and data.supersedes != "[]" else '[]'
+
+    # Extract memory_status and accumulate_key from metadata if present
+    meta = data.metadata
+    meta_dict = json.loads(meta) if isinstance(meta, str) else (meta or {})
+    memory_status = meta_dict.get("status") if data.level == "L5" else None
+    accumulate_key_val = meta_dict.get("accumulate_key")
+
     try:
         cur = conn.execute(
             """INSERT INTO memories
                (content, content_hash, level, owner, agent_name, subject,
                 project, category, summary, occurred_at, created_at, updated_at,
-                supersedes, confidence, visibility, metadata, thread_id, agent_name_locked)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                supersedes, confidence, visibility, metadata, thread_id,
+                agent_name_locked, memory_status, accumulate_key)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 data.content, h, data.level, data.owner, data.agent_name,
                 data.subject, data.project, data.category, data.summary,
@@ -435,6 +445,8 @@ def _capture_insert_row(conn, data: MemoryInput, h: str, now: str) -> int:
                 json.dumps(data.metadata) if isinstance(data.metadata, dict) else data.metadata,
                 data.thread_id,
                 0,
+                memory_status,
+                accumulate_key_val,
             ),
         )
         return cur.lastrowid
@@ -513,10 +525,10 @@ def capture(data: MemoryInput | dict | str, accumulate_key: str | None = None, *
     quality_gate = quality_result.get("gate", "accepted")
 
     if quality_gate == "rejected":
-        logger.warning(
-            "capture: quality gate rejected (avg=%.2f, min=%d, len=%d) — stored anyway",
-            quality_result.get("avg", 0), quality_result.get("min", 0),
-            len(data.content or ""),
+        raise ValueError(
+            f"quality gate rejected (avg={quality_result.get('avg', 0):.2f}, "
+            f"min={quality_result.get('min', 0)}, "
+            f"len={len(data.content or '')}) — content too short or low quality"
         )
     elif quality_gate == "review":
         logger.warning(
@@ -1087,10 +1099,16 @@ def smart_store(content: str, owner: str = "", agent_name: str = "",
                     dispatch_lifecycle(HOOK_POST_STORE, result=result)
                     return result
 
-        mid = capture(MemoryInput(
-            content=content, owner=owner, agent_name=agent_name,
-            subject=subject, project=project, category=category, level=level,
-        ))
+        try:
+            mid = capture(MemoryInput(
+                content=content, owner=owner, agent_name=agent_name,
+                subject=subject, project=project, category=category, level=level,
+            ))
+        except ValueError as e:
+            logger.warning("smart_store: %s", e)
+            result = {"id": None, "status": "rejected", "reason": str(e)}
+            dispatch_lifecycle(HOOK_POST_STORE, result=result)
+            return result
         result = {"id": mid, "status": "new"}
         dispatch_lifecycle(HOOK_POST_STORE, result=result)
         return result
@@ -1102,18 +1120,23 @@ def store_batch(items: list) -> dict:
 
     Returns {"ids": [...], "count": N}."""
     ids = []
+    errors = []
     for item in items:
-        mid = capture(MemoryInput(
-            content=item.get("content", ""),
-            owner=item.get("owner", ""),
-            agent_name=item.get("agent_name", ""),
-            subject=item.get("subject", ""),
-            project=item.get("project", ""),
-            category=item.get("category", "general"),
-            level=item.get("level", "P2"),
-        ))
-        ids.append(mid)
-    return {"ids": ids, "count": len(ids)}
+        try:
+            mid = capture(MemoryInput(
+                content=item.get("content", ""),
+                owner=item.get("owner", ""),
+                agent_name=item.get("agent_name", ""),
+                subject=item.get("subject", ""),
+                project=item.get("project", ""),
+                category=item.get("category", "general"),
+                level=item.get("level", "P2"),
+            ))
+            ids.append(mid)
+        except ValueError as e:
+            logger.warning("store_batch: item skipped — %s", e)
+            errors.append({"content": item.get("content", "")[:40], "reason": str(e)})
+    return {"ids": ids, "count": len(ids), "errors": errors}
 
 
 # ── Cross-encoder reranker (Phase 2) ──
@@ -1276,15 +1299,14 @@ def vector_search(query: str, top_k: int = 10, provider: Optional[str] = None) -
     """Semantic vector search.
 
     Uses the configured search provider (default vec0 KNN via bge-small-zh-v1.5).
-    Set ``provider="faiss"`` to use FAISS.
+    Set ``provider="faiss"`` to use FAISS, ``provider="vec0"`` for explicit vec0.
     """
     from memall.config import get_config
     active = provider or get_config("search.provider", "faiss")
-    if active == "faiss":
-        from memall.search import get_provider
-        p = get_provider("faiss")
-        if p is not None:
-            return p.search(query, top_k=top_k)
+    from memall.search import get_provider
+    p = get_provider(active)
+    if p is not None:
+        return p.search(query, top_k=top_k)
     from memall.graph.retrieve import retrieve as graph_retrieve
     return graph_retrieve(query, mode="vector", top_k=top_k)
 

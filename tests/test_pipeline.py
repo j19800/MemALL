@@ -249,7 +249,7 @@ def test_arc_l6_edge_closed():
     init_db()
     agent = _unique_agent()
     l4_id = capture(MemoryInput(agent_name=agent, content=f"arc l6 close ({agent})", level="L4"))
-    l6_id = capture(MemoryInput(agent_name=agent, content=f"reflection on arc ({agent})", level="L6"))
+    l6_id = capture(MemoryInput(agent_name=agent, content=f"分析表明根因是该选择不当，reflection on arc ({agent})", level="L6"))
     connect(source_id=l6_id, target_id=l4_id, relation_type="refines")
 
     from memall.pipeline.arc_status import arc_status_step
@@ -267,7 +267,7 @@ def test_arc_closed_irreversible():
     init_db()
     agent = _unique_agent()
     l4_id = capture(MemoryInput(agent_name=agent, content=f"arc irreversible ({agent})", level="L4"))
-    l6_id = capture(MemoryInput(agent_name=agent, content=f"reflection ({agent})", level="L6"))
+    l6_id = capture(MemoryInput(agent_name=agent, content=f"分析根因该方案结论不对，reflection ({agent})", level="L6"))
     connect(source_id=l6_id, target_id=l4_id, relation_type="refines")
 
     from memall.pipeline.arc_status import arc_status_step
@@ -375,7 +375,7 @@ def test_arc_non_l4_null():
     levels = ["P0", "P1", "P2", "L1", "L5", "L6", "L7"]
     ids = {}
     for lv in levels:
-        mid = capture(MemoryInput(agent_name=agent, content=f"non-l4 {lv} ({agent})", level=lv))
+        mid = capture(MemoryInput(agent_name=agent, content=f"分析结论是该改进方案好 non-l4 {lv} ({agent})", level=lv))
         ids[lv] = mid
 
     from memall.pipeline.arc_status import arc_status_step
@@ -413,7 +413,7 @@ def test_arc_epoch_closure_rate():
 
     # Closed decision (L6 edge)
     closed_id = capture(MemoryInput(agent_name=agent, content=f"epoch arc closed ({agent})", level="L4", occurred_at="2026-06-12T00:00:00"))
-    l6_id = capture(MemoryInput(agent_name=agent, content=f"epoch reflection ({agent})", level="L6", occurred_at="2026-06-12T00:00:00"))
+    l6_id = capture(MemoryInput(agent_name=agent, content=f"分析根因是该方案选择造成的问题，epoch reflection ({agent})", level="L6", occurred_at="2026-06-12T00:00:00"))
     connect(source_id=l6_id, target_id=closed_id, relation_type="refines")
 
     conn.close()
