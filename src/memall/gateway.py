@@ -743,8 +743,8 @@ class MemAllGateway:
         )
         return web.Response(text=html, content_type="text/html")
 
-    async def _handle_artifact(self, request: web.Request) -> web.Response:
-        """展示本 session 任务成果总览页面。"""
+    def _render_artifact_html(self) -> str:
+        """Build the artifact overview HTML page (static, shared CSS + nav)."""
         style = self._HTML_STYLE + """
         .commit { background:#e8f5e9; border-left:3px solid #4caf50; padding:12px; margin:8px 0; border-radius:0 8px 8px 0; }
         .commit .hash { font-family:monospace; color:#2e7d32; font-size:13px; }
@@ -760,8 +760,7 @@ class MemAllGateway:
         .stat-card { flex:1; min-width:100px; background:#f5f5f5; border-radius:8px; padding:12px; text-align:center; }
         .stat-card .num { font-size:24px; font-weight:bold; color:#333; }
         .stat-card .label { font-size:12px; color:#888; }"""
-
-        html = f"""<!DOCTYPE html>
+        return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>MemALL · 工单</title>{style}
 </head><body>
 {_NAV_HTML}
@@ -827,9 +826,14 @@ class MemAllGateway:
 </div>
 
 </body></html>"""
+
+    async def _handle_artifact(self, request: web.Request) -> web.Response:
+        """展示本 session 任务成果总览页面。"""
+        html = self._render_artifact_html()
         return web.Response(text=html, content_type="text/html")
 
-    async def _handle_features(self, request: web.Request) -> web.Response:
+    def _render_features_html(self) -> str:
+        """Build the features overview HTML page (static, shared CSS + nav)."""
         style = self._HTML_STYLE + """
         .section { margin:20px 0; padding:16px; background:#fff; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,.1); }
         .section h2 { margin:0 0 12px 0; font-size:17px; color:#333; border-bottom:2px solid #eee; padding-bottom:8px; }
@@ -855,8 +859,7 @@ class MemAllGateway:
         .layer-item.t { background:#c8e6c9; border-color:#81c784; }
         .two-col { display:flex; gap:16px; flex-wrap:wrap; }
         .col { flex:1; min-width:280px; }"""
-
-        html = f"""<!DOCTYPE html>
+        return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>MemALL · 功能清单</title>{style}
 </head><body>
 {_NAV_HTML}
@@ -1078,6 +1081,9 @@ class MemAllGateway:
 </div>
 
 </body></html>"""
+
+    async def _handle_features(self, request: web.Request) -> web.Response:
+        html = self._render_features_html()
         return web.Response(text=html, content_type="text/html")
 
     async def _handle_api_graph(self, request: web.Request) -> web.Response:

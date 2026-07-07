@@ -90,6 +90,28 @@ def _snapshot_memories(conn, ids: Sequence[int]) -> Dict[int, dict]:
     }
 
 
+def _record_ops_entry(
+    conn,
+    op_type: str,
+    target_ids: list,
+    before_snapshot: dict,
+    op_metadata: dict,
+) -> None:
+    """Record a batch operation in ops_log for undo support (idempotent)."""
+    _ensure_ops_log(conn)
+    conn.execute(
+        "INSERT INTO ops_log (op_type, target_ids, before_snapshot, op_metadata, "
+        "executed_at) VALUES (?,?,?,?,?)",
+        (
+            op_type,
+            json.dumps(target_ids, ensure_ascii=False),
+            json.dumps(before_snapshot, default=str, ensure_ascii=False),
+            json.dumps(op_metadata, ensure_ascii=False),
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+
 def _merge_memories_conn(
     conn,
     source_id: int,
@@ -544,17 +566,9 @@ def batch_tag(
                 updated += 1
 
         if updated:
-            _ensure_ops_log(conn)
-            conn.execute(
-                "INSERT INTO ops_log (op_type, target_ids, before_snapshot, op_metadata, "
-                "executed_at) VALUES (?,?,?,?,?)",
-                (
-                    "batch_tag",
-                    json.dumps([r["id"] for r in rows], ensure_ascii=False),
-                    json.dumps(snapshot, default=str, ensure_ascii=False),
-                    json.dumps({"mode": mode, "tags": tags, "dry_run": False}, ensure_ascii=False),
-                    datetime.now(timezone.utc).isoformat(),
-                ),
+            _record_ops_entry(
+                conn, "batch_tag", all_ids, snapshot,
+                {"mode": mode, "tags": tags, "dry_run": False},
             )
 
         conn.commit()
@@ -622,7 +636,6 @@ def batch_archive(
         conn.execute("BEGIN IMMEDIATE")
 
         # Snapshot BEFORE changes (correct for undo)
-        _ensure_ops_log(conn)
         all_ids = [r["id"] for r in rows]
         snapshot = _snapshot_memories(conn, all_ids)
 
@@ -643,16 +656,9 @@ def batch_archive(
             )
             archived += 1
 
-        conn.execute(
-            "INSERT INTO ops_log (op_type, target_ids, before_snapshot, op_metadata, "
-            "executed_at) VALUES (?,?,?,?,?)",
-            (
-                "batch_archive",
-                json.dumps(all_ids, ensure_ascii=False),
-                json.dumps(snapshot, default=str, ensure_ascii=False),
-                json.dumps({"days": days, "cutoff": cutoff}, ensure_ascii=False),
-                now_iso,
-            ),
+        _record_ops_entry(
+            conn, "batch_archive", all_ids, snapshot,
+            {"days": days, "cutoff": cutoff},
         )
         conn.commit()
 
@@ -715,7 +721,6 @@ def batch_restore(
         conn.execute("BEGIN IMMEDIATE")
 
         # Snapshot BEFORE changes (correct for undo)
-        _ensure_ops_log(conn)
         all_ids = [r["id"] for r in rows]
         snapshot = _snapshot_memories(conn, all_ids)
 
@@ -746,16 +751,9 @@ def batch_restore(
             )
             restored += 1
 
-        conn.execute(
-            "INSERT INTO ops_log (op_type, target_ids, before_snapshot, op_metadata, "
-            "executed_at) VALUES (?,?,?,?,?)",
-            (
-                "batch_restore",
-                json.dumps(all_ids, ensure_ascii=False),
-                json.dumps(snapshot, default=str, ensure_ascii=False),
-                json.dumps({"fallback_p2": fallback_p2}, ensure_ascii=False),
-                now_iso,
-            ),
+        _record_ops_entry(
+            conn, "batch_restore", all_ids, snapshot,
+            {"fallback_p2": fallback_p2},
         )
         conn.commit()
 

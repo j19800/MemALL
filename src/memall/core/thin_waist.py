@@ -255,7 +255,8 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
     return result
 
 
-def capture(data: MemoryInput | dict | str, accumulate_key: str | None = None, **overrides) -> int:
+def _capture_normalize_and_validate(data: MemoryInput | dict | str, **overrides) -> MemoryInput:
+    """Normalize input type, apply overrides, validate content, set agent/owner defaults."""
     if isinstance(data, str):
         data = MemoryInput(content=data)
     elif isinstance(data, dict):
@@ -273,49 +274,14 @@ def capture(data: MemoryInput | dict | str, accumulate_key: str | None = None, *
     elif content_len < 80:
         logger.info(f"capture: short memory ({content_len} chars) agent={data.agent_name} cat={data.category}: {data.content[:60]}")
 
-    # Agent name normalization and validation (handles empty -> system)
     data.agent_name = normalize_agent_name(data.agent_name)
-
-    # Ensure owner has a sensible default for display
     if not data.owner:
         data.owner = data.agent_name
+    return data
 
-    # Pre-capture lifecycle hook (blocking — can abort capture)
-    dispatch_lifecycle(HOOK_PRE_CAPTURE, blocking=True, data=data)
 
-    # Auto-generate subject if not provided by caller
-    if not data.subject:
-        data.subject = _make_subject(data.content, data.category, data.level, data.agent_name, data.owner)
-
-    now = datetime.now(timezone.utc).isoformat()
-    h = content_hash(data.content)
-
-    quality_result = _score_quality(data, h)
-    quality_gate = quality_result.get("gate", "accepted")
-
-    # Quality gate: reject/subject/empty content checks
-    #   "rejected" → warn and skip (too thin to be useful)
-    #   "review"   → warn but store (marginal, caller should improve)
-    if quality_gate == "rejected":
-        # UX1: soft-degrade instead of raising ValueError — log warning and return None
-        logger.warning(
-            "capture: quality gate rejected (avg=%.2f, min=%d, len=%d) — stored anyway",
-            quality_result.get("avg", 0), quality_result.get("min", 0),
-            len(data.content or ""),
-        )
-    if quality_gate == "review":
-        logger.warning(
-            "capture: quality gate review (avg=%.2f, min=%d) agent=%s cat=%s",
-            quality_result.get("avg", 0), quality_result.get("min", 0),
-            data.agent_name, data.category,
-        )
-
-    # Enforce: subject must be non-empty for L4+
-    if data.level in ("L4", "L5", "L6", "L7", "L9", "L10", "L11") and not data.subject:
-        logger.warning("capture: %s memory missing subject, content=%.60s", data.level, data.content or "")
-        data.subject = _make_subject(data.content, data.category, data.level, data.agent_name, data.owner)
-
-    # Auto-inject provenance if caller didn't provide it
+def _capture_inject_metadata(data: MemoryInput, accumulate_key: str | None = None) -> MemoryInput:
+    """Inject provenance source and optional accumulate_key into metadata."""
     if isinstance(data.metadata, dict):
         if "source" not in data.metadata:
             data.metadata["source"] = "capture_api"
@@ -328,7 +294,6 @@ def capture(data: MemoryInput | dict | str, accumulate_key: str | None = None, *
             existing_meta["source"] = "capture_api"
         data.metadata = existing_meta
 
-    # Store accumulate_key in metadata for future matching
     if accumulate_key:
         if isinstance(data.metadata, dict):
             data.metadata["accumulate_key"] = accumulate_key
@@ -339,7 +304,11 @@ def capture(data: MemoryInput | dict | str, accumulate_key: str | None = None, *
                 existing_meta = {}
             existing_meta["accumulate_key"] = accumulate_key
             data.metadata = existing_meta
+    return data
 
+
+def _capture_inject_quality(data: MemoryInput, quality_result: dict, now: str) -> MemoryInput:
+    """Inject quality scoring result into metadata."""
     quality_entry = {
         "value": quality_result,
         "_meta": {"version": 1, "written_at": now},
@@ -353,175 +322,221 @@ def capture(data: MemoryInput | dict | str, accumulate_key: str | None = None, *
             existing_meta = {}
         existing_meta["quality"] = quality_entry
         data.metadata = existing_meta
+    return data
+
+
+def _capture_dedup_check(conn, data: MemoryInput, h: str, now: str, accumulate_key: str | None = None) -> int | None:
+    """Check for existing memories: content_hash, L7 accumulate, L5 dedup.
+    Returns existing memory id on hit, None to proceed with insert."""
+    cur = conn.execute(
+        "SELECT id FROM memories WHERE content_hash = ?", (h,)
+    )
+    existing = cur.fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE memories SET access_count = access_count + 1, updated_at = ? WHERE id = ?",
+            (now, existing["id"]),
+        )
+        conn.commit()
+        return existing["id"]
+
+    # L7 accumulate_key: same pattern corrected again → weight++
+    if accumulate_key and data.level == "L7":
+        pattern = f'"accumulate_key": "{accumulate_key}"'
+        dup = conn.execute(
+            "SELECT id, weight FROM memories WHERE level = 'L7' AND metadata LIKE ? LIMIT 1",
+            (f"%{pattern}%",),
+        ).fetchone()
+        if dup:
+            new_weight = (dup["weight"] or 1) + 1
+            conn.execute(
+                "UPDATE memories SET weight = ?, content = ?, content_hash = ?, updated_at = ?, access_count = access_count + 1 WHERE id = ?",
+                (new_weight, data.content, h, now, dup["id"]),
+            )
+            conn.commit()
+            logger.info("capture: L7 accumulate_key '%s' → weight=%d (mem_id=%d)", accumulate_key, new_weight, dup["id"])
+            return dup["id"]
+
+    # L5 duplicate: same agent + subject → merge metadata, don't duplicate
+    if data.level == "L5" and data.agent_name and data.subject:
+        dup = conn.execute(
+            "SELECT id, metadata FROM memories WHERE level = 'L5' AND agent_name = ? AND subject = ? LIMIT 1",
+            (data.agent_name, data.subject),
+        ).fetchone()
+        if dup:
+            existing_meta = {}
+            try:
+                raw = dup["metadata"]
+                existing_meta = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+            except json.JSONDecodeError:
+                existing_meta = {}
+            incoming = data.metadata or {}
+            if isinstance(incoming, str):
+                try:
+                    incoming = json.loads(incoming)
+                except json.JSONDecodeError:
+                    incoming = {}
+            if isinstance(existing_meta, dict) and isinstance(incoming, dict):
+                merged = {**existing_meta, **incoming}
+                conn.execute(
+                    "UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps(merged, ensure_ascii=False), now, dup["id"]),
+                )
+                conn.commit()
+                return dup["id"]
+    return None
+
+
+def _capture_prepare_identity(conn, data: MemoryInput) -> None:
+    """Verify agent identity, auto-register if missing, clamp visibility."""
+    if not data.agent_name:
+        return
+    ident = conn.execute(
+        "SELECT id FROM identities WHERE agent_name = ?",
+        (data.agent_name,)
+    ).fetchone()
+    if not ident:
+        conn.execute(
+            "INSERT OR IGNORE INTO identities (agent_name, agent_type) "
+            "VALUES (?, 'ai')",
+            (data.agent_name,),
+        )
+        logger.info("capture: auto-registered agent '%s' in identities table", data.agent_name)
+
+    if data.owner and data.owner != data.agent_name:
+        ident = conn.execute(
+            "SELECT agent_type, trusted_by FROM identities WHERE agent_name = ?",
+            (data.agent_name,),
+        ).fetchone()
+        if ident and ident["agent_type"] != "human":
+            trusted = json.loads(ident["trusted_by"]) if ident["trusted_by"] else []
+            if data.owner not in trusted:
+                owners = [data.agent_name] + trusted[:3]
+                data.owner = owners[0] if owners else data.agent_name
+
+    data.visibility = _get_allowed_write_visibility(conn, data.agent_name, data.visibility)
+
+
+def _capture_insert_row(conn, data: MemoryInput, h: str, now: str) -> int:
+    """Insert the memory row with race-condition fallback on content_hash collision."""
+    occurred = data.occurred_at or now
+    supersedes = data.supersedes if data.supersedes and data.supersedes != "[]" else '[]'
+    try:
+        cur = conn.execute(
+            """INSERT INTO memories
+               (content, content_hash, level, owner, agent_name, subject,
+                project, category, summary, occurred_at, created_at, updated_at,
+                supersedes, confidence, visibility, metadata, thread_id, agent_name_locked)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                data.content, h, data.level, data.owner, data.agent_name,
+                data.subject, data.project, data.category, data.summary,
+                occurred, now, now,
+                supersedes, data.confidence, data.visibility,
+                json.dumps(data.metadata) if isinstance(data.metadata, dict) else data.metadata,
+                data.thread_id,
+                0,
+            ),
+        )
+        return cur.lastrowid
+    except Exception:
+        conn.rollback()
+        existing = conn.execute(
+            "SELECT id FROM memories WHERE content_hash = ?", (h,)
+        ).fetchone()
+        if existing:
+            return existing["id"]
+        raise
+
+
+def _capture_post_insert(conn, mem_id: int, data: MemoryInput, h: str) -> None:
+    """Post-insert side effects: pipeline event, L4 arc, auto-embedding, dream scan."""
+    try:
+        conn.execute(
+            "INSERT INTO pipeline_events (memory_id, event_type, created_at) VALUES (?, 'new_memory', datetime('now'))",
+            (mem_id,),
+        )
+        conn.commit()
+    except sqlite3.Error:
+        logger.warning("pipeline_events insert failed", exc_info=True)
+
+    if data.level == "L4":
+        conn.execute("UPDATE memories SET arc_status = 'open' WHERE id = ?", (mem_id,))
+        conn.commit()
+
+    try:
+        from memall.graph.embeddings import _auto_embed, _check_st_available
+        if _check_st_available():
+            _auto_embed(conn, mem_id, data.content, h)
+            conn.commit()
+    except Exception:
+        logger.warning("embedding auto-embed failed (install sentence-transformers for vector search)", exc_info=True)
+
+    try:
+        from memall.config import get_config as _get_dream_config
+        if _get_dream_config("dream.enabled", True):
+            from memall.pipeline.dream import dream_scan
+            _dreams = dream_scan(
+                conn,
+                new_mem_id=mem_id,
+                agent_name=data.agent_name,
+                content=data.content,
+                category=data.category,
+                scan_window=_get_dream_config("dream.scan_window", 50),
+                threshold=_get_dream_config("dream.threshold", 0.4),
+            )
+            if _dreams:
+                conn.commit()
+                logger.info("capture: dream found %d conflict(s) for memory #%d", len(_dreams), mem_id)
+    except Exception:
+        logger.debug("capture: dream scan skipped (non-fatal)", exc_info=True)
+
+    dispatch_lifecycle(HOOK_POST_CAPTURE, data=data, memory_id=mem_id)
+
+
+def capture(data: MemoryInput | dict | str, accumulate_key: str | None = None, **overrides) -> int:
+    data = _capture_normalize_and_validate(data, **overrides)
+    now = datetime.now(timezone.utc).isoformat()
+    h = content_hash(data.content)
+
+    dispatch_lifecycle(HOOK_PRE_CAPTURE, blocking=True, data=data)
+
+    # Auto-generate subject if not provided by caller
+    if not data.subject:
+        data.subject = _make_subject(data.content, data.category, data.level, data.agent_name, data.owner)
+
+    # Enforce subject for L4+
+    if data.level in ("L4", "L5", "L6", "L7", "L9", "L10", "L11") and not data.subject:
+        logger.warning("capture: %s memory missing subject, content=%.60s", data.level, data.content or "")
+        data.subject = _make_subject(data.content, data.category, data.level, data.agent_name, data.owner)
+
+    quality_result = _score_quality(data, h)
+    quality_gate = quality_result.get("gate", "accepted")
+
+    if quality_gate == "rejected":
+        logger.warning(
+            "capture: quality gate rejected (avg=%.2f, min=%d, len=%d) — stored anyway",
+            quality_result.get("avg", 0), quality_result.get("min", 0),
+            len(data.content or ""),
+        )
+    elif quality_gate == "review":
+        logger.warning(
+            "capture: quality gate review (avg=%.2f, min=%d) agent=%s cat=%s",
+            quality_result.get("avg", 0), quality_result.get("min", 0),
+            data.agent_name, data.category,
+        )
+
+    data = _capture_inject_metadata(data, accumulate_key)
+    data = _capture_inject_quality(data, quality_result, now)
 
     with _pool_conn() as conn:
-        cur = conn.execute(
-            "SELECT id FROM memories WHERE content_hash = ?", (h,)
-        )
-        existing = cur.fetchone()
-        if existing:
-            conn.execute(
-                "UPDATE memories SET access_count = access_count + 1, updated_at = ? WHERE id = ?",
-                (now, existing["id"]),
-            )
-            conn.commit()
-            return existing["id"]
+        existing_id = _capture_dedup_check(conn, data, h, now, accumulate_key)
+        if existing_id is not None:
+            return existing_id
 
-        # L7 accumulate_key: same pattern corrected again → weight++
-        if accumulate_key and data.level == "L7":
-            pattern = f'"accumulate_key": "{accumulate_key}"'
-            dup = conn.execute(
-                "SELECT id, weight FROM memories WHERE level = 'L7' AND metadata LIKE ? LIMIT 1",
-                (f"%{pattern}%",),
-            ).fetchone()
-            if dup:
-                new_weight = (dup["weight"] or 1) + 1
-                conn.execute(
-                    "UPDATE memories SET weight = ?, content = ?, content_hash = ?, updated_at = ?, access_count = access_count + 1 WHERE id = ?",
-                    (new_weight, data.content, h, now, dup["id"]),
-                )
-                conn.commit()
-                logger.info("capture: L7 accumulate_key '%s' → weight=%d (mem_id=%d)", accumulate_key, new_weight, dup["id"])
-                return dup["id"]
-
-        # L5 duplicate check: same agent + subject → merge metadata, don't duplicate
-        if data.level == "L5" and data.agent_name and data.subject:
-            dup = conn.execute(
-                "SELECT id, metadata FROM memories WHERE level = 'L5' AND agent_name = ? AND subject = ? LIMIT 1",
-                (data.agent_name, data.subject),
-            ).fetchone()
-            if dup:
-                existing_meta = {}
-                try:
-                    raw = dup["metadata"]
-                    existing_meta = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
-                except json.JSONDecodeError:
-                    existing_meta = {}
-                incoming = data.metadata or {}
-                if isinstance(incoming, str):
-                    try:
-                        incoming = json.loads(incoming)
-                    except json.JSONDecodeError:
-                        incoming = {}
-                if isinstance(existing_meta, dict) and isinstance(incoming, dict):
-                    merged = {**existing_meta, **incoming}
-                    conn.execute(
-                        "UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
-                        (json.dumps(merged, ensure_ascii=False), now, dup["id"]),
-                    )
-                    conn.commit()
-                    return dup["id"]
-
-        # API 层校验：agent_name 必须在 identities 表中存在
-        if data.agent_name:
-            # 查询 identities 表验证
-            ident = conn.execute(
-                "SELECT id FROM identities WHERE agent_name = ?",
-                (data.agent_name,)
-            ).fetchone()
-
-            if not ident:
-                # Auto-register unknown agent — capture() is the write path,
-                # not a validation gate. Identity records are created lazily.
-                conn.execute(
-                    "INSERT OR IGNORE INTO identities (agent_name, agent_type) "
-                    "VALUES (?, 'ai')",
-                    (data.agent_name,),
-                )
-                logger.info(
-                    "capture: auto-registered agent '%s' in identities table",
-                    data.agent_name,
-                )
-
-            # 如果 owner 存在且不是 agent_name 本身，需要验证是否为 trusted
-            if data.owner and data.owner != data.agent_name:
-                ident = conn.execute(
-                    "SELECT agent_type, trusted_by FROM identities WHERE agent_name = ?",
-                    (data.agent_name,),
-                ).fetchone()
-                if ident and ident["agent_type"] != "human":
-                    trusted = json.loads(ident["trusted_by"]) if ident["trusted_by"] else []
-                    if data.owner not in trusted:
-                        owners = [data.agent_name] + trusted[:3]
-                        data.owner = owners[0] if owners else data.agent_name
-
-            data.visibility = _get_allowed_write_visibility(conn, data.agent_name, data.visibility)
-
-        occurred = data.occurred_at or now
-        supersedes = data.supersedes if data.supersedes and data.supersedes != "[]" else '[]'
-        try:
-            cur = conn.execute(
-                """INSERT INTO memories
-                   (content, content_hash, level, owner, agent_name, subject,
-                    project, category, summary, occurred_at, created_at, updated_at,
-                    supersedes, confidence, visibility, metadata, thread_id, agent_name_locked)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    data.content, h, data.level, data.owner, data.agent_name,
-                    data.subject, data.project, data.category, data.summary,
-                    occurred, now, now,
-                    supersedes, data.confidence, data.visibility,
-                    json.dumps(data.metadata) if isinstance(data.metadata, dict) else data.metadata,
-                    data.thread_id,
-                    0,  # 默认 0 = 未锁定
-                ),
-            )
-            mem_id = cur.lastrowid
-        except Exception:
-            # Race: concurrent insert with same content_hash — fetch existing
-            conn.rollback()
-            existing = conn.execute(
-                "SELECT id FROM memories WHERE content_hash = ?", (h,)
-            ).fetchone()
-            if existing:
-                return existing["id"]
-            raise
-
-        # Publish pipeline event for new memory
-        try:
-            conn.execute(
-                "INSERT INTO pipeline_events (memory_id, event_type, created_at) VALUES (?, 'new_memory', datetime('now'))",
-                (mem_id,),
-            )
-            conn.commit()
-        except sqlite3.Error:
-            logger.warning("pipeline_events insert failed", exc_info=True)
-
-        # Decision Arc: L4 memories start as 'open'
-        if data.level == "L4":
-            conn.execute("UPDATE memories SET arc_status = 'open' WHERE id = ?", (mem_id,))
-            conn.commit()
-
-        # Auto-persist embedding for new memory (best-effort, never blocks capture)
-        try:
-            from memall.graph.embeddings import _auto_embed, _check_st_available
-            if _check_st_available():
-                _auto_embed(conn, mem_id, data.content, h)
-                conn.commit()
-        except Exception:
-            logger.warning("embedding auto-embed failed (install sentence-transformers for vector search)", exc_info=True)
-
-        # Dynamic Dream: active contradiction detection (best-effort, never blocks)
-        try:
-            from memall.config import get_config as _get_dream_config
-            if _get_dream_config("dream.enabled", True):
-                from memall.pipeline.dream import dream_scan
-                _dreams = dream_scan(
-                    conn,
-                    new_mem_id=mem_id,
-                    agent_name=data.agent_name,
-                    content=data.content,
-                    category=data.category,
-                    scan_window=_get_dream_config("dream.scan_window", 50),
-                    threshold=_get_dream_config("dream.threshold", 0.4),
-                )
-                if _dreams:
-                    conn.commit()
-                    logger.info("capture: dream found %d conflict(s) for memory #%d", len(_dreams), mem_id)
-        except Exception:
-            logger.debug("capture: dream scan skipped (non-fatal)", exc_info=True)
-
-        dispatch_lifecycle(HOOK_POST_CAPTURE, data=data, memory_id=mem_id)
+        _capture_prepare_identity(conn, data)
+        mem_id = _capture_insert_row(conn, data, h, now)
+        _capture_post_insert(conn, mem_id, data, h)
         return mem_id
 
 

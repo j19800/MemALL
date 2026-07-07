@@ -1,3 +1,12 @@
+## [v0.1.43] - 2026-07-07
+
+### Refactor
+
+- **exporter.py duplicate logger fix**: Removed misplaced `logger = logging.getLogger(__name__)` at line 5 (before imports). (`src/memall/plugins/exporter.py`)
+- **ops.py boilerplate dedup**: Extracted `_record_ops_entry()` helper from `batch_tag`/`batch_archive`/`batch_restore`, saving ~30 lines. Fixed `batch_tag` `_ensure_ops_log` scoping. (`src/memall/pipeline/ops.py`)
+- **gateway.py HTML extraction**: Extracted `_render_artifact_html()` and `_render_features_html()` from inline handlers — handlers now 3-line wrappers. Zero behavior change. (`src/memall/gateway.py`)
+- **thin_waist.py capture() split**: Split 268-line `capture()` into 7 focused helpers (`_capture_normalize_and_validate`, `_capture_inject_metadata`, `_capture_inject_quality`, `_capture_dedup_check`, `_capture_prepare_identity`, `_capture_insert_row`, `_capture_post_insert`). Main function shrunk to ~50 lines. (`src/memall/core/thin_waist.py`)
+
 ## [v0.1.42] - 2026-07-02
 
 ### Security
