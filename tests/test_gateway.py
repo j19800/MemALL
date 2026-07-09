@@ -24,6 +24,32 @@ GW_PORT_HEALTH = 19940
 GW_PORT_CAPTURE = 19941
 
 
+def _free_port(port: int) -> None:
+    """Kill any process listening on *port* (idempotent)."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["netstat", "-ano"], capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.splitlines():
+            if f":{port} " in line and "LISTENING" in line:
+                parts = line.strip().split()
+                pid = parts[-1]
+                if pid.isdigit():
+                    subprocess.run(
+                        ["taskkill", "/F", "/PID", pid],
+                        capture_output=True, timeout=3
+                    )
+    except Exception:
+        pass
+
+
+def setup_module():
+    """Clean up lingering gateway processes before running tests."""
+    _free_port(GW_PORT_HEALTH)
+    _free_port(GW_PORT_CAPTURE)
+
+
 def _wait_for_health(host: str, port: int, timeout: float = 5) -> bool:
     """Poll /health until the gateway responds (startup wait)."""
     deadline = time.monotonic() + timeout

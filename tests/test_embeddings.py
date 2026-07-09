@@ -6,8 +6,18 @@ Tests build_index, index_status.
 
 import os
 import sys
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+
+def _has_sentence_transformers():
+    """Check if sentence-transformers is importable (torch DLL may not load on Windows)."""
+    try:
+        import sentence_transformers  # noqa: F401
+        return True
+    except Exception:
+        return False
 
 
 def test_build_index_empty_db():
@@ -42,6 +52,8 @@ def test_index_status_empty():
         cleanup_temp_db(db_path, patcher)
 
 
+@pytest.mark.skipif(not _has_sentence_transformers(),
+                    reason="sentence-transformers not available (torch DLL issue)")
 def test_index_status_with_data():
     """Test: index_status with memories."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
@@ -66,6 +78,8 @@ def test_index_status_with_data():
         cleanup_temp_db(db_path, patcher)
 
 
+@pytest.mark.skipif(not _has_sentence_transformers(),
+                    reason="sentence-transformers not available (torch DLL issue)")
 def test_build_index_twice():
     """Test: build_index is idempotent on second call."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory

@@ -57,6 +57,10 @@ def test_dot_path():
 
 def test_get_config_default():
     """Test that get_config returns defaults without any config files."""
+    # Clear any env var contamination from other tests
+    for k in list(os.environ.keys()):
+        if k.startswith("MEMALL_"):
+            del os.environ[k]
     reset_config()
 
     db_path = get_config("db.path")

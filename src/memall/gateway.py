@@ -217,13 +217,14 @@ class MemAllGateway:
         """优雅关闭 gateway"""
         with self._lock:
             if self._runner is not None:
+                _runner = self._runner
+                self._runner = None
                 if self._loop and not self._loop.is_closed():
                     self._loop.call_soon_threadsafe(
                         lambda: asyncio.ensure_future(
-                            self._cleanup(), loop=self._loop
+                            self._cleanup(_runner), loop=self._loop
                         )
                     )
-                self._runner = None
 
     # ── Internal async runner ──
 
@@ -244,9 +245,9 @@ class MemAllGateway:
         self._loop.run_until_complete(site.start())
         self._loop.run_forever()
 
-    async def _cleanup(self) -> None:
+    async def _cleanup(self, runner: web.AppRunner) -> None:
         """清理 aiohttp runner 并停止事件循环"""
-        await self._runner.cleanup()
+        await runner.cleanup()
         # Shutdown MCP thread pools
         _MCP_TOOL_EXECUTOR.shutdown(wait=False)
         _MCP_TOOL_HEAVY.shutdown(wait=False)

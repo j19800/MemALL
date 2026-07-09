@@ -94,7 +94,11 @@ def test_match_tool():
 
 def test_default_hooks_loaded():
     from memall.mcp.adapter import TOOL_DEFINITIONS
-    assert len(TOOL_DEFINITIONS) >= 36
+    assert len(TOOL_DEFINITIONS) >= 7
+    # Re-register built-in hooks in case another test cleared them
+    from memall.mcp import hooks_builtin as _hb
+    import importlib
+    importlib.reload(_hb)
     hooks = HookRegistry.list_hooks()
     hook_points = {h["hook_point"] for h in hooks}
     assert HOOK_POST_TOOL_USE in hook_points

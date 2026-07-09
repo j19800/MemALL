@@ -1,3 +1,13 @@
+## [v0.1.49] - 2026-07-10
+
+### Fixed
+
+- **convergence tests: supersedes NULL → NOT NULL violation**: All 4 INSERTs in `convergence.py` passed `None` for supersedes but the column is `NOT NULL DEFAULT '[]'`. Changed to `'[]'`. (`pipeline/convergence.py`)
+- **gateway tests: port conflict + race on `_cleanup`**: Added `setup_module()` that kills lingering processes on test ports. Fixed `stop()` racing `_cleanup()` — `self._runner = None` was set before `_cleanup()` completed, causing `AttributeError: 'NoneType' object has no attribute 'cleanup'`. (`gateway.py`)
+- **embedding tests: skip if sentence-transformers unavailable**: Added `@pytest.mark.skipif` for the two tests that require torch. (`test_embeddings.py`)
+- **hooks test: reload built-in hooks after `HookRegistry.clear()` by another test**: `importlib.reload(hooks_builtin)` re-registers hooks cleared by an earlier test. (`test_hooks.py`)
+- **config test: clear `MEMALL_*` env vars left by other tests**: Other tests set `MEMALL_DB_PATH` via environment, leaking into `test_get_config_default`. Added env var cleanup at test start. (`test_config.py`)
+
 ## [v0.1.48] - 2026-07-10
 
 ### Fixed
