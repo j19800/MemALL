@@ -328,6 +328,29 @@ def get_conn(db_path=None) -> sqlite3.Connection:
     return conn
 
 
+def _ensure_missing_columns(conn):
+    """Add columns that migrations assume exist but SCHEMA_SQL may not create.
+
+    This is a safety net for the gap between SCHEMA_SQL (which defines the base
+    table) and the migration scripts.  Some migration-added columns are present
+    in SCHEMA_SQL for fresh databases but may not survive ``executescript``
+    splitting — we add them explicitly here.
+    """
+    cur = conn.execute("PRAGMA table_info(memories)")
+    existing = {r["name"] for r in cur.fetchall()}
+    additions = {
+        "primary_layer": "TEXT NOT NULL DEFAULT ''",
+        "secondary_layers": "TEXT NOT NULL DEFAULT '[]'",
+        "tags": "TEXT NOT NULL DEFAULT '[]'",
+        "echo_score": "REAL NOT NULL DEFAULT 0.0",
+        "memory_status": "TEXT DEFAULT NULL",
+        "accumulate_key": "TEXT DEFAULT NULL",
+    }
+    for col, typedef in additions.items():
+        if col not in existing:
+            conn.execute(f"ALTER TABLE memories ADD COLUMN {col} {typedef}")
+
+
 def init_db(conn=None, migrate=True, db_path_for_backup: str = ""):
     close = False
     if conn is None:
@@ -335,6 +358,10 @@ def init_db(conn=None, migrate=True, db_path_for_backup: str = ""):
         close = True
     try:
         conn.executescript(SCHEMA_SQL)
+        # Safety net: add any columns that may not have survived executescript.
+        # Must commit here so subsequent migrations see the DDL changes.
+        _ensure_missing_columns(conn)
+        conn.commit()
         # Only execute FTS5 triggers if they haven't been set up yet
         _fts_triggers_done = conn.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'memories_%'"

@@ -1,3 +1,10 @@
+## [v0.1.48] - 2026-07-10
+
+### Fixed
+
+- **DB schema: migration 021 drops migration-added columns**: `migration_021_fix_supersedes_column_type.py` recreates the `memories` table with a hardcoded column list that predates migrations 003, 014, 018, 022, 023. After the table swap, columns `primary_layer`, `secondary_layers`, `tags`, `echo_score`, `visibility`, `confidence`, `weight` were permanently lost — causing `OperationalError: no such column` in classify, ops, and convergence tests. Fixed by updating the `CREATE TABLE memories_new` and `INSERT ... SELECT` to include all migration-added columns with `COALESCE` fallbacks. (`migrations/021_fix_supersedes_column_type.py`)
+- **init_db safety net**: Added `_ensure_missing_columns()` guard in `init_db()` that runs after `SCHEMA_SQL` executescript, verifying all migration-added columns exist and adding any that are missing. This prevents silent column loss from future `executescript` + migration swap patterns. (`core/db.py`)
+
 ## [v0.1.47] - 2026-07-08
 
 ### Added

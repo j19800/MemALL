@@ -25,7 +25,7 @@ def apply(conn):
     try:
         conn.execute("BEGIN TRANSACTION")
 
-        # 1. Create new table with TEXT supersedes
+        # 1. Create new table with TEXT supersedes + all migration-added columns
         conn.execute("""
             CREATE TABLE IF NOT EXISTS memories_new (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,16 +44,31 @@ def apply(conn):
                 supersedes TEXT NOT NULL DEFAULT '[]',
                 trust_level REAL NOT NULL DEFAULT 1.0,
                 access_count INTEGER NOT NULL DEFAULT 0,
+                visibility TEXT NOT NULL DEFAULT 'private',
+                confidence REAL NOT NULL DEFAULT 0.5,
+                weight INTEGER NOT NULL DEFAULT 1,
                 metadata TEXT NOT NULL DEFAULT '{}',
+                primary_layer TEXT NOT NULL DEFAULT '',
+                secondary_layers TEXT NOT NULL DEFAULT '[]',
+                tags TEXT NOT NULL DEFAULT '[]',
+                echo_score REAL NOT NULL DEFAULT 0.0,
                 arc_status TEXT,
                 thread_id INTEGER DEFAULT NULL,
                 agent_name_locked BOOLEAN NOT NULL DEFAULT 0
             )
         """)
 
-        # 2. Copy existing data
+        # 2. Copy existing data — use COALESCE to handle NULLs from old schema
         conn.execute("""
-            INSERT INTO memories_new
+            INSERT INTO memories_new (
+                id, content, content_hash, level, owner, agent_name,
+                subject, project, category, summary, occurred_at,
+                created_at, updated_at, supersedes,
+                trust_level, access_count, visibility, confidence, weight,
+                metadata,
+                primary_layer, secondary_layers, tags, echo_score,
+                arc_status, thread_id, agent_name_locked
+            )
             SELECT id, content, content_hash, level, owner, agent_name,
                    subject, project, category, summary, occurred_at,
                    created_at, updated_at,
@@ -63,8 +78,16 @@ def apply(conn):
                        WHEN typeof(supersedes) = 'integer' THEN '[' || supersedes || ']'
                        ELSE '[]'
                    END,
-                   trust_level, access_count, metadata, arc_status,
-                   thread_id, agent_name_locked
+                   trust_level, access_count,
+                   COALESCE(visibility, 'private'),
+                   COALESCE(confidence, 0.5),
+                   COALESCE(weight, 1),
+                   COALESCE(metadata, '{}'),
+                   COALESCE(primary_layer, ''),
+                   COALESCE(secondary_layers, '[]'),
+                   COALESCE(tags, '[]'),
+                   COALESCE(echo_score, 0.0),
+                   arc_status, thread_id, agent_name_locked
             FROM memories
         """)
 
