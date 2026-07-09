@@ -254,6 +254,66 @@ CREATE TABLE IF NOT EXISTS tracing_spans (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tracing_trace ON tracing_spans(trace_id);
+
+-- Entities for EntityStrategy
+CREATE TABLE IF NOT EXISTS entities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    entity_type TEXT NOT NULL DEFAULT 'unknown',
+    canonical_name TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(name, entity_type)
+);
+CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
+CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(entity_type);
+
+-- Memory–Entity junction
+CREATE TABLE IF NOT EXISTS memory_entities (
+    memory_id INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'mentioned',
+    confidence REAL NOT NULL DEFAULT 1.0,
+    context_snippet TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (memory_id, entity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mem_entities_mem ON memory_entities(memory_id);
+CREATE INDEX IF NOT EXISTS idx_mem_entities_ent ON memory_entities(entity_id);
+
+-- Knowledge triples for KGStrategy
+CREATE TABLE IF NOT EXISTS knowledge_triples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject_id INTEGER NOT NULL REFERENCES entities(id),
+    predicate TEXT NOT NULL,
+    object_id INTEGER NOT NULL REFERENCES entities(id),
+    source_memory_id INTEGER REFERENCES memories(id),
+    confidence REAL NOT NULL DEFAULT 1.0,
+    weight REAL NOT NULL DEFAULT 1.0,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE(subject_id, predicate, object_id)
+);
+CREATE INDEX IF NOT EXISTS idx_triples_subj ON knowledge_triples(subject_id);
+CREATE INDEX IF NOT EXISTS idx_triples_obj ON knowledge_triples(object_id);
+CREATE INDEX IF NOT EXISTS idx_triples_pred ON knowledge_triples(predicate);
+
+-- Shared records for MemorySharing
+CREATE TABLE IF NOT EXISTS shared_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_id INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    source_agent TEXT NOT NULL,
+    target_agent TEXT NOT NULL,
+    trust_level TEXT NOT NULL DEFAULT 'family',
+    ttl_days INTEGER NOT NULL DEFAULT 0,
+    expires_at TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(memory_id, target_agent)
+);
+CREATE INDEX IF NOT EXISTS idx_shared_target ON shared_records(target_agent);
+CREATE INDEX IF NOT EXISTS idx_shared_source ON shared_records(source_agent);
 """
 
 FTS5_TRIGGERS = """

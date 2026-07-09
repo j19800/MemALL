@@ -42,14 +42,37 @@ def _handle_write(args: dict) -> str:
     elif action == "ops":
         args["action"] = args.pop("sub_action", "")
         return manage.handle_ops(args)
+    elif action in ("quick", "记一下", "快速记", "随手记"):
+        # Quick capture — auto-fill, just needs content
+        content = args.pop("content", "")
+        if not content:
+            return json.dumps({"error": "content is required"})
+        args.setdefault("agent_name", args.get("agent_name", "workbuddy"))
+        args.setdefault("level", "P2")
+        args.setdefault("category", "general")
+        # Auto-infer project from content keywords
+        project = args.get("project", "")
+        if not project:
+            kw_map = {"股票": "tradingagents", "交易": "tradingagents", "分析": "tradingagents",
+                      "bug": "memall", "修复": "memall", "feature": "memall", "功能": "memall"}
+            for kw, proj in kw_map.items():
+                if kw in content:
+                    project = proj
+                    break
+        args.setdefault("project", project or "general")
+        # Generate subject from first line
+        first_line = content.strip().split("\n")[0][:50]
+        args.setdefault("subject", first_line)
+        args["content"] = content
+        return capture.handle(args)
     raise ValueError(f"memall_write: unknown action '{action}'")
 
 
 registry.register(ToolDef(
     name="memall_write",
-    description="Write/capture/search/update memories, create connections, manage forgetting & ops. Actions: capture | smart_store | store_batch | update | connect | forget | ops",
+    description="Write/capture/search/update memories, create connections, manage forgetting & ops. Actions: capture | smart_store | store_batch | update | connect | forget | ops | quick (快速记)",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["capture", "smart_store", "store_batch", "update", "connect", "forget", "ops"]},
+        "action": {"type": "string", "enum": ["capture", "smart_store", "store_batch", "update", "connect", "forget", "ops", "quick", "记一下", "快速记", "随手记"]},
         "content": {"type": "string", "description": "Memory content"},
         "owner": {"type": "string"},
         "agent_name": {"type": "string"},
@@ -93,6 +116,11 @@ def _handle_read(args: dict) -> str:
         return retrieve.handle_hybrid_search(args)
     elif action == "search":
         return retrieve.handle_unified_search(args)
+    elif action in ("chat", "nl_search", "自然语言搜索"):
+        # Natural language chat search — always uses hybrid mode
+        args["mode"] = "hybrid"
+        args["top_k"] = args.get("top_k", 15)
+        return retrieve.handle_unified_search(args)
     elif action == "trace":
         return retrieve.handle_trace(args)
     elif action == "traverse":
@@ -108,9 +136,9 @@ def _handle_read(args: dict) -> str:
 
 registry.register(ToolDef(
     name="memall_read",
-    description="Search/retrieve memories, trace provenance, explore graph, timeline, federated queries. Actions: retrieve | search | vector_search | hybrid_search | trace | traverse | timeline | fed_query | fed_conflicts",
+    description="Search/retrieve memories, trace provenance, explore graph, timeline, federated queries, natural language chat search. Actions: retrieve | search | chat | vector_search | hybrid_search | trace | traverse | timeline | fed_query | fed_conflicts",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["retrieve", "search", "vector_search", "hybrid_search", "trace", "traverse", "timeline", "fed_query", "fed_conflicts"]},
+        "action": {"type": "string", "enum": ["retrieve", "search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "trace", "traverse", "timeline", "fed_query", "fed_conflicts"]},
         "query": {"type": "string", "description": "Search query"},
         "mode": {"type": "string", "enum": ["auto", "direct", "fts5", "vector", "hybrid"]},
         "top_k": {"type": "integer"},
@@ -148,15 +176,25 @@ def _handle_persona(args: dict) -> str:
         return persona.handle_identity(args)
     elif action == "ask":
         return persona.handle_ask(args)
+    elif action in ("profile_preload", "预加载画像", "加载画像", "画像"):
+        return persona.handle_profile_preload(args)
+    elif action in ("profile_search", "搜画像", "搜索画像", "查画像", "查找画像"):
+        return persona.handle_profile_search(args)
+    elif action in ("foresight", "前瞻", "预测", "猜我需要", "下一步"):
+        return persona.handle_foresight(args)
     raise ValueError(f"memall_persona: unknown action '{action}'")
 
 
 registry.register(ToolDef(
     name="memall_persona",
-    description="Query agent persona/profile/identity or ask a digital twin question. Actions: persona | persona_profile | identity | ask",
+    description="Query agent persona/profile/identity, ask digital twin, preload profile, search profiles, foresight prediction. Actions: persona | persona_profile | identity | ask | profile_preload (预加载画像) | profile_search (搜画像) | foresight (前瞻/预测)",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["persona", "persona_profile", "identity", "ask"]},
+        "action": {"type": "string", "enum": ["persona", "persona_profile", "identity", "ask",
+            "profile_preload", "预加载画像", "加载画像", "画像",
+            "profile_search", "搜画像", "搜索画像", "查画像", "查找画像",
+            "foresight", "前瞻", "预测", "猜我需要", "下一步"]},
         "agent_name": {"type": "string", "description": "Agent name to query"},
+        "query": {"type": "string", "description": "Search query for profile_search/foresight"},
         "question": {"type": "string", "description": "Question for ask action"},
         "mode": {"type": "string", "enum": ["stance", "pattern", "predict"]},
         "subject": {"type": "string", "description": "Subject/agent context"},
@@ -299,14 +337,67 @@ def _handle_system(args: dict) -> str:
         return reflect.handle(args)
     elif action == "index_rebuild":
         return index.handle(args)
+    elif action in ("digest", "每日摘要", "日报", "总结"):
+        # Daily digest — count today's memories by category with content snippets
+        from memall.core.thin_waist import hybrid_search
+        import json, datetime
+        from memall.core.db import get_conn
+        conn = get_conn()
+        now_utc = datetime.datetime.utcnow()
+        today_start = (now_utc - datetime.timedelta(hours=8)).strftime("%Y-%m-%d 16:00:00")
+        today_end = (now_utc + datetime.timedelta(hours=16)).strftime("%Y-%m-%d 15:59:59")
+        rows = conn.execute(
+            "SELECT category, level, COUNT(*) as cnt FROM memories "
+            "WHERE created_at BETWEEN ? AND ? "
+            "GROUP BY category, level ORDER BY cnt DESC LIMIT 15",
+            (today_start, today_end)
+        ).fetchall()
+        total = sum(r[2] for r in rows)
+        if not rows:
+            return json.dumps({"date": datetime.date.today().isoformat(), "total": 0, "message": "今天暂无新记忆"})
+        categories = {}
+        for cat, lvl, cnt in rows:
+            categories.setdefault(cat, {"total": 0, "levels": {}, "samples": []})
+            categories[cat]["total"] += cnt
+            categories[cat]["levels"][lvl] = cnt
+        # Add sample content for each category
+        for cat in categories:
+            samples = conn.execute(
+                "SELECT subject, summary, content FROM memories "
+                "WHERE category = ? AND created_at BETWEEN ? AND ? AND subject != '' "
+                "ORDER BY created_at DESC LIMIT 3",
+                (cat, today_start, today_end)
+            ).fetchall()
+            categories[cat]["samples"] = [
+                {"subject": s[0], "summary": (s[1] or s[2])[:80] if s[2] else ""}
+                for s in samples
+            ]
+        conn.close()
+        return json.dumps({"date": datetime.date.today().isoformat(), "total": total, "categories": categories}, ensure_ascii=False, default=str)
+    elif action in ("hot", "热门", "热点", "热榜"):
+        # Hot topics — most accessed or recently active memories
+        from memall.core.db import get_conn
+        import json, datetime
+        conn = get_conn()
+        now_utc = datetime.datetime.utcnow()
+        week_ago = (now_utc - datetime.timedelta(days=7)).isoformat()
+        rows = conn.execute(
+            "SELECT id, subject, category, level, access_count, summary FROM memories "
+            "WHERE created_at > ? AND access_count > 0 "
+            "ORDER BY access_count DESC, created_at DESC LIMIT 10",
+            (week_ago,)
+        ).fetchall()
+        conn.close()
+        hot = [{"id": r[0], "subject": r[1], "category": r[2], "level": r[3], "views": r[4], "summary": (r[5] or "")[:80]} for r in rows]
+        return json.dumps({"period": "7天", "total": len(hot), "hot_topics": hot}, ensure_ascii=False)
     raise ValueError(f"memall_system: unknown action '{action}'")
 
 
 registry.register(ToolDef(
     name="memall_system",
-    description="Pipeline, sessions, gateway, hub sync, DB maintenance, security, adaptive, onboarding, reflection, index rebuild. Actions: run_pipeline | distill | gateway | hub_connect | hub_sync | session_start | session_end | session_summary | db | security | adaptive | onboarding | reflect | index_rebuild",
+    description="Pipeline, sessions, gateway, hub sync, DB maintenance, security, adaptive, onboarding, reflection, index rebuild, daily digest, hot topics. Actions: run_pipeline | distill | gateway | hub_connect | hub_sync | session_start | session_end | session_summary | db | security | adaptive | onboarding | reflect | index_rebuild | digest (每日摘要/日报/总结) | hot (热门/热点/热榜)",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["run_pipeline", "distill", "gateway", "hub_connect", "hub_sync", "session_start", "session_end", "session_summary", "db", "security", "adaptive", "onboarding", "reflect", "index_rebuild"]},
+        "action": {"type": "string", "enum": ["run_pipeline", "distill", "gateway", "hub_connect", "hub_sync", "session_start", "session_end", "session_summary", "db", "security", "adaptive", "onboarding", "reflect", "index_rebuild", "digest", "每日摘要", "日报", "总结", "hot", "热门", "热点", "热榜"]},
         "sub_action": {"type": "string", "enum": ["list", "summarize", "start", "stop", "export", "import", "discover", "pair", "peers", "federated", "status", "reset", "submit_step", "skip", "audit", "permit", "check", "score", "clean", "index", "distill", "all", "report", "optimize", "stats", "vacuum", "agree", "disagree", "probe", "expired", "archive_stats", "archive_vacuum"], "description": "Sub-action for distill/gateway/security/adaptive/db/onboarding/reflect"},
         "session_id": {"type": "string", "description": "Session ID"},
         "agent_name": {"type": "string"},

@@ -256,6 +256,103 @@ async def handle_mcp_post(request: web.Request) -> web.Response:
         _log.setLevel(getattr(logging, level.upper(), logging.INFO))
         return web.json_response({"jsonrpc": "2.0", "id": req_id, "result": {}})
 
+    # ── Resources/List ──
+    if method == "resources/list":
+        from memall.core.db import get_conn
+        conn = get_conn()
+        rows = conn.execute(
+            "SELECT category, COUNT(*) as cnt FROM memories WHERE category != '' GROUP BY category ORDER BY cnt DESC LIMIT 20"
+        ).fetchall()
+        conn.close()
+        resources = [
+            {"uri": f"memall://category/{r[0]}", "name": f"{r[0]}记忆", "description": f"{r[0]} 类别, {r[1]}条"}
+            for r in rows
+        ]
+        resources.append({"uri": "memall://stats", "name": "系统统计", "description": "记忆系统统计概览"})
+        return web.json_response({"jsonrpc": "2.0", "id": req_id, "result": {"resources": resources}})
+
+    # ── Resources/Templates/List ──
+    if method == "resources/templates/list":
+        templates = [
+            {
+                "uriTemplate": "memall://memory/{id}",
+                "name": "单条记忆",
+                "description": "通过 memory_id 获取单条记忆详情",
+                "mimeType": "application/json",
+            },
+            {
+                "uriTemplate": "memall://agent/{name}",
+                "name": "Agent画像",
+                "description": "获取 Agent 的完整画像",
+                "mimeType": "application/json",
+            },
+            {
+                "uriTemplate": "memall://search/{query}",
+                "name": "记忆搜索",
+                "description": "搜索记忆",
+                "mimeType": "application/json",
+            },
+        ]
+        return web.json_response({"jsonrpc": "2.0", "id": req_id, "result": {"templates": templates}})
+
+    # ── Resources/Read ──
+    if method == "resources/read":
+        uri = params.get("uri", "")
+        from memall.core.db import get_conn
+        conn = get_conn()
+        try:
+            if uri.startswith("memall://memory/"):
+                mem_id = int(uri.split("/")[-1])
+                row = conn.execute("SELECT id, content, subject, category, level, agent_name, created_at FROM memories WHERE id=?", (mem_id,)).fetchone()
+                if not row:
+                    return web.json_response({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32000, "message": "memory not found"}})
+                result = {"uri": uri, "mimeType": "application/json", "text": json.dumps(dict(row), ensure_ascii=False, default=str)}
+            elif uri.startswith("memall://agent/"):
+                name = uri.split("/")[-1]
+                row = conn.execute("SELECT agent_name, agent_type, description, status, persona_updated_at FROM identities WHERE LOWER(agent_name)=LOWER(?)", (name,)).fetchone()
+                if not row:
+                    return web.json_response({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32000, "message": "agent not found"}})
+                result = {"uri": uri, "mimeType": "application/json", "text": json.dumps(dict(row), ensure_ascii=False, default=str)}
+            elif uri.startswith("memall://search/"):
+                query = uri.split("/", 2)[-1]
+                rows = conn.execute("SELECT id, subject, category, LEFT(content, 200) as preview FROM memories WHERE content LIKE ? OR subject LIKE ? LIMIT 10", (f"%{query}%", f"%{query}%")).fetchall()
+                result = {"uri": uri, "mimeType": "application/json", "text": json.dumps([dict(r) for r in rows], ensure_ascii=False, default=str)}
+            elif uri == "memall://stats":
+                total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+                agents = conn.execute("SELECT COUNT(DISTINCT agent_name) FROM memories").fetchone()[0]
+                cats = conn.execute("SELECT COUNT(DISTINCT category) FROM memories WHERE category != ''").fetchone()[0]
+                result = {"uri": uri, "mimeType": "application/json", "text": json.dumps({"total_memories": total, "agents": agents, "categories": cats})}
+            else:
+                return web.json_response({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32000, "message": f"unknown uri: {uri}"}})
+            conn.close()
+            return web.json_response({"jsonrpc": "2.0", "id": req_id, "result": {"contents": [result]}})
+        except Exception as e:
+            conn.close()
+            return web.json_response({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32603, "message": str(e)}})
+
+    # ── Prompts/List ──
+    if method == "prompts/list":
+        prompts = [
+            {"name": "daily_digest", "description": "每日记忆摘要", "arguments": []},
+            {"name": "quick_capture", "description": "快速记一条记忆", "arguments": [{"name": "content", "description": "记忆内容", "required": True}]},
+            {"name": "agent_status", "description": "查询Agent状态", "arguments": [{"name": "agent_name", "description": "Agent名称", "required": True}]},
+        ]
+        return web.json_response({"jsonrpc": "2.0", "id": req_id, "result": {"prompts": prompts}})
+
+    # ── Prompts/Get ──
+    if method == "prompts/get":
+        name = params.get("name", "")
+        args = params.get("arguments", {})
+        if name == "daily_digest":
+            return web.json_response({"jsonrpc": "2.0", "id": req_id, "result": {"prompt": "请查看今天的记忆摘要，按类别整理主要发现和待办事项。"}})
+        elif name == "quick_capture":
+            content = args.get("content", "")
+            return web.json_response({"jsonrpc": "2.0", "id": req_id, "result": {"prompt": f"请保存以下内容到记忆系统：{content}"}})
+        elif name == "agent_status":
+            agent = args.get("agent_name", "")
+            return web.json_response({"jsonrpc": "2.0", "id": req_id, "result": {"prompt": f"请查询Agent {agent} 的状态和最新活动。"}})
+        return web.json_response({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32000, "message": f"unknown prompt: {name}"}})
+
     return web.json_response({
         "jsonrpc": "2.0", "id": req_id,
         "error": {"code": -32601, "message": f"unknown method: {method}"},
@@ -326,6 +423,16 @@ async def handle_info(request: web.Request) -> web.Response:
             "GET /health": "health check (this response)",
             "POST /mcp": "JSON-RPC request/response",
             "GET /mcp": "SSE subscription",
+        },
+        "resources": {
+            "memall://memory/{id}": "single memory by ID",
+            "memall://agent/{name}": "agent profile",
+            "memall://search/{query}": "search memories",
+        },
+        "prompts": {
+            "daily_digest": "daily memory summary",
+            "quick_capture": "quick memory save",
+            "agent_status": "agent status query",
         },
     })
 

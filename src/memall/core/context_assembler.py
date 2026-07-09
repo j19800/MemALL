@@ -200,6 +200,7 @@ def build_context(
     query: str = "",
     max_tokens: int = 2000,
     include_levels: Optional[list[str]] = None,
+    strategy_name: Optional[str] = None,
 ) -> dict:
     """Build a token-budgeted context block for agent injection.
 
@@ -231,6 +232,27 @@ def build_context(
     with pool_conn() as conn:
         t1_lines = _build_tier1(agent_name, conn)
         t2_lines = _build_tier2(agent_name, query, conn)
+
+        # Strategy-aware injection: entity/KG results into Tier 2
+        if strategy_name and query:
+            try:
+                from memall.strategy.registry import get_strategy
+                strategy = get_strategy(agent_name, strategy_name)
+                if hasattr(strategy, "_entity_aware_retrieve"):
+                    entity_hits = strategy._entity_aware_retrieve(query, 5)  # type: ignore
+                    for hit in entity_hits:
+                        text = hit.get("content", "")[:200]
+                        if text:
+                            t2_lines.append(f"[Entity] {text}")
+                elif hasattr(strategy, "_kg_augmented_retrieve"):
+                    kg_hits = strategy._kg_augmented_retrieve(query, 5)  # type: ignore
+                    for hit in kg_hits:
+                        text = hit.get("content", "")[:200]
+                        if text:
+                            t2_lines.append(f"[KG] {text}")
+            except Exception as e:
+                logger.debug("Strategy injection failed: %s", e)
+
         t3_lines = _build_tier3(agent_name, conn)
 
     if include_levels:

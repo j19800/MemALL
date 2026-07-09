@@ -1,3 +1,29 @@
+## [v0.1.50] - 2026-07-10
+
+### Added
+
+- **Memory Strategy System**: Pluggable memory strategies inspired by LangChain and CrewAI. New `src/memall/strategy/` package with 4 strategies:
+
+  - **BufferStrategy**: Sliding window of recent N memories (default 50). Simplest strategy — wraps `capture()`/`retrieve()` with a size limit. (`strategy/buffer.py`)
+  - **SummaryStrategy**: Auto-triggers L9 summary after every N memories (default 10). Stores as L9 with `refines` edges to source memories. Counter is in-memory per agent. (`strategy/summary.py`)
+  - **EntityStrategy**: Auto-extracts named entities (people, technologies, tools, languages) during `store()`, persists to `entities` + `memory_entities` tables. `retrieve()` augments results with entity-aware queries. (`strategy/entity.py`)
+  - **KGStrategy**: Extracts subject–predicate–object triples from L6+ memories during `store()`. `retrieve()` traverses the KG from query entities. `traverse(entity, depth)` explores the graph. (`strategy/kg.py`)
+
+- **StrategyRegistry**: Config-driven per-agent strategy selection. Resolution: explicit param → per-agent config → global default → BufferStrategy. Cached per agent. (`strategy/registry.py`)
+- **MemorySharing**: Multi-agent soft-reference sharing via `shared_records` table. `share()`/`broadcast()`/`query_shared()`/`unshare()` with trust-level filtering and TTL expiry. (`strategy/sharing.py`)
+- **Entity extraction pipeline**: New `entity_extraction` pipeline step scans unprocessed memories for named entities and KG triples. Cursor-based incremental processing. (`pipeline/entity_pipeline.py`)
+- **Entity extractor**: Regex-based extraction of 6 entity types (person, technology, project, language, concept, tool) and Chinese/English SPO triples. (`core/entity_extractor.py`)
+- **DB migration 024**: Creates `entities`, `memory_entities`, `knowledge_triples`, `shared_records` tables with indexes. (`migrations/024_create_entities.py`)
+- **Schema update**: All new tables added to `SCHEMA_SQL` in `db.py` for fresh DBs.
+- **build_context() integration**: Accepts `strategy_name` parameter; injects entity/KG results into Tier 2 context.
+- **Config defaults**: `strategy` section in `_DEFAULT_CONFIG` with per-type options.
+
+### Changed
+
+- `src/memall/pipeline/pipeline.py`: Added `entity_extraction` step to `_PIPELINE_STEPS`.
+- `src/memall/core/context_assembler.py`: `build_context()` accepts `strategy_name` for strategy-aware Tier 2 injection.
+- `src/memall/config.py`: Added `strategy` section with defaults for all strategy types.
+
 ## [v0.1.49] - 2026-07-10
 
 ### Fixed

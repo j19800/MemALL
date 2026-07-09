@@ -65,6 +65,13 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "marvis_interval": 300,
         "missed_heartbeat_limit": 7,
     },
+    "strategy": {
+        "default": "buffer",
+        "buffer": {"buffer_size": 50},
+        "summary": {"trigger_after": 10, "max_sources": 20},
+        "entity": {"auto_extract": True, "extract_triples": False, "entity_boost": 1.5},
+        "kg": {"auto_extract": True, "min_level": "L6", "max_triples": 20, "traverse_depth": 1},
+    },
     "logging": {
         "level": "INFO",
     },

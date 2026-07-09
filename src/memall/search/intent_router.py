@@ -33,9 +33,14 @@ def classify(query: str) -> SearchIntent:
     cjk_count = _cjk_chars(q)
     token_count = len(q.split())
 
+    # Short Chinese queries (>=3 Chinese chars) → hybrid semantic+keyword
+    if cjk_count >= 3:
+        return SearchIntent.HYBRID_SEARCH
+    # Long content → full semantic
     if cjk_count >= 14 or token_count >= 8:
         return SearchIntent.SEMANTIC_SEARCH
-    if token_count < 4 or cjk_count < 10:
+    # Short non-CJK → FTS5 keyword
+    if token_count < 4 and cjk_count == 0:
         return SearchIntent.FACT_SEARCH
     return SearchIntent.HYBRID_SEARCH
 
