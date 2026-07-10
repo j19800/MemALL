@@ -1,6 +1,7 @@
 import logging
 import json
 import re
+import threading
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -480,32 +481,50 @@ def _capture_post_insert(conn, mem_id: int, data: MemoryInput, h: str) -> None:
         conn.execute("UPDATE memories SET arc_status = 'open' WHERE id = ?", (mem_id,))
         conn.commit()
 
-    try:
-        from memall.graph.embeddings import _auto_embed, _check_st_available
-        if _check_st_available():
-            _auto_embed(conn, mem_id, data.content, h)
-            conn.commit()
-    except Exception:
-        logger.warning("embedding auto-embed failed (install sentence-transformers for vector search)", exc_info=True)
+    # Offload heavy post-processing (embedding + dream_scan) to a background thread
+    # so the capture() caller does not block on model inference or pattern matching.
+    _bg_content = data.content
+    _bg_agent = data.agent_name
+    _bg_category = data.category
 
-    try:
-        from memall.config import get_config as _get_dream_config
-        if _get_dream_config("dream.enabled", True):
-            from memall.pipeline.dream import dream_scan
-            _dreams = dream_scan(
-                conn,
-                new_mem_id=mem_id,
-                agent_name=data.agent_name,
-                content=data.content,
-                category=data.category,
-                scan_window=_get_dream_config("dream.scan_window", 50),
-                threshold=_get_dream_config("dream.threshold", 0.4),
-            )
-            if _dreams:
-                conn.commit()
-                logger.info("capture: dream found %d conflict(s) for memory #%d", len(_dreams), mem_id)
-    except Exception:
-        logger.debug("capture: dream scan skipped (non-fatal)", exc_info=True)
+    def _background_post_process():
+        """Run embedding and dream_scan in a daemon thread."""
+        _bg_conn = get_conn()
+        try:
+            try:
+                from memall.graph.embeddings import _auto_embed, _check_st_available
+                if _check_st_available():
+                    _auto_embed(_bg_conn, mem_id, _bg_content, h)
+                    _bg_conn.commit()
+            except Exception:
+                logger.debug("bg embedding failed (sentence-transformers not installed)")
+
+            try:
+                from memall.config import get_config as _get_dream_config
+                if _get_dream_config("dream.enabled", True):
+                    from memall.pipeline.dream import dream_scan
+                    _dreams = dream_scan(
+                        _bg_conn,
+                        new_mem_id=mem_id,
+                        agent_name=_bg_agent,
+                        content=_bg_content,
+                        category=_bg_category,
+                        scan_window=_get_dream_config("dream.scan_window", 50),
+                        threshold=_get_dream_config("dream.threshold", 0.4),
+                    )
+                    _bg_conn.commit()
+            except Exception:
+                logger.debug("bg dream_scan failed")
+        finally:
+            try:
+                _bg_conn.close()
+            except Exception:
+                pass
+
+    threading.Thread(target=_background_post_process, daemon=True).start()
+
+    # Note: dream_scan results are now processed in the background thread above.
+    # The commit and logging are handled inside _background_post_process.
 
     dispatch_lifecycle(HOOK_POST_CAPTURE, data=data, memory_id=mem_id)
 

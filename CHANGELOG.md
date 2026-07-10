@@ -1,3 +1,13 @@
+## [v0.1.51] - 2026-07-10
+
+### Performance
+
+- **distill_l7: N+1 connection leak fixed**: Inner loop opened 4 separate DB connections per lesson (1200 conns for 100 L6 memories). Changed to a single shared connection. (`pipeline/distill_l7.py`)
+- **hybrid_search: N+1 memory lookups fixed**: vec0 KNN results were fetched with one SELECT per result. Changed to single `WHERE id IN (...)` query. (`core/thin_waist.py`)
+- **Missing indexes**: Added indexes on `memory_status`, `thread_id`, `pipeline_events.memory_id` for faster filtering and traversal queries. (`core/db.py`)
+- **Pre-compiled regex patterns**: Hot-path regex in `_score_quality()`, `_check_contradiction()`, `_detect_layers()`, and category detection are now compiled at module load time instead of per-call. (`core/thin_waist.py`, `pipeline/dream.py`, `pipeline/classify.py`)
+- **Async capture post-processing**: Embedding inference and dream_scan now run in a daemon thread — `capture()` returns immediately instead of blocking on model loading and pattern matching. (`core/thin_waist.py`)
+
 ## [v0.1.50] - 2026-07-10
 
 ### Added
