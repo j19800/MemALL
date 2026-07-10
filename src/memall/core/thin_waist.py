@@ -185,6 +185,10 @@ def _row_to_memory(row) -> Memory:
     )
 
 
+# Pre-compiled regex for specificity scoring in _score_quality
+_SPECIFICITY_RE = re.compile(r'\d{4}|v\d+\.\d+|[A-Z]{2,}\d*|#\d+')
+# Reasoning markers (pre-compiled)
+_REASONING_COMPILED: list[re.Pattern] = []
 _REASONING_MARKERS = [
     "因为", "所以", "根因", "原因是", "取决于", "比较", "权衡",
     "方案", "选", "采用", "决定", "结论",
@@ -192,6 +196,7 @@ _REASONING_MARKERS = [
     "问题", "瓶颈", "不足", "改进",
     "用户说", "你的意思是", "确认",
 ]
+_REASONING_COMPILED = [re.compile(p) for p in _REASONING_MARKERS]
 
 _QUALITY_DIMS = [
     "completeness",
@@ -214,10 +219,10 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
     filler = ["嗯", "那个", "然后", "所以", "呃", "啊", "好的，", "明白了，"]
     scores["clarity"] = 10 if text_len > 40 else max(0, 10 - sum(text.count(f) for f in filler) * 2)
     scores["relevance"] = 7
-    scores["specificity"] = min(10, len(re.findall(r'\d{4}|v\d+\.\d+|[A-Z]{2,}\d*|#\d+', text)) * 2)
+    scores["specificity"] = min(10, len(_SPECIFICITY_RE.findall(text)) * 2)
 
     # "reasoning" — measures whether content contains evidence/analysis language
-    reasoning_hits = sum(1 for p in _REASONING_MARKERS if re.search(p, text, re.I))
+    reasoning_hits = sum(1 for p in _REASONING_COMPILED if p.search(text))
     scores["reasoning"] = min(10, max(0, reasoning_hits * 2))
 
     scores["source_traceability"] = 8 if data.agent_name and data.owner else 4
@@ -1381,13 +1386,13 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
         vec_rows = []
         if query_vec is not None:
             vec_results = _vec0_knn(conn, query_vec, top_k * 2)
-            for vr in vec_results:
-                row = conn.execute(
-                    "SELECT id, content, subject, category, level, owner, agent_name, created_at FROM memories WHERE id = ?",
-                    (vr["memory_id"],),
-                ).fetchone()
-                if row:
-                    vec_rows.append(row)
+            if vec_results:
+                mids = [vr["memory_id"] for vr in vec_results]
+                vp = ",".join("?" * len(mids))
+                vec_rows = conn.execute(
+                    f"SELECT id, content, subject, category, level, owner, agent_name, created_at FROM memories WHERE id IN ({vp})",
+                    mids,
+                ).fetchall()
         vec_rows = _apply_meta_filters(vec_rows)
 
         if not fts_rows and not vec_rows:

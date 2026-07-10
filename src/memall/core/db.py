@@ -64,7 +64,9 @@ CREATE TABLE IF NOT EXISTS memories (
     metadata TEXT NOT NULL DEFAULT '{}',
     arc_status TEXT,
     thread_id INTEGER DEFAULT NULL,
-    agent_name_locked BOOLEAN NOT NULL DEFAULT 0
+    agent_name_locked BOOLEAN NOT NULL DEFAULT 0,
+    memory_status TEXT DEFAULT NULL,
+    accumulate_key TEXT DEFAULT NULL
 );
 
 CREATE TABLE IF NOT EXISTS edges (
@@ -111,6 +113,8 @@ CREATE INDEX IF NOT EXISTS idx_memories_hash ON memories(content_hash);
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(relation_type);
+CREATE INDEX IF NOT EXISTS idx_memories_memory_status ON memories(memory_status);
+CREATE INDEX IF NOT EXISTS idx_memories_thread ON memories(thread_id);
 
 CREATE TABLE IF NOT EXISTS clusters (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -229,6 +233,7 @@ CREATE TABLE IF NOT EXISTS pipeline_events (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     processed_at TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_pipeline_events_memory ON pipeline_events(memory_id);
 
 CREATE TABLE IF NOT EXISTS pipeline_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

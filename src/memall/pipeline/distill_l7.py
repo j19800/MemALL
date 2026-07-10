@@ -76,90 +76,80 @@ def distill_l7_step() -> dict:
     skipped = 0
     errors = 0
 
-    for row in rows:
-        text = f"{row['summary'] or ''} {row['content'] or ''}"
-        lessons = _extract_lessons(text)
-        if not lessons:
-            skipped += 1
-            continue
-        agent = row["agent_name"] or "system"
+    # Use one connection for all inner-loop operations
+    inner_conn = get_conn()
+    try:
+        for row in rows:
+            text = f"{row['summary'] or ''} {row['content'] or ''}"
+            lessons = _extract_lessons(text)
+            if not lessons:
+                skipped += 1
+                continue
+            agent = row["agent_name"] or "system"
 
-        for i, lesson in enumerate(lessons):
-            total_lessons += 1
-            try:
-                l7_content = f"[L7 教训] {lesson}"
-                ch = content_hash(l7_content)
-
-                # Dedup: skip if identical L7 already exists
-                conn2 = get_conn()
+            for i, lesson in enumerate(lessons):
+                total_lessons += 1
                 try:
-                    dup = conn2.execute(
+                    l7_content = f"[L7 教训] {lesson}"
+                    ch = content_hash(l7_content)
+
+                    # Dedup: skip if identical L7 already exists
+                    dup = inner_conn.execute(
                         "SELECT id FROM memories WHERE content_hash = ? AND level = 'L7' LIMIT 1",
                         (ch,),
                     ).fetchone()
-                finally:
-                    conn2.close()
 
-                if dup:
-                    continue
+                    if dup:
+                        continue
 
-                # Content-prefix matching: if same normalized prefix (first 40 chars)
-                # exists, weight++ instead of creating a new entry
-                prefix_key = lesson[:40].lower().strip()
-                conn_pfx = get_conn()
-                try:
-                    existing = conn_pfx.execute(
-                        "SELECT id, content, weight FROM memories "
-                        "WHERE level = 'L7' AND LOWER(SUBSTR(TRIM(REPLACE(content, '[L7 教训] ', '')), 1, 40)) = ? "
-                        "LIMIT 1",
-                        (prefix_key,),
-                    ).fetchone()
-                except sqlite3.OperationalError:
-                    existing = None
-                finally:
-                    conn_pfx.close()
-
-                if existing:
-                    new_weight = (existing["weight"] or 1) + 1
-                    conn_upd = get_conn()
+                    # Content-prefix matching: if same normalized prefix (first 40 chars)
+                    # exists, weight++ instead of creating a new entry
+                    prefix_key = lesson[:40].lower().strip()
                     try:
-                        conn_upd.execute(
+                        existing = inner_conn.execute(
+                            "SELECT id, content, weight FROM memories "
+                            "WHERE level = 'L7' AND LOWER(SUBSTR(TRIM(REPLACE(content, '[L7 教训] ', '')), 1, 40)) = ? "
+                            "LIMIT 1",
+                            (prefix_key,),
+                        ).fetchone()
+                    except sqlite3.OperationalError:
+                        existing = None
+
+                    if existing:
+                        new_weight = (existing["weight"] or 1) + 1
+                        inner_conn.execute(
                             "UPDATE memories SET weight = ?, content = ?, updated_at = datetime('now') WHERE id = ?",
                             (new_weight, l7_content, existing["id"]),
                         )
-                        conn_upd.commit()
-                    finally:
-                        conn_upd.close()
-                    src_id = existing["id"]
-                    created_l7 += 1
-                    logger.info("distill_l7: content-prefix matched → weight=%d (mem_id=%d)", new_weight, existing["id"])
-                else:
-                    src_id = capture(
-                        {
-                            "content": l7_content,
-                            "subject": f"lesson: {lesson[:60]}",
-                            "category": "reflection",
-                            "level": "L7",
-                            "owner": "system",
-                            "agent_name": agent,
-                        }
-                    )
+                        inner_conn.commit()
+                        src_id = existing["id"]
+                        created_l7 += 1
+                        logger.info("distill_l7: content-prefix matched → weight=%d (mem_id=%d)", new_weight, existing["id"])
+                    else:
+                        src_id = capture(
+                            {
+                                "content": l7_content,
+                                "subject": f"lesson: {lesson[:60]}",
+                                "category": "reflection",
+                                "level": "L7",
+                                "owner": "system",
+                                "agent_name": agent,
+                            }
+                        )
 
-                # Record edge: L7 → derived_l7_from → L6
-                conn3 = get_conn()
-                try:
-                    conn3.execute(
+                    # Record edge: L7 → derived_l7_from → L6
+                    inner_conn.execute(
                         "INSERT OR IGNORE INTO edges (source_id, target_id, relation_type, weight, metadata) "
                         "VALUES (?, ?, 'derived_l7_from', 1.0, '{}')",
                         (src_id, row["id"]),
                     )
-                    conn3.commit()
-                finally:
-                    conn3.close()
+                    inner_conn.commit()
 
-            except sqlite3.Error:
-                logger.warning("distill_l7.py: silent error", exc_info=True)
-                errors += 1
+                except sqlite3.Error:
+                    logger.warning("distill_l7.py: silent error", exc_info=True)
+                    errors += 1
+    finally:
+        inner_conn.close()
 
     return {
         "scanned": len(rows),

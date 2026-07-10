@@ -29,6 +29,11 @@ CATEGORY_RULES = [
     (r'(规则|RULE|原则|标准)', 'rule'),
 ]
 
+# Pre-compiled category patterns for hot-path performance
+_CATEGORY_COMPILED: list[tuple[re.Pattern, str]] = [
+    (re.compile(pat), cat) for pat, cat in CATEGORY_RULES
+]
+
 # ── Layer priority chain: first match wins ──
 # Each entry: (layer, markers, min_matches, min_content_len)
 # - layer: the level to assign
@@ -103,6 +108,13 @@ _LAYER_PRIORITY = [
 # Pipeline-generated layers — never assigned by keyword detection
 _PIPELINE_LAYERS = frozenset({"L9", "L10"})
 
+# Pre-compiled layer patterns for hot-path performance
+# Each entry: (layer, [compiled_patterns], min_matches, min_content_len)
+_LAYER_COMPILED: list[tuple[str, list[re.Pattern], int, int]] = [
+    (layer, [re.compile(p) for p in markers], min_matches, min_len)
+    for layer, markers, min_matches, min_len in _LAYER_PRIORITY
+]
+
 # Explicit [Lx] prefix pattern
 _PREFIX_PATTERN = re.compile(r'^\[(L10[ 　]|L[1-9])[ 　]', re.DOTALL)
 
@@ -129,13 +141,13 @@ def _detect_layers(content: str, summary: str = "",
 
     # 2. Priority chain: first matching layer wins
     content_len = len((content or "").strip())
-    for layer, markers, min_matches, min_len in _LAYER_PRIORITY:
+    for layer, markers, min_matches, min_len in _LAYER_COMPILED:
         if content_len < min_len:
             continue
         # Count how many *distinct patterns* match (not total matches)
         hits = 0
         for pat in markers:
-            if re.search(pat, text, re.IGNORECASE):
+            if pat.search(text):
                 hits += 1
                 if hits >= min_matches:
                     return {"primary": layer, "secondary": [],
@@ -234,11 +246,11 @@ def classify_step() -> dict:
 
             text = row["content"]
 
-            # Category detection (unchanged)
+            # Category detection (using pre-compiled patterns)
             best_cat = "general"
             best_score = 0
-            for pattern, cat in CATEGORY_RULES:
-                matches = re.findall(pattern, text)
+            for pattern, cat in _CATEGORY_COMPILED:
+                matches = pattern.findall(text)
                 score = len(matches)
                 if score > best_score:
                     best_score = score

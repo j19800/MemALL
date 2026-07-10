@@ -40,6 +40,12 @@ _CONTRADICT_PAIRS = [
     (r'好|优|有利|优势|优点', r'差|劣|不利|劣势|缺点|不足'),
 ]
 
+# Pre-compiled patterns for hot-path performance
+_COMPILED_PAIRS: list[tuple[re.Pattern, re.Pattern]] = [
+    (re.compile(pos, re.IGNORECASE), re.compile(neg, re.IGNORECASE))
+    for pos, neg in _CONTRADICT_PAIRS
+]
+
 # Jaccard threshold for candidate selection (lower = more candidates)
 _JACCARD_THRESHOLD = 0.15
 # Only flag clear contradictions above this threshold
@@ -51,15 +57,15 @@ _DEFAULT_SCAN_WINDOW = 50
 def _check_contradiction(text_a: str, text_b: str) -> bool:
     """Check if two texts express opposing stances on the same subject.
 
-    Uses the same CONTRADICT_PAIRS as link.py.
+    Uses pre-compiled CONTRADICT_PAIRS patterns.
     Returns True if one text takes positive stance on a topic and the other
     takes a negative stance on the same topic.
     """
-    for pos_pat, neg_pat in _CONTRADICT_PAIRS:
-        pos_a = re.search(pos_pat, text_a, re.IGNORECASE)
-        pos_b = re.search(pos_pat, text_b, re.IGNORECASE)
-        neg_a = re.search(neg_pat, text_a, re.IGNORECASE)
-        neg_b = re.search(neg_pat, text_b, re.IGNORECASE)
+    for pos_re, neg_re in _COMPILED_PAIRS:
+        pos_a = pos_re.search(text_a)
+        pos_b = pos_re.search(text_b)
+        neg_a = neg_re.search(text_a)
+        neg_b = neg_re.search(text_b)
         if (pos_a and neg_b) or (neg_a and pos_b):
             return True
     return False
