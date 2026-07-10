@@ -329,12 +329,13 @@ def forget_l5_archive(days: int = 30, limit: int = None) -> Dict[str, Any]:
             (l5_limit,),
         ).fetchall()
         archived = 0
+        conn.execute("BEGIN")
         for r in rows:
             meta = {}
             try:
                 meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else r["metadata"]
             except json.JSONDecodeError:
-                logger.warning("forget.py: silent error", exc_info=True)
+                logger.warning("forget.py: malformed metadata for memory #%d", r["id"], exc_info=True)
             if not isinstance(meta, dict):
                 continue
             status = meta.get("status", "active")
@@ -356,6 +357,9 @@ def forget_l5_archive(days: int = 30, limit: int = None) -> Dict[str, Any]:
                 archived += 1
         conn.commit()
         return {"archived": archived, "kept_active": len(rows) - archived}
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

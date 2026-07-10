@@ -57,16 +57,18 @@ def _count_memories(conn=None) -> int:
             return row[0] if row else 0
         except sqlite3.Error:
             return 0
+    # Opens its own connection — must close it
+    own_conn = None
     try:
-        conn = get_conn()
-        row = conn.execute("SELECT COUNT(*) FROM memories").fetchone()
+        own_conn = get_conn()
+        row = own_conn.execute("SELECT COUNT(*) FROM memories").fetchone()
         return row[0] if row else 0
     except sqlite3.Error:
         return 0
     finally:
-        if conn is not None:
+        if own_conn is not None:
             try:
-                conn.close()
+                own_conn.close()
             except sqlite3.Error as e:
                 logger.warning(f"Failed to close lingering connection in cleanup: {e}")
 

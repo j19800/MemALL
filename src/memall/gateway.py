@@ -268,7 +268,7 @@ class MemAllGateway:
     async def _auth_middleware(self, request: web.Request,
                                handler: Any) -> web.Response:
         """Require a valid Bearer token on all endpoints except /health, /pair and OPTIONS."""
-        if request.method == "OPTIONS" or request.path in ("/health", "/pair", "/dashboard", "/graph", "/artifact", "/features", "/metrics", "/mcp", "/static", "/v30", "/favicon.ico", "/timeline", "/api/timeline"):
+        if request.method == "OPTIONS" or request.path in ("/health", "/pair", "/dashboard", "/graph", "/artifact", "/features", "/static", "/v30", "/favicon.ico", "/timeline"):
             return await handler(request)
         err = _require_auth(request, self._auth_token)
         if err is not None:
@@ -2158,8 +2158,13 @@ class MemAllGateway:
 
     async def _handle_api_capture(self, request: web.Request) -> web.Response:
         """POST /memories — store a memory."""
-        data = await request.json()
-        mid = capture(MemoryInput(**data))
+        data = await self._read_json(request)
+        if data is None:
+            return web.json_response({"error": "invalid JSON body"}, status=400,)
+        validated, err = self._validate(data, CaptureInput)
+        if err:
+            return web.json_response({"error": err}, status=400,)
+        mid = capture(MemoryInput(**validated))
         return web.json_response({"id": mid, "status": "ok"},)
 
     async def _handle_api_search(self, request: web.Request) -> web.Response:
@@ -2590,9 +2595,8 @@ class MemAllGateway:
             _save_debt_cache({"scan": scan_result})
             return web.json_response(scan_result,)
         except Exception as e:
-            import traceback
-            return web.json_response({"error": str(e), "traceback": traceback.format_exc()},
-                                     )
+            logger.error("debt scan failed: %s", e, exc_info=True)
+            return web.json_response({"error": "debt scan failed"}, status=500)
 
     # --- Reflection / L6 ---
 

@@ -1,3 +1,14 @@
+## [v0.1.52] - 2026-07-10
+
+### Fixed
+
+- **Identity pipeline read/write mismatch**: `identity_step()` read from `profile_json` but wrote to `identity_profile`, causing identity traits to reset on every pipeline run. Changed writes to `profile_json`. (`pipeline/identity.py`)
+- **`_count_memories` connection leak**: When called with a shared connection, the `finally` block incorrectly closed the caller's connection. Added `own_conn` local variable to separate owned vs. borrowed connections. (`pipeline/pipeline.py`)
+- **`forget_l5_archive` missing transaction**: UPDATE loop ran in SQLite autocommit mode — crash mid-loop caused partial archiving with no rollback. Added explicit `BEGIN`/`COMMIT`/`ROLLBACK`. (`pipeline/forget.py`)
+- **Auth bypass for `/mcp`, `/metrics`, `/api/timeline`**: Removed from auth bypass list — these endpoints now require Bearer token. (`gateway.py`)
+- **Stack trace leak in `/debt/scan`**: Full Python traceback was returned in HTTP response on error. Replaced with safe error message; logged server-side. (`gateway.py`)
+- **`/memories` POST bypassed Pydantic validation**: Added `self._validate(data, CaptureInput)` to match the main `/capture` endpoint. (`gateway.py`)
+
 ## [v0.1.51] - 2026-07-10
 
 ### Performance

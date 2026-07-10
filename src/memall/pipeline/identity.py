@@ -122,12 +122,12 @@ def identity_step() -> dict:
 
             if row:
                 conn.execute(
-                    "UPDATE identities SET identity_profile = ?, persona_updated_at = ? WHERE LOWER(agent_name) = LOWER(?)",
+                    "UPDATE identities SET profile_json = ?, persona_updated_at = ? WHERE LOWER(agent_name) = LOWER(?)",
                     (json.dumps(profile, ensure_ascii=False), now, agent),
                 )
             else:
                 conn.execute(
-                    "INSERT INTO identities (agent_name, agent_type, identity_profile, persona_updated_at, last_heartbeat) VALUES (?, 'ai', ?, ?, ?)",
+                    "INSERT INTO identities (agent_name, agent_type, profile_json, persona_updated_at, last_heartbeat) VALUES (?, 'ai', ?, ?, ?)",
                     (agent, json.dumps(profile, ensure_ascii=False), now, now),
                 )
             updated_agents += 1
