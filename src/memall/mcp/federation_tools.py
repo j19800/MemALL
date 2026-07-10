@@ -423,13 +423,14 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject domain_knowledge failed", exc_info=True)
 
-        # ── 11. L4 recent summaries (global, for session_start) ──
+        # ── 11. L4 recent summaries (scoped to agent) ──
         l4_recent_global = []
         try:
             rows = conn.execute(
                 "SELECT id, content, summary, subject, metadata, created_at FROM memories "
-                "WHERE level = 'L4' AND LENGTH(TRIM(content)) > 5 "
-                "ORDER BY created_at DESC LIMIT 3"
+                "WHERE level = 'L4' AND LOWER(agent_name) = LOWER(?) AND LENGTH(TRIM(content)) > 5 "
+                "ORDER BY created_at DESC LIMIT 3",
+                (agent_name,),
             ).fetchall()
             for r in rows:
                 meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else r["metadata"]
@@ -445,13 +446,14 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject l4_recent failed", exc_info=True)
 
-        # ── 12. L5 active todos (global, for session_start) ──
+        # ── 12. L5 active todos (scoped to agent) ──
         l5_active_global = []
         try:
             rows = conn.execute(
                 "SELECT id, content, summary, subject, metadata, level, created_at FROM memories "
-                "WHERE level = 'L5' AND LENGTH(TRIM(content)) > 5 "
-                "ORDER BY created_at DESC LIMIT 20"
+                "WHERE level = 'L5' AND LOWER(agent_name) = LOWER(?) AND LENGTH(TRIM(content)) > 5 "
+                "ORDER BY created_at DESC LIMIT 20",
+                (agent_name,),
             ).fetchall()
             seen_subs = set()
             for r in rows:

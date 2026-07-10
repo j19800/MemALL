@@ -151,19 +151,25 @@ class TaskScheduler:
         with self._lock:
             if name not in self._tasks:
                 return
-            task = self._tasks[name]
+            task_func = self._tasks[name]["func"]
+            interval = self._tasks[name]["interval"]
 
         try:
-            task["func"]()
-            task["run_count"] += 1
+            task_func()
+            run_count_ok = True
         except Exception as e:
-            task["error_count"] += 1
+            run_count_ok = False
             logger.warning("Task '%s' failed: %s", name, e)
         finally:
-            task["last_run"] = datetime.now(timezone.utc)
-            task["next_run"] = datetime.now(timezone.utc) + timedelta(
-                seconds=task["interval"]
-            )
+            now = datetime.now(timezone.utc)
+            with self._lock:
+                if name in self._tasks:
+                    self._tasks[name]["last_run"] = now
+                    self._tasks[name]["next_run"] = now + timedelta(seconds=interval)
+                    if run_count_ok:
+                        self._tasks[name]["run_count"] += 1
+                    else:
+                        self._tasks[name]["error_count"] += 1
 
 
 # ── Built-in default tasks ─────────────────────────────────────────────

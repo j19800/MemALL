@@ -1,3 +1,16 @@
+## [v0.1.53] - 2026-07-10
+
+### Fixed
+
+- **scheduler._run_task race condition**: Task dict was modified outside the lock — `remove_task()` could race with `_run_task()`, causing stale/conflicting mutations. Now captures only `func` and `interval` under lock, updates metadata under a re-acquired lock. (`plugins/scheduler.py`)
+- **auto_inject cross-agent data leak**: L4 and L5 queries in `session_start()` fetched global memories without `agent_name` filter, leaking Agent A's tasks into Agent B's session context. Added `LOWER(agent_name) = LOWER(?)` filter. (`mcp/federation_tools.py`)
+- **check_pending_discussions LIKE fragility**: `LIKE '%"{agent_name}"%'` failed on agents with `_`/`%` in name. Replaced with `json_each()` for proper JSON array containment check. (`pipeline/convergence.py`)
+- **Discussion dedup JSON matching**: `metadata LIKE '%discussion_id\": N%'` was fragile. Replaced with `json_extract(metadata, '$.discussion_id')`. (`pipeline/convergence.py`)
+- **Env var type coercion**: `isdigit()` rejected negative numbers (`MEMALL_GATEWAY_PORT=-1` became float `-1.0`). Fixed with `lstrip('-').isdigit()` and `int(float_val)` for whole floats. (`config.py`)
+- **hook_effects metadata memory leak**: Large objects passed as metadata were pinned in ring buffer. Added value truncation (str/list/dict capped at 200 chars). (`mcp/hook_effects.py`)
+- **backup atomicity**: `VACUUM INTO` wrote directly to backup path — crash could leave corrupt file. Now writes to `.tmp` first, verifies with `PRAGMA integrity_check`, then atomic rename. (`pipeline/backup.py`)
+- **args.pop() destructive modification**: All `_handle_*` functions in `mcp/tools/__init__.py` modified caller's `args` dict via `.pop()`. Added `args = dict(args)` shallow copy at entry. (`mcp/tools/__init__.py`)
+
 ## [v0.1.52] - 2026-07-10
 
 ### Fixed

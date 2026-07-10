@@ -25,6 +25,7 @@ from . import distill
 # ──────────────────────────────────────────────
 
 def _handle_write(args: dict) -> str:
+    args = dict(args)  # shallow copy to avoid mutating caller's dict
     action = args.pop("action", "")
     if action == "capture":
         return capture.handle(args)
@@ -107,6 +108,7 @@ registry.register(ToolDef(
 # ──────────────────────────────────────────────
 
 def _handle_read(args: dict) -> str:
+    args = dict(args)
     action = args.pop("action", "")
     if action == "retrieve":
         return retrieve.handle_retrieve(args)
@@ -167,6 +169,7 @@ registry.register(ToolDef(
 # ──────────────────────────────────────────────
 
 def _handle_persona(args: dict) -> str:
+    args = dict(args)
     action = args.pop("action", "")
     if action == "persona":
         return persona.handle_persona(args)
@@ -212,6 +215,7 @@ registry.register(ToolDef(
 # ──────────────────────────────────────────────
 
 def _handle_discussion(args: dict) -> str:
+    args = dict(args)
     action = args.pop("action", "")
     if action == "create":
         return discussion.handle_create(args)
@@ -255,6 +259,7 @@ registry.register(ToolDef(
 # ──────────────────────────────────────────────
 
 def _handle_federation(args: dict) -> str:
+    args = dict(args)
     action = args.pop("action", "")
     if action == "query":
         return federation.handle_query(args)
@@ -301,6 +306,7 @@ registry.register(ToolDef(
 # ──────────────────────────────────────────────
 
 def _handle_system(args: dict) -> str:
+    args = dict(args)
     action = args.pop("action", "")
     if action == "run_pipeline":
         return pipeline.handle(args)

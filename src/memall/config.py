@@ -191,13 +191,15 @@ def _apply_env_overrides(config: Dict[str, Any]) -> Dict[str, Any]:
 
         # Type coercion
         coerced: Any = env_val
-        if env_val.isdigit():
+        if env_val.lstrip("-").isdigit():
             coerced = int(env_val)
         elif env_val.lower() in ("true", "false"):
             coerced = env_val.lower() == "true"
         else:
             try:
                 coerced = float(env_val)
+                if coerced == int(coerced):
+                    coerced = int(coerced)
             except ValueError:
                 coerced = env_val
 

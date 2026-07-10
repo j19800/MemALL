@@ -55,13 +55,23 @@ def record_event(
         plugin: Plugin name that produced this event (empty = core system).
     """
     global _counter
+    # Truncate metadata values to prevent memory accumulation from large objects
+    safe_meta: dict[str, Any] = {}
+    for k, v in metadata.items():
+        if isinstance(v, str) and len(v) > 200:
+            safe_meta[k] = v[:200]
+        elif isinstance(v, (list, dict)):
+            s = str(v)
+            safe_meta[k] = s[:200] if len(s) > 200 else v
+        else:
+            safe_meta[k] = v
     event = HookEvent(
         hook_point=hook_point,
         description=description,
         elapsed_ms=elapsed_ms,
         status=status,
         plugin=plugin,
-        metadata=metadata,
+        metadata=safe_meta,
     )
     with _lock:
         _buffer.append(event)

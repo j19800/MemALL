@@ -11,10 +11,23 @@ def backup_step() -> dict:
     backup_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = backup_dir / f"data_{stamp}.db"
+    tmp_path = backup_dir / f"data_{stamp}.tmp"
 
     conn = get_conn()
     try:
-        conn.execute("VACUUM INTO ?", (str(backup_path),))
+        # Write to temp file first for atomicity
+        conn.execute("VACUUM INTO ?", (str(tmp_path),))
+        # Verify the backup is valid
+        import sqlite3
+        try:
+            verify = sqlite3.connect(str(tmp_path))
+            verify.execute("PRAGMA integrity_check").fetchone()
+            verify.close()
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            return {"status": "error", "reason": "backup integrity check failed"}
+        # Atomic rename
+        tmp_path.rename(backup_path)
     finally:
         conn.close()
 

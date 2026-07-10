@@ -641,10 +641,12 @@ def check_pending_discussions(agent_name: str) -> list[dict]:
     try:
         # Only fetch discussions where this agent is a participant
         rows = conn.execute(
-            "SELECT * FROM memories WHERE level='L5' AND category='discussion' "
-            "AND json_extract(metadata, '$.status') = 'active' "
-            "AND json_extract(metadata, '$.participants') LIKE ?",
-            (f'%"{agent_name}"%',),
+            "SELECT DISTINCT m.* FROM memories m "
+            "JOIN json_each(json_extract(m.metadata, '$.participants')) AS p "
+            "WHERE m.level='L5' AND m.category='discussion' "
+            "AND json_extract(m.metadata, '$.status') = 'active' "
+            "AND LOWER(p.value) = LOWER(?)",
+            (agent_name,),
         ).fetchall()
 
         pending = []
@@ -664,8 +666,9 @@ def check_pending_discussions(agent_name: str) -> list[dict]:
             one_hour_ago = (now - timedelta(hours=1)).isoformat()
             existing = conn.execute(
                 "SELECT id FROM memories WHERE agent_name = ? AND level = 'P2' "
-                "AND category = 'discussion_pending' AND metadata LIKE ? AND created_at > ?",
-                (agent_name, f"%discussion_id\": {disc['id']}%", one_hour_ago),
+                "AND category = 'discussion_pending' "
+                "AND json_extract(metadata, '$.discussion_id') = ? AND created_at > ?",
+                (agent_name, str(disc["id"]), one_hour_ago),
             ).fetchone()
             if existing:
                 continue
