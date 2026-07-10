@@ -233,23 +233,19 @@ def build_context(
         t1_lines = _build_tier1(agent_name, conn)
         t2_lines = _build_tier2(agent_name, query, conn)
 
-        # Strategy-aware injection: entity/KG results into Tier 2
+        # Strategy-aware injection: use strategy.retrieve() for augmented results
         if strategy_name and query:
             try:
                 from memall.strategy.registry import get_strategy
                 strategy = get_strategy(agent_name, strategy_name)
-                if hasattr(strategy, "_entity_aware_retrieve"):
-                    entity_hits = strategy._entity_aware_retrieve(query, 5)  # type: ignore
-                    for hit in entity_hits:
-                        text = hit.get("content", "")[:200]
+                # The strategy's retrieve() already incorporates augmentation
+                # (entity/KG results merged inside the strategy implementation)
+                strategy_results = strategy.retrieve(query, top_k=5)
+                if isinstance(strategy_results, list):
+                    for hit in strategy_results:
+                        text = hit.get("content", "")[:200] if isinstance(hit, dict) else str(hit)[:200]
                         if text:
-                            t2_lines.append(f"[Entity] {text}")
-                elif hasattr(strategy, "_kg_augmented_retrieve"):
-                    kg_hits = strategy._kg_augmented_retrieve(query, 5)  # type: ignore
-                    for hit in kg_hits:
-                        text = hit.get("content", "")[:200]
-                        if text:
-                            t2_lines.append(f"[KG] {text}")
+                            t2_lines.append(f"[Strategy] {text}")
             except Exception as e:
                 logger.debug("Strategy injection failed: %s", e)
 

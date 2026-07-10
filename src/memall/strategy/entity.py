@@ -45,13 +45,7 @@ class EntityStrategy(MemoryStrategy):
         """Store and extract entities from content."""
         mem_id = _capture(data, **overrides)
         if self.auto_extract:
-            # Get content from the stored data
-            if isinstance(data, MemoryInput):
-                content = data.content
-            elif isinstance(data, dict):
-                content = data.get("content", "")
-            else:
-                content = str(data)
+            content = self._get_content(data)
             if content:
                 self._extract_and_link(mem_id, content)
         return mem_id
@@ -122,22 +116,4 @@ class EntityStrategy(MemoryStrategy):
             return [dict(r) for r in rows]
 
     def _merge_results(self, standard: list, entity_results: list[dict], top_k: int) -> list:
-        """Deduplicate and merge standard + entity results."""
-        seen: set[int] = set()
-        merged: list = []
-
-        for r in standard:
-            mid = r.get("id") if isinstance(r, dict) else getattr(r, "id", None)
-            if mid and mid not in seen:
-                seen.add(mid)
-                merged.append(r)
-
-        for r in entity_results:
-            mid = r.get("id")
-            if mid and mid not in seen:
-                seen.add(mid)
-                # Add entity boost marker
-                r["_entity_match"] = True
-                merged.append(r)
-
-        return merged[:top_k]
+        return super()._merge_results(standard, entity_results, top_k, "_entity_match")

@@ -87,3 +87,60 @@ class MemoryStrategy(ABC):
             Count of items cleared.
         """
         return 0
+
+    # ── Shared helpers ──────────────────────────────────────────────
+
+    @staticmethod
+    def _get_content(data: MemoryInput | dict | str) -> str:
+        """Extract content string from various input types."""
+        if isinstance(data, MemoryInput):
+            return data.content or ""
+        if isinstance(data, dict):
+            return data.get("content", "")
+        return str(data)
+
+    @staticmethod
+    def _get_level(data: MemoryInput | dict | str) -> str:
+        """Extract level string from various input types."""
+        if isinstance(data, MemoryInput):
+            return data.level or ""
+        if isinstance(data, dict):
+            return data.get("level", "")
+        return ""
+
+    @staticmethod
+    def _merge_results(
+        standard: list,
+        augmented: list[dict],
+        top_k: int,
+        marker_key: str = "_augmented",
+    ) -> list:
+        """Deduplicate standard results and append unseen augmented results.
+
+        Args:
+            standard: Results from standard retrieval.
+            augmented: Results from strategy-specific augmentation.
+            top_k: Maximum total results.
+            marker_key: Key to set on appended results (e.g. ``_entity_match``).
+
+        Returns:
+            Merged list, deduplicated by ``id``, capped at ``top_k``.
+        """
+        seen: set[int] = set()
+        merged: list = []
+
+        for r in standard:
+            mid = r.get("id") if isinstance(r, dict) else getattr(r, "id", None)
+            if mid and mid not in seen:
+                seen.add(mid)
+                merged.append(r)
+
+        for r in augmented:
+            mid = r.get("id")
+            if mid and mid not in seen:
+                seen.add(mid)
+                if marker_key:
+                    r[marker_key] = True
+                merged.append(r)
+
+        return merged[:top_k]

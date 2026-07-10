@@ -90,8 +90,7 @@ class KGStrategy(MemoryStrategy):
             {"entity": entity_name, "entities": [...], "triples": [...],
              "memories": [...]}
         """
-        conn = get_conn()
-        try:
+        with pool_conn() as conn:
             entity_row = conn.execute(
                 "SELECT id FROM entities WHERE LOWER(name) = LOWER(?) LIMIT 1",
                 (entity_name,),
@@ -159,20 +158,13 @@ class KGStrategy(MemoryStrategy):
                 "memories": [dict(r) for r in memory_rows],
             }
 
-        finally:
-            conn.close()
-
     def _should_extract(self, level: str) -> bool:
         """Check if memory level qualifies for triple extraction."""
         prio = _LEVEL_PRIORITY.get(level, 2)
         return prio >= self._min_priority
 
     def _get_content(self, data: MemoryInput | dict | str) -> str:
-        if isinstance(data, MemoryInput):
-            return data.content or ""
-        if isinstance(data, dict):
-            return data.get("content", "")
-        return str(data)
+        return super()._get_content(data)
 
     def _extract_and_store_triples(self, mem_id: int, content: str):
         """Extract triples and persist to knowledge_triples table."""
@@ -200,8 +192,7 @@ class KGStrategy(MemoryStrategy):
         if not entities:
             return []
 
-        conn = get_conn()
-        try:
+        with pool_conn() as conn:
             # Find entity IDs
             entity_names = [e["name"] for e in entities]
             placeholders = ",".join("?" * len(entity_names))
@@ -242,24 +233,5 @@ class KGStrategy(MemoryStrategy):
             ).fetchall()
             return [dict(r) for r in rows]
 
-        finally:
-            conn.close()
-
     def _merge_results(self, standard: list, kg_results: list[dict], top_k: int) -> list:
-        seen: set[int] = set()
-        merged: list = []
-
-        for r in standard:
-            mid = r.get("id") if isinstance(r, dict) else getattr(r, "id", None)
-            if mid and mid not in seen:
-                seen.add(mid)
-                merged.append(r)
-
-        for r in kg_results:
-            mid = r.get("id")
-            if mid and mid not in seen:
-                seen.add(mid)
-                r["_kg_match"] = True
-                merged.append(r)
-
-        return merged[:top_k]
+        return super()._merge_results(standard, kg_results, top_k, "_kg_match")

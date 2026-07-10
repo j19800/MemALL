@@ -41,9 +41,9 @@ _ZH_TECH_PATTERN = re.compile(
     r'(?:使用|用|基于|采用|借助)([A-Za-z0-9一-鿿]{2,40}(?:技术|框架|库|工具|平台|系统))'
 )
 
-# Person references (Chinese and English)
+# Person references (Chinese and English) — handle @ with optional whitespace
 _PERSON_PATTERN = re.compile(
-    r'(?:@|作者|创始人|开发者|维护者)([A-Za-z一-鿿]{2,20})'
+    r'(?:@\s*|作者|创始人|开发者|维护者)([A-Za-z一-鿿]{2,20})'
 )
 
 # Project references
@@ -51,10 +51,11 @@ _PROJECT_PATTERN = re.compile(
     r'(?:项目|工程|仓库|repo)\s*[:：]?\s*([A-Za-z0-9_\-一-鿿]{2,40})'
 )
 
-# Language references
+# Language references — C++ and C# need special handling (no trailing \b)
 _LANG_PATTERN = re.compile(
-    r'\b(Python|JavaScript|TypeScript|Rust|Go\b|Java|Kotlin|Swift|'
-    r'C\+\+|C#|Ruby|PHP|Scala|Elixir|Haskell|Clojure|Dart|Lua)\b'
+    r'(?:\b(Python|JavaScript|TypeScript|Rust|Go\b|Java|Kotlin|Swift|'
+    r'C\s*\+\s*\+|C\s*#|Ruby|PHP|Scala|Elixir|Haskell|Clojure|Dart|Lua)\b'
+    r'|(?<![A-Za-z])(C\+\+|C#)(?![A-Za-z\+#]))'
 )
 
 # ── Triple extraction patterns ───────────────────────────────────
@@ -210,17 +211,34 @@ def resolve_entity(name: str, entity_type: str, conn) -> int:
         "SELECT id FROM entities WHERE name = ? AND entity_type = ?",
         (name.strip(), entity_type),
     ).fetchone()
+    if not row:
+        # Race: INSERT might have been rolled back or concurrently deleted.
+        # Re-attempt the INSERT and SELECT once more.
+        conn.execute(
+            "INSERT OR IGNORE INTO entities (name, entity_type, canonical_name, metadata, created_at, updated_at) "
+            "VALUES (?, ?, ?, '{}', ?, ?)",
+            (name.strip(), entity_type, name.strip(), now, now),
+        )
+        row = conn.execute(
+            "SELECT id FROM entities WHERE name = ? AND entity_type = ?",
+            (name.strip(), entity_type),
+        ).fetchone()
     if row:
         conn.execute(
             "UPDATE entities SET updated_at = ? WHERE id = ?",
             (now, row["id"]),
         )
         return row["id"]
+    # Both attempts failed — log and return 0 (caller should handle)
+    logger.warning("resolve_entity failed for %s (%s)", name, entity_type)
+    return 0
     return 0
 
 
 def _infer_type(name: str) -> str:
     """Guess entity type from name heuristics."""
+    if not name:
+        return "concept"
     if name[0].isupper() and not name[0].isascii():
         return "concept"
     if name.isupper() and len(name) <= 8:
@@ -239,4 +257,8 @@ def _snippet(text: str, pos: int, width: int = 60) -> str:
         snippet = "..." + snippet
     if end < len(text):
         snippet = snippet + "..."
-    return snippet[:80]
+    # Preserve ellipsis markers by making room before truncation
+    max_len = 80
+    if len(snippet) > max_len:
+        snippet = snippet[:max_len - 3] + "..."
+    return snippet

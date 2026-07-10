@@ -339,41 +339,45 @@ def _handle_system(args: dict) -> str:
         return index.handle(args)
     elif action in ("digest", "每日摘要", "日报", "总结"):
         # Daily digest — count today's memories by category with content snippets
-        from memall.core.thin_waist import hybrid_search
         import json, datetime
-        from memall.core.db import get_conn
-        conn = get_conn()
+        from memall.core.db import pool_conn
         now_utc = datetime.datetime.utcnow()
-        today_start = (now_utc - datetime.timedelta(hours=8)).strftime("%Y-%m-%d 16:00:00")
-        today_end = (now_utc + datetime.timedelta(hours=16)).strftime("%Y-%m-%d 15:59:59")
-        rows = conn.execute(
-            "SELECT category, level, COUNT(*) as cnt FROM memories "
-            "WHERE created_at BETWEEN ? AND ? "
-            "GROUP BY category, level ORDER BY cnt DESC LIMIT 15",
-            (today_start, today_end)
-        ).fetchall()
-        total = sum(r[2] for r in rows)
-        if not rows:
-            return json.dumps({"date": datetime.date.today().isoformat(), "total": 0, "message": "今天暂无新记忆"})
-        categories = {}
-        for cat, lvl, cnt in rows:
-            categories.setdefault(cat, {"total": 0, "levels": {}, "samples": []})
-            categories[cat]["total"] += cnt
-            categories[cat]["levels"][lvl] = cnt
-        # Add sample content for each category
-        for cat in categories:
-            samples = conn.execute(
-                "SELECT subject, summary, content FROM memories "
-                "WHERE category = ? AND created_at BETWEEN ? AND ? AND subject != '' "
-                "ORDER BY created_at DESC LIMIT 3",
-                (cat, today_start, today_end)
+        # Compute today's date in UTC+8, then convert boundaries to UTC
+        now_utc8 = now_utc + datetime.timedelta(hours=8)
+        today_date = now_utc8.date()
+        today_start = datetime.datetime(today_date.year, today_date.month, today_date.day) \
+                     - datetime.timedelta(hours=8)
+        today_end = today_start + datetime.timedelta(hours=24) - datetime.timedelta(seconds=1)
+        today_start_s = today_start.strftime("%Y-%m-%d %H:%M:%S")
+        today_end_s = today_end.strftime("%Y-%m-%d %H:%M:%S")
+        with pool_conn() as conn:
+            rows = conn.execute(
+                "SELECT category, level, COUNT(*) as cnt FROM memories "
+                "WHERE created_at BETWEEN ? AND ? "
+                "GROUP BY category, level ORDER BY cnt DESC LIMIT 15",
+                (today_start_s, today_end_s)
             ).fetchall()
-            categories[cat]["samples"] = [
-                {"subject": s[0], "summary": (s[1] or s[2])[:80] if s[2] else ""}
-                for s in samples
-            ]
-        conn.close()
-        return json.dumps({"date": datetime.date.today().isoformat(), "total": total, "categories": categories}, ensure_ascii=False, default=str)
+            total = sum(r[2] for r in rows)
+            if not rows:
+                return json.dumps({"date": today_date.isoformat(), "total": 0, "message": "今天暂无新记忆"})
+            categories = {}
+            for cat, lvl, cnt in rows:
+                categories.setdefault(cat, {"total": 0, "levels": {}, "samples": []})
+                categories[cat]["total"] += cnt
+                categories[cat]["levels"][lvl] = cnt
+            # Add sample content for each category
+            for cat in categories:
+                samples = conn.execute(
+                    "SELECT subject, summary, content FROM memories "
+                    "WHERE category = ? AND created_at BETWEEN ? AND ? AND subject != '' "
+                    "ORDER BY created_at DESC LIMIT 3",
+                    (cat, today_start_s, today_end_s)
+                ).fetchall()
+                categories[cat]["samples"] = [
+                    {"subject": s[0], "summary": (s[1] or s[2])[:80] if s[2] else ""}
+                    for s in samples
+                ]
+        return json.dumps({"date": today_date.isoformat(), "total": total, "categories": categories}, ensure_ascii=False, default=str)
     elif action in ("hot", "热门", "热点", "热榜"):
         # Hot topics — most accessed or recently active memories
         from memall.core.db import get_conn
