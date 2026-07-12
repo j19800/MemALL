@@ -649,6 +649,16 @@ def session_end(session_id: str, auto_extract: bool = False) -> dict:
             "status": "ended",
         }
 
+        # Auto-create L4/L6 session summary via harvest
+        try:
+            if count > 3 and agent_name:
+                harvest = _harvest_session(conn, session_id, started_at, agent_name, end_session=False)
+                if harvest.get("l4_id") or harvest.get("memories"):
+                    result["l4_id"] = harvest.get("l4_id")
+                    result["l6_id"] = harvest.get("l6_id")
+        except Exception:
+            logger.warning("session_end harvest failed", exc_info=True)
+
         # Phase 8: auto-extract facts to shared_memories
         if auto_extract:
             from memall.mcp.federation_tools import auto_extract as _auto_extract

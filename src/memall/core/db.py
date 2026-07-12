@@ -115,6 +115,7 @@ CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(relation_type);
 CREATE INDEX IF NOT EXISTS idx_memories_memory_status ON memories(memory_status);
 CREATE INDEX IF NOT EXISTS idx_memories_thread ON memories(thread_id);
+CREATE INDEX IF NOT EXISTS idx_identities_agent_lower ON identities(LOWER(agent_name));
 
 CREATE TABLE IF NOT EXISTS clusters (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
