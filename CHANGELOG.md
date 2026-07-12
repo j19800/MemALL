@@ -1,3 +1,9 @@
+## [v0.1.54] - 2026-07-10
+
+### Added
+
+- **MCP tool input validation**: Registered 30 Pydantic models in `_ACTION_MODELS` mapping `(tool_name, action)` → model. `validate_tool_input()` now dispatches to the correct model and returns structured validation errors on invalid input. Validation was previously a no-op (`TOOL_VALIDATORS` was empty). (`mcp/validator.py`)
+
 ## [v0.1.53] - 2026-07-10
 
 ### Fixed
