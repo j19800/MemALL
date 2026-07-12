@@ -42,7 +42,7 @@ def _get_agent_memories(agent_name: str) -> List[Dict[str, Any]]:
     for row in memories:
         mem_id = row[0]
         edges = conn.execute(
-            "SELECT source_id, target_id, relation, weight FROM edges WHERE source_id = ? OR target_id = ?",
+            "SELECT source_id, target_id, relation_type, weight FROM edges WHERE source_id = ? OR target_id = ?",
             (mem_id, mem_id),
         ).fetchall()
 
