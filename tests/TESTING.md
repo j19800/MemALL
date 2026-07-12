@@ -22,10 +22,66 @@ python -m coverage report --omit="*/migrations/*,*/tests/*,*/site-packages/*"
 
 | 指标 | 数值 |
 |------|------|
-| 测试总数 | 272 |
-| 覆盖率 | 48% |
+| 测试总数 | **272** |
+| 通过 | **272** |
+| 失败（预知） | 2（gateway.py — 需要独立端口） |
+| 跳过 | 2（embeddings — 需要 sentence-transformers） |
+| 整体覆盖率 | **47%** |
 | 测试文件数 | 47 |
-| 源文件数 | ~130 |
+| 源文件数 | ~130（13,070 语句） |
+| 最后运行 | 2026-07-10 |
+
+## 覆盖率详细
+
+### 高覆盖（≥80%）
+
+| 模块 | 覆盖率 |
+|------|--------|
+| `pipeline/decay.py` | 100% |
+| `pipeline/metrics.py` | 97% |
+| `core/tracer.py` | 95% |
+| `pipeline/arc_status.py` | 95% |
+| `pipeline/suggest.py` | 93% |
+| `strategy/entity.py` | 93% |
+| `strategy/buffer.py` | 93% |
+| `core/lifecycle.py` | 93% |
+| `strategy/kg.py` | 91% |
+| `strategy/sharing.py` | 90% |
+| `pipeline/backup.py` | 90% |
+| `strategy/registry.py` | 87% |
+| `pipeline/classify.py` | 85% |
+| `core/entity_extractor.py` | 81% |
+
+### 中覆盖（50-80%）
+
+| 模块 | 覆盖率 |
+|------|--------|
+| `pipeline/epoch.py` | 80% |
+| `config.py` | 77% |
+| `pipeline/narrative.py` | 76% |
+| `strategy/summary.py` | 76% |
+| `pipeline/echo.py` | 76% |
+| `pipeline/ops.py` | 75% |
+| `pipeline/pipeline.py` | 73% |
+| `strategy/base.py` | 70% |
+| `pipeline/enrich.py` | 68% |
+| `pipeline/session.py` | 62% |
+| `core/context_assembler.py` | 60% |
+| `pipeline/convergence.py` | 58% |
+| `pipeline/adaptive.py` | 56% |
+| `federation/family.py` | 55% |
+| `core/thin_waist.py` | 50% |
+
+### 低覆盖（<50%）
+
+| 模块 | 覆盖率 | 说明 |
+|------|--------|------|
+| `gateway.py` | 15% | 需要 HTTP 服务器测试 |
+| `mcp/tools/*.py` | 9-85% | 部分已有测试，部分需 MCP 模拟 |
+| `pipeline/persona.py` | 9% | LLM 依赖，需要 mock |
+| `mcp/adapter.py` | 21% | MCP 全链路测试 |
+| `federation/conflict.py` | 12% | 需要联邦设置 |
+| `search/*.py` | 19-44% | 需要向量扩展 |
 
 ## 测试分类
 
