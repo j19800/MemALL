@@ -9,7 +9,7 @@ from typing import Optional
 from .db import get_pool, content_hash
 from .models import Memory, MemoryInput
 from .nlp import cosine_sim, compute_tfidf
-from memall.mcp.hooks import (dispatch_lifecycle, HOOK_PRE_CAPTURE,
+from memall.core.lifecycle import (dispatch_lifecycle, HOOK_PRE_CAPTURE,
                               HOOK_POST_CAPTURE, HOOK_PRE_STORE,
                               HOOK_POST_STORE, HOOK_PRE_RETRIEVE,
                               HOOK_POST_RETRIEVE, HOOK_PRE_SEARCH,

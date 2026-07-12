@@ -1,3 +1,9 @@
+## [v0.1.55] - 2026-07-10
+
+### Refactored
+
+- **Eliminated `core → mcp` layer violation**: Moved `HookRegistry`, `dispatch_lifecycle`, `HookDef`, `hook()`, `_match_tool()`, and all 20 `HOOK_*` constants from `mcp/hooks.py` to new `core/lifecycle.py`. The `core/thin_waist.py` and `pipeline/pipeline.py` now import from `core.lifecycle` instead of `mcp.hooks`. `mcp/hooks.py` remains as a thin re-export module for backward compatibility. Layering is now: `core ← pipeline ← mcp ← gateway/cli`. (`core/lifecycle.py`)
+
 ## [v0.1.54] - 2026-07-10
 
 ### Added

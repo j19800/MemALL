@@ -9,9 +9,9 @@ from functools import partial
 from .metrics import collect_metrics, append_metrics
 from memall.core.db import get_conn
 from memall.core.tracer import span as trace_span
-from memall.mcp.hooks import HookRegistry, HOOK_STOP, dispatch_lifecycle
-from memall.mcp.hooks import HOOK_PRE_PIPELINE, HOOK_POST_PIPELINE
-from memall.mcp.hooks import HOOK_PRE_STEP, HOOK_STEP_OK, HOOK_STEP_FAIL
+from memall.core.lifecycle import HookRegistry, HOOK_STOP, dispatch_lifecycle
+from memall.core.lifecycle import HOOK_PRE_PIPELINE, HOOK_POST_PIPELINE
+from memall.core.lifecycle import HOOK_PRE_STEP, HOOK_STEP_OK, HOOK_STEP_FAIL
 
 logger = logging.getLogger(__name__)
 
