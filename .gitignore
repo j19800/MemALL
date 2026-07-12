@@ -152,4 +152,4 @@ src/memall/bridge/inboxes/
 # ── Output / test artifacts ──
 output/
 test_frontend.html
-test_mcp_*.jsonl
+test_mcp_*.jsonl.coverage
