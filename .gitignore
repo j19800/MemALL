@@ -153,3 +153,4 @@ src/memall/bridge/inboxes/
 output/
 test_frontend.html
 test_mcp_*.jsonl.coverage
+test_mcp_tool.jsonl
