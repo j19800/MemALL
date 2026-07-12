@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 def test_normalize_agent_name():
+    """normalize_agent_name should lowercase and strip."""
     from memall.core.thin_waist import normalize_agent_name
     assert normalize_agent_name("Alice") == "alice"
     assert normalize_agent_name("  Bob  ") == "bob"
@@ -21,6 +22,7 @@ def test_normalize_agent_name():
 
 
 def test_connect_basic():
+    """connect() should create an edge between two memories."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
     from memall.core.thin_waist import connect
     from memall.core.db import get_conn, pool_conn
@@ -46,6 +48,7 @@ def test_connect_basic():
 
 
 def test_connect_self_rejected():
+    """Self-connection should be rejected."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
     from memall.core.thin_waist import connect
     from memall.core.db import get_conn
@@ -66,6 +69,7 @@ def test_connect_self_rejected():
 
 
 def test_connect_duplicate():
+    """Duplicate edge should return same ID (idempotent)."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
     from memall.core.thin_waist import connect
     from memall.core.db import get_conn
@@ -86,6 +90,7 @@ def test_connect_duplicate():
 
 
 def test_traverse_basic():
+    """traverse() should return connected nodes and edges."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
     from memall.core.thin_waist import connect, traverse
     from memall.core.db import get_conn
@@ -109,6 +114,7 @@ def test_traverse_basic():
 
 
 def test_traverse_depth_limit():
+    """traverse() should respect depth parameter."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
     from memall.core.thin_waist import connect, traverse
     from memall.core.db import get_conn
@@ -131,6 +137,7 @@ def test_traverse_depth_limit():
 
 
 def test_traverse_nonexistent():
+    """Traverse from nonexistent ID should not crash."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db
     from memall.core.thin_waist import traverse
 
@@ -145,6 +152,7 @@ def test_traverse_nonexistent():
 
 
 def test_update_rejects_invalid_field():
+    """Invalid fields should be silently ignored."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
     from memall.core.thin_waist import update
     from memall.core.db import get_conn
@@ -164,6 +172,7 @@ def test_update_rejects_invalid_field():
 
 
 def test_smart_store_dedup():
+    """smart_store should accept valid content."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db
     from memall.core.thin_waist import smart_store
 
@@ -178,6 +187,7 @@ def test_smart_store_dedup():
 
 
 def test_normalize_rejects_blacklisted():
+    """Blacklisted names should fall back to system."""
     from memall.core.thin_waist import normalize_agent_name
     blacklisted = ["architecture", "brainstorm", "unknown", "session_active", "general"]
     for name in blacklisted:
@@ -187,6 +197,7 @@ def test_normalize_rejects_blacklisted():
 
 
 def test_normalize_rejects_template_leak():
+    """Template patterns should fall back to system."""
     from memall.core.thin_waist import normalize_agent_name
     result = normalize_agent_name("{{agent_name}}")
     assert result == "system", f"Template leak should become 'system', got '{result}'"
@@ -196,6 +207,7 @@ def test_normalize_rejects_template_leak():
 
 
 def test_capture_rejects_empty():
+    """Empty content should raise ValueError."""
     from memall.core.thin_waist import capture
     from tests.test_helpers import init_temp_db, cleanup_temp_db
 
@@ -211,6 +223,7 @@ def test_capture_rejects_empty():
 
 
 def test_retrieve_by_level():
+    """Retrieve with level filter should return correct level."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db
     from memall.core.thin_waist import capture, retrieve
     from memall.core.models import MemoryInput

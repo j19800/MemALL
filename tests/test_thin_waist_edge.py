@@ -44,6 +44,7 @@ def test_quality_gate_accepts_with_reasoning():
 
 
 def test_store_batch_basic():
+    """store_batch should store multiple items."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db
     from memall.core.thin_waist import store_batch
 
@@ -62,6 +63,7 @@ def test_store_batch_basic():
 
 
 def test_connect_invalid_relation():
+    """Invalid relation_type should raise ValueError."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
     from memall.core.thin_waist import connect
     from memall.core.db import get_conn

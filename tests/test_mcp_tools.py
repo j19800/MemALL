@@ -32,6 +32,7 @@ def test_mcp_write_capture_handler():
 
 
 def test_mcp_write_smart_store():
+    """_handle_write with smart_store should work."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db
     from memall.mcp.tools.__init__ import _handle_write
     import json
@@ -51,6 +52,7 @@ def test_mcp_write_smart_store():
 
 
 def test_mcp_write_forget_action():
+    """_handle_write with forget/stats should work."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db
     from memall.mcp.tools.__init__ import _handle_write
     import json
@@ -70,6 +72,7 @@ def test_mcp_write_forget_action():
 
 
 def test_mcp_write_quick_action():
+    """_handle_write with quick action should work."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db
     from memall.mcp.tools.__init__ import _handle_write
     import json
@@ -89,6 +92,7 @@ def test_mcp_write_quick_action():
 
 
 def test_mcp_read_retrieve():
+    """_handle_read with retrieve should return results."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db
     from memall.mcp.tools.__init__ import _handle_read
     from memall.core.thin_waist import capture
@@ -109,6 +113,7 @@ def test_mcp_read_retrieve():
 
 
 def test_mcp_persona_identity():
+    """_handle_persona with identity should work."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db
     from memall.mcp.tools.__init__ import _handle_persona
     import json
@@ -127,6 +132,7 @@ def test_mcp_persona_identity():
 
 
 def test_mcp_discussion_status():
+    """_handle_discussion with status should work."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db
     from memall.mcp.tools.__init__ import _handle_discussion
     import json
@@ -144,6 +150,7 @@ def test_mcp_discussion_status():
 
 
 def test_mcp_hooks_recent():
+    """_handle_hooks should return recent events."""
     from memall.mcp.tools.__init__ import _handle_hooks
     import json
 
@@ -154,6 +161,7 @@ def test_mcp_hooks_recent():
 
 
 def test_mcp_write_connect():
+    """_handle_write with connect should create edge."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
     from memall.mcp.tools.__init__ import _handle_write
     from memall.core.db import get_conn
@@ -180,6 +188,7 @@ def test_mcp_write_connect():
 
 
 def test_mcp_read_timeline():
+    """_handle_read with timeline should work."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db
     from memall.mcp.tools.__init__ import _handle_read
     import json
@@ -195,6 +204,7 @@ def test_mcp_read_timeline():
 
 
 def test_mcp_system_gateway():
+    """_handle_system with gateway should work."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db
     from memall.mcp.tools.__init__ import _handle_system
     import json

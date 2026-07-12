@@ -25,6 +25,7 @@ def test_kg_should_extract_threshold():
 
 
 def test_kg_default_config():
+    """KG default config values should be correct."""
     from memall.strategy.kg import KGStrategy
     s = KGStrategy("cfg_test")
     assert s.min_level == "L6"
@@ -35,6 +36,7 @@ def test_kg_default_config():
 
 
 def test_kg_custom_config():
+    """KG custom config should override defaults."""
     from memall.strategy.kg import KGStrategy
     s = KGStrategy("cfg_test", {"min_level": "L4", "max_triples": 5, "traverse_depth": 2})
     assert s.min_level == "L4"

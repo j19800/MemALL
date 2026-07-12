@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 def test_share_and_query():
+    """Share a memory and verify it appears in query."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
     from memall.strategy.sharing import MemorySharing
     from memall.core.db import get_conn
@@ -121,6 +122,7 @@ def test_query_shared_trust_filter():
 
 
 def test_get_shared_stats():
+    """get_shared_stats should return sharing counts."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
     from memall.strategy.sharing import MemorySharing
     from memall.core.db import get_conn
