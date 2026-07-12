@@ -36,8 +36,7 @@ def _vacuum_backup(source: Path, dest: Path) -> bool:
     import sqlite3
     try:
         conn = sqlite3.connect(str(source), timeout=10)
-        safe_dest = str(dest).replace("'", "''")
-        conn.execute(f"VACUUM INTO '{safe_dest}'")
+        conn.execute("VACUUM INTO ?", (str(dest),))
         conn.close()
         return True
     except sqlite3.OperationalError:

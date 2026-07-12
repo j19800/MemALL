@@ -195,7 +195,11 @@ def _input(prompt: str) -> str:
 
 
 def start(user_id: str = "default", step: int = None) -> dict:
-    _ensure_table(get_conn())
+    conn = get_conn()
+    try:
+        _ensure_table(conn)
+    finally:
+        conn.close()
     status = _get_status(user_id)
     if status["completed"]:
         return {"status": "already_completed", "message": "新手引导已完成。使用 reset 重新开始。"}

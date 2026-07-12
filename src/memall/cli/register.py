@@ -70,7 +70,10 @@ def register_agent(name: str, agent_type: str, url: str = "", command: str = "",
     else:
         reg_data["updated_at"] = now
 
-    reg_path.write_text(json.dumps(reg_data, indent=2, ensure_ascii=False), encoding="utf-8")
+    # Atomic write: temp → rename
+    tmp_path = reg_path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(reg_data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp_path.rename(reg_path)
     return {"status": "ok", "agent_name": name, "agent_type": agent_type, "path": str(reg_path)}
 
 

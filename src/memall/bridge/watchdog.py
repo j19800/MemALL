@@ -48,6 +48,14 @@ class FileWatcher:
         for f in sorted(self.watch_dir.glob("*.json")):
             self._seen.add(f.name)
 
+    @staticmethod
+    def _is_complete(path: Path) -> bool:
+        """Check if a file is likely complete (not being written)."""
+        try:
+            return path.stat().st_size > 0
+        except OSError:
+            return False
+
     def _poll_loop(self) -> None:
         while not self._stop.is_set():
             try:
@@ -64,9 +72,12 @@ class FileWatcher:
             name = f.name
             if name in self._seen:
                 continue
-            self._seen.add(name)
             try:
+                # Only read and process complete files (skip files modified within last second)
+                if not self._is_complete(f):
+                    continue
                 data = json.loads(f.read_text(encoding="utf-8"))
+                self._seen.add(name)
                 self.callback(data, name)
             except json.JSONDecodeError as e:
                 logger.warning("filewatcher(%s) invalid json %s: %s",

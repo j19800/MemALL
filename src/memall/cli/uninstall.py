@@ -55,7 +55,10 @@ def _remove_mcp_config(agent_key):
 
     # Remove the memall entry
     del config[config_key][MCP_SERVER_NAME]
-    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Atomic write: temp → rename
+    tmp_path = config_path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.rename(config_path)
 
     return "ok", f"Removed MemALL from {agent_info['name']} (backup: {bak_path.name})"
 
@@ -84,7 +87,10 @@ def _remove_from_yaml(config_path, agent_info):
     shutil.copy2(config_path, bak_path)
 
     del config[config_key][MCP_SERVER_NAME]
-    config_path.write_text(yaml.dump(config, allow_unicode=True, default_flow_style=False), encoding="utf-8")
+    # Atomic write: temp → rename
+    tmp_path = config_path.with_suffix(".tmp")
+    tmp_path.write_text(yaml.dump(config, allow_unicode=True, default_flow_style=False), encoding="utf-8")
+    tmp_path.rename(config_path)
     return True
 
 

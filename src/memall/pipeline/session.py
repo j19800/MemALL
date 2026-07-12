@@ -341,6 +341,9 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
     try:
         _ensure_sessions_table(conn)
 
+        # Use BEGIN IMMEDIATE to prevent TOCTOU race on stale session detection
+        conn.execute("BEGIN IMMEDIATE")
+
         # Auto-close stale active session for same agent (> 2h idle)
         stale = conn.execute(
             "SELECT session_id, started_at FROM sessions "
@@ -354,7 +357,7 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 if (datetime.now(timezone.utc) - stale_start) > timedelta(hours=2):
                     _mark_session_inline(conn, stale["session_id"])
             except Exception:
-                logger.warning("session.py: silent error", exc_info=True)
+                logger.warning("session.py: failed to close stale session", exc_info=True)
 
         sid = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()

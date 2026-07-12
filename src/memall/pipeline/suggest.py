@@ -1,3 +1,4 @@
+import hashlib
 import re
 from datetime import datetime, timezone
 from memall.core.db import get_conn
