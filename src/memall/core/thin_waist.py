@@ -489,7 +489,8 @@ def _capture_post_insert(conn, mem_id: int, data: MemoryInput, h: str) -> None:
 
     def _background_post_process():
         """Run embedding and dream_scan in a daemon thread."""
-        _bg_conn = get_conn()
+        from memall.core.db import get_conn as _bg_get_conn
+        _bg_conn = _bg_get_conn()
         try:
             try:
                 from memall.graph.embeddings import _auto_embed, _check_st_available
