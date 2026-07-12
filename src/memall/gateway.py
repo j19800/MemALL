@@ -300,10 +300,10 @@ class MemAllGateway:
 
     def _setup_routes(self, app: web.Application) -> None:
         app.router.add_get("/health", self._handle_health)
-        app.router.add_get("/recent", self._handle_recent)
-        app.router.add_get("/todos", self._handle_todos)
+        app.router.add_get("/recent", self._handle_recent_html)
+        app.router.add_get("/todos", self._handle_todos_html)
         app.router.add_get("/timeline", self._handle_timeline_html)
-        app.router.add_get("/identity/{agent_name}", self._handle_identity)
+        app.router.add_get("/identity/{agent_name}", self._handle_identity_html)
         app.router.add_get("/dashboard", self._handle_dashboard)
         app.router.add_get("/api/slices", self._handle_api_slices)
         app.router.add_get("/api/epochs", self._handle_api_epochs)
@@ -403,6 +403,23 @@ class MemAllGateway:
         return web.Response(status=204,)
 
     # ── Handlers ──
+
+    # HTML page handlers (delegated to gateway_html module)
+    async def _handle_recent_html(self, request: web.Request) -> web.Response:
+        from memall.gateway_html import handle_recent as _hr
+        with pool_conn() as conn:
+            return web.Response(text=_hr(conn), content_type="text/html")
+
+    async def _handle_todos_html(self, request: web.Request) -> web.Response:
+        from memall.gateway_html import handle_todos as _ht
+        with pool_conn() as conn:
+            return web.Response(text=_ht(conn), content_type="text/html")
+
+    async def _handle_identity_html(self, request: web.Request) -> web.Response:
+        from memall.gateway_html import handle_identity as _hi
+        agent_name = request.match_info.get("agent_name", "system")
+        with pool_conn() as conn:
+            return web.Response(text=_hi(conn, agent_name), content_type="text/html")
 
     async def _handle_health(self, request: web.Request) -> web.Response:
         uptime_s = time.time() - self._start_time
