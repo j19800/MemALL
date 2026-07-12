@@ -71,7 +71,7 @@ _TRIPLE_EN_PATTERN = re.compile(
 # Chinese: "X 是 Y", "X 使用 Y", "X 依赖 Y"
 _TRIPLE_ZH_PATTERN = re.compile(
     r'([一-鿿A-Za-z][一-鿿A-Za-z0-9_\- ]{1,20})'
-    r'\s*(?:是|使用|采用|基于|依赖|集成|取代|扩展|构建于)\s+'
+    r'\s*(?:是|使用|采用|基于|依赖|集成|取代|扩展|构建于|构建在)\s*'
     r'([一-鿿A-Za-z][一-鿿A-Za-z0-9_\- ]{1,20})'
 )
 
