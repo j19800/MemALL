@@ -22,11 +22,11 @@ python -m coverage report --omit="*/migrations/*,*/tests/*,*/site-packages/*"
 
 | 指标 | 数值 |
 |------|------|
-| 测试总数 | **272** |
-| 通过 | **272** |
+| 测试总数 | **286** |
+| 通过 | **286** |
 | 失败（预知） | 2（gateway.py — 需要独立端口） |
 | 跳过 | 2（embeddings — 需要 sentence-transformers） |
-| 整体覆盖率 | **47%** |
+| 整体覆盖率 | **48%** |
 | 测试文件数 | 47 |
 | 源文件数 | ~130（13,070 语句） |
 | 最后运行 | 2026-07-10 |
@@ -125,7 +125,7 @@ python -m coverage report --omit="*/migrations/*,*/tests/*,*/site-packages/*"
 | `test_time_slice.py` | `pipeline/time_slice.py` | 时间片 |
 | `test_bridge.py` | `pipeline/bridge.py` | 桥接分析 |
 
-### 3. 策略测试（strategy/）
+### 3. 策略测试（strategy/）— 新增
 
 | 测试文件 | 覆盖模块 | 覆盖率 |
 |---------|---------|--------|
@@ -161,8 +161,8 @@ python -m coverage report --omit="*/migrations/*,*/tests/*,*/site-packages/*"
 
 | 测试文件 | 说明 |
 |---------|------|
-| `test_helpers.py` | 测试辅助（init_temp_db, insert_memory） |
-| `conftest.py` | pytest fixtures |
+| `test_core_db.py` | `core/db.py` | DB 工具函数、pool_conn、init_db |
+| `test_scheduler.py` | `plugins/scheduler.py` | TaskScheduler、任务添加/删除/执行 |
 
 ## 编写新测试
 
