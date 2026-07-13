@@ -116,9 +116,10 @@ async def handle_api_search(request: web.Request, gw) -> web.Response:
     level = request.query.get("level", "")
     limit = int(request.query.get("limit", "20"))
     results = retrieve(query, owner=owner or None, agent_name=agent_name or None,
-                       category=category or None, level=level or None, limit=limit)
+                       category=category or None, level=level or None)
     if not isinstance(results, list):
         results = []
+    results = results[:limit]
     return web.json_response({"data": [dict(r) if hasattr(r, 'keys') else r for r in results]})
 
 
