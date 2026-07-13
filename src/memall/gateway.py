@@ -315,7 +315,7 @@ class MemAllGateway:
         app.router.add_get("/api/timeline/density", self._handle_api_timeline_density)
         app.router.add_get("/api/timeline/epochs", self._handle_api_timeline_epochs)
         app.router.add_get("/discussions", self._handle_discussions)
-        app.router.add_get("/graph", self._handle_graph)
+        app.router.add_get("/graph", self._handle_graph_html)
         app.router.add_get("/artifact", self._handle_artifact)
         app.router.add_get("/features", self._handle_features)
         app.router.add_get("/api/graph", self._handle_api_graph)
@@ -389,10 +389,10 @@ class MemAllGateway:
         app.router.add_get("/", self._handle_serve_frontend)
         app.router.add_get("/api/routes", self._handle_api_routes)
         # Static file mounts
-        _frontend_dir = Path(__file__).resolve().parent.parent.parent.parent / "frontend"
+        _frontend_dir = Path(__file__).resolve().parent.parent.parent / "frontend"
         if _frontend_dir.exists() and (_frontend_dir / "index.html").exists():
             app.router.add_static("/static", str(_frontend_dir), name="frontend_static")
-        _v30_dir = Path(__file__).resolve().parent.parent.parent.parent / "desktop" / "v30"
+        _v30_dir = Path(__file__).resolve().parent.parent.parent / "desktop" / "v30"
         if _v30_dir.exists():
             app.router.add_static("/v30", str(_v30_dir), name="v30_frontend")
         # Catch-all OPTIONS for CORS preflight
@@ -421,6 +421,11 @@ class MemAllGateway:
         agent_name = request.match_info.get("agent_name", "system")
         with pool_conn() as conn:
             return web.Response(text=_hi(conn, agent_name), content_type="text/html")
+
+    async def _handle_graph_html(self, request: web.Request) -> web.Response:
+        from memall.gateway_html import handle_graph_stats as _hg
+        with pool_conn() as conn:
+            return web.Response(text=_hg(conn), content_type="text/html")
 
     async def _handle_health(self, request: web.Request) -> web.Response:
         uptime_s = time.time() - self._start_time
@@ -2822,7 +2827,7 @@ class MemAllGateway:
 
     async def _handle_serve_frontend(self, request: web.Request) -> web.Response:
         """GET / — serve frontend index.html if available."""
-        _frontend_dir = Path(__file__).resolve().parent.parent.parent.parent / "frontend"
+        _frontend_dir = Path(__file__).resolve().parent.parent.parent / "frontend"
         if _frontend_dir.exists() and (_frontend_dir / "index.html").exists():
             index = _frontend_dir / "index.html"
             return web.Response(text=index.read_text(encoding="utf-8"), content_type="text/html",
