@@ -268,7 +268,11 @@ class MemAllGateway:
     async def _auth_middleware(self, request: web.Request,
                                handler: Any) -> web.Response:
         """Require a valid Bearer token on all endpoints except /health, /pair and OPTIONS."""
-        if request.method == "OPTIONS" or request.path in ("/", "/health", "/pair", "/dashboard", "/graph", "/artifact", "/features", "/recent", "/todos", "/static", "/v30", "/favicon.ico", "/timeline"):
+        path = request.path
+        if request.method == "OPTIONS" or path in ("/", "/health", "/pair", "/dashboard", "/graph", "/artifact", "/features", "/recent", "/todos", "/static", "/v30", "/favicon.ico", "/timeline", "/db/stats", "/agents", "/debt/stats", "/reflection/dashboard"):
+            return await handler(request)
+        # SPA read-only endpoints: GET /memories, GET /memories/search, GET /memories/{id}, GET /api/*
+        if request.method == "GET" and (path.startswith("/memories") or path.startswith("/api/") or path.startswith("/persona/")):
             return await handler(request)
         err = _require_auth(request, self._auth_token)
         if err is not None:
