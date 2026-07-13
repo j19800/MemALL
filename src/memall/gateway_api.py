@@ -152,8 +152,10 @@ async def handle_api_db_stats(request: web.Request, gw) -> web.Response:
 
 async def handle_api_agents(request: web.Request, gw) -> web.Response:
     with pool_conn() as conn:
-        rows = conn.execute("SELECT DISTINCT agent_name FROM memories ORDER BY agent_name").fetchall()
-    return web.json_response({"agents": [r["agent_name"] for r in rows]})
+        rows = conn.execute(
+            "SELECT agent_name, COUNT(*) as cnt FROM memories GROUP BY agent_name ORDER BY cnt DESC"
+        ).fetchall()
+    return web.json_response({"agents": [{"name": r["agent_name"], "count": r["cnt"]} for r in rows]})
 
 
 async def handle_api_session_summary(request: web.Request, gw) -> web.Response:

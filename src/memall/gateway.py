@@ -269,10 +269,16 @@ class MemAllGateway:
                                handler: Any) -> web.Response:
         """Require a valid Bearer token on all endpoints except /health, /pair and OPTIONS."""
         path = request.path
-        if request.method == "OPTIONS" or path in ("/", "/health", "/pair", "/dashboard", "/graph", "/artifact", "/features", "/recent", "/todos", "/static", "/v30", "/favicon.ico", "/timeline", "/db/stats", "/agents", "/debt/stats", "/reflection/dashboard"):
+        if request.method == "OPTIONS" or path in ("/", "/health", "/pair", "/dashboard", "/graph", "/artifact", "/features", "/recent", "/todos", "/static", "/v30", "/favicon.ico", "/timeline", "/timeline/api", "/db/stats", "/agents", "/debt/stats", "/reflection/dashboard", "/ask", "/pipeline/run", "/migrations/run", "/migrations/status"):
             return await handler(request)
-        # SPA read-only endpoints: GET /memories, GET /memories/search, GET /memories/{id}, GET /api/*
-        if request.method == "GET" and (path.startswith("/memories") or path.startswith("/api/") or path.startswith("/persona/")):
+        # SPA read-only endpoints: GET /memories and GET /api/* and GET /persona/* and GET /graph/*
+        if request.method == "GET" and (path.startswith("/memories") or path.startswith("/api/") or path.startswith("/persona/") or path.startswith("/sessions/") or path.startswith("/federation/") or path.startswith("/graph/")):
+            return await handler(request)
+        # SPA write endpoints: POST/PUT to known paths
+        if request.method in ("POST", "PUT") and (path in ("/memories", "/memories/smart-store", "/db/optimize", "/db/vacuum", "/debt/scan")):
+            return await handler(request)
+        if request.method == "PUT" and path.startswith("/memories/"):
+            return await handler(request)
             return await handler(request)
         err = _require_auth(request, self._auth_token)
         if err is not None:

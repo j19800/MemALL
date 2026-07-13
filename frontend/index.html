@@ -1323,7 +1323,7 @@ function doLoadDashboard(){
   }).catch(function(){});
 
   // Recent memories
-  api('GET','/timeline?limit=10').then(function(data){
+  api('GET','/timeline/api?limit=10').then(function(data){
     document.getElementById('dashError').style.display = 'none';
     var items = data.data || data.memories || data.results || data || [];
     if(!Array.isArray(items)) items = [];
