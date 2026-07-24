@@ -338,8 +338,14 @@ class MemAllGateway:
         app.router.add_post("/traverse", lambda r: api.handle_traverse(r, self))
         app.router.add_post("/timeline", lambda r: api.handle_timeline(r, self))
         app.router.add_post("/profile", lambda r: api.handle_profile(r, self))
-        app.router.add_post("/federation/events", self._handle_federation_event)
-        app.router.add_post("/pair", self._handle_pair)
+        # Federation routes
+        import memall.gateway_federation as fed
+        app.router.add_post("/federation/events", lambda r: fed.handle_federation_event(r, self))
+        app.router.add_get("/federation/query", lambda r: fed.handle_fed_query(r, self))
+        app.router.add_post("/federation/publish", lambda r: fed.handle_fed_publish(r, self))
+        app.router.add_get("/federation/conflicts", lambda r: fed.handle_fed_conflicts(r, self))
+        app.router.add_post("/federation/inject/{agent_name}", lambda r: fed.handle_fed_inject(r, self))
+        app.router.add_post("/federation/extract/{session_id}", lambda r: fed.handle_fed_extract(r, self))
         # MCP Streamable HTTP routes
         app.router.add_post("/mcp", self._handle_mcp_post)
         app.router.add_get("/mcp", self._handle_mcp_sse)
