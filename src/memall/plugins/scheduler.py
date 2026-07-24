@@ -219,6 +219,22 @@ def _daily_lifecycle() -> None:
         logger.warning("Daily lifecycle error: %s", e)
 
 
+def _daily_dream() -> None:
+    """Run autonomous memory consolidation (auto-dream)."""
+    try:
+        from memall.pipeline.auto_dream import dream_consolidation_step
+        result = dream_consolidation_step()
+        logger.info(
+            "Daily dream: defrag=%d patterns=%d distilled=%d forgotten=%d",
+            result.get("defrag", {}).get("merged", 0),
+            result.get("patterns", {}).get("found", 0),
+            result.get("distilled", {}).get("created", 0),
+            result.get("forgetting", {}).get("scheduled", 0),
+        )
+    except Exception as e:
+        logger.warning("Daily dream error: %s", e)
+
+
 def create_default_scheduler() -> TaskScheduler:
     """Create a TaskScheduler pre-loaded with built-in daily tasks.
 
@@ -235,6 +251,8 @@ def create_default_scheduler() -> TaskScheduler:
     sched.add_task("daily_security", _daily_security_audit, audit_interval, run_immediately=False)
     lifecycle_interval = get_config("scheduler.lifecycle_interval", 86400)
     sched.add_task("daily_lifecycle", _daily_lifecycle, lifecycle_interval, run_immediately=False)
+    dream_interval = get_config("scheduler.dream_interval", 86400)
+    sched.add_task("daily_dream", _daily_dream, dream_interval, run_immediately=False)
     return sched
 
 
