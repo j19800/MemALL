@@ -140,18 +140,18 @@ SQLite + FTS5 + vector search. Zero cloud dependency. Your data stays on your ma
 ## 🚀 Quick Start
 
 ```bash
-# 1. Install
-pip install memall-os
+# 一键安装启动 (推荐)
+pip install memall-os && memall quickstart
 
-# 2. Initialize
-memall init
-memall start
+# 或从源码
+git clone https://github.com/j19800/MemALL.git
+cd MemALL
+python install.py
+```
 
-# 3. Connect your MCP client
-# Add to your mcp.json:
-# {
-#   "mcpServers": {
-#     "memall": { "command": "memall", "args": ["serve"] }
+装完即用，自动完成：初始化数据库 → 启动服务 → 配置 MCP → 打开浏览器。
+
+## 🛠️ 7 MCP Tools
 #   }
 # }
 
