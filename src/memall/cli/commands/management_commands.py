@@ -807,6 +807,23 @@ def cmd_serve(args):
         serve()
 
 
+def cmd_start(args):
+    """Start Gateway (HTTP + MCP) on port 9920. Keep running until Ctrl+C."""
+    import time
+    from memall.gateway import MemAllGateway
+    gw = MemAllGateway(host="127.0.0.1", port=args.port)
+    gw.start()
+    print(f"MemALL Gateway running on http://127.0.0.1:{args.port}")
+    print(f"  MCP endpoint: http://127.0.0.1:{args.port}/mcp")
+    print(f"  Press Ctrl+C to stop")
+    try:
+        while True:
+            time.sleep(10)
+    except KeyboardInterrupt:
+        gw.stop()
+        print("Gateway stopped")
+
+
 # ──────────────────────────────────────────────
 # cmd_db
 # ──────────────────────────────────────────────

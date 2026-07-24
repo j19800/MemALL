@@ -27,7 +27,7 @@ from memall.cli.commands.management_commands import (
     cmd_trust, cmd_identity_trust, cmd_identity_untrust,
     cmd_identity,
     cmd_graph_visualize, cmd_index, cmd_retrieve, cmd_onboarding,
-    cmd_serve, cmd_db,
+    cmd_serve, cmd_start, cmd_db,
     cmd_setup, cmd_register, cmd_uninstall, cmd_backup,
     cmd_restore, cmd_export, cmd_import, cmd_sync, cmd_mcp_connect,
     cmd_arcs, cmd_hook_list, cmd_hook_register,
@@ -293,6 +293,10 @@ def app():
     p_serve.add_argument("--http", action="store_true", help="Start HTTP API instead of MCP")
     p_serve.add_argument("--port", type=int, default=8199, help="HTTP port (default 8199)")
     p_serve.set_defaults(func=cmd_serve)
+
+    p_start = sub.add_parser("start-gateway", help="Start Gateway (HTTP + MCP) on port 9920")
+    p_start.add_argument("--port", type=int, default=9920, help="Port (default 9920)")
+    p_start.set_defaults(func=cmd_start)
 
     p_setup = sub.add_parser("setup", help="Configure AI agents with MemALL MCP Server")
     p_setup.add_argument("--all", action="store_true", help="Configure all detected agents")
