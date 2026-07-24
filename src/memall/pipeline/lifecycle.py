@@ -104,7 +104,9 @@ def _cluster_by_embedding(conn) -> list[dict]:
 
         sim_matrix = np.dot(embeddings, embeddings.T)
 
-        connected_components = _connected_components(sim_matrix, threshold=0.85)
+        from memall.config import get_config
+        _cc_threshold = get_config("lifecycle.cluster_threshold", 0.85)
+        connected_components = _connected_components(sim_matrix, threshold=_cc_threshold)
 
         for comp in connected_components:
             cluster_members = [members[i] for i in comp]
@@ -127,7 +129,10 @@ def _cluster_by_embedding(conn) -> list[dict]:
     return all_clusters
 
 
-def _connected_components(sim_matrix, threshold: float = 0.85) -> list[list[int]]:
+def _connected_components(sim_matrix, threshold: Optional[float] = None) -> list[list[int]]:
+    if threshold is None:
+        from memall.config import get_config
+        threshold = get_config("lifecycle.connected_component_threshold", 0.85)
     """Find connected components in a similarity matrix above threshold."""
     import numpy as np
 

@@ -17,8 +17,21 @@ from pathlib import Path
 from aiohttp import web
 
 # Thread pool for synchronous tool calls (keeps event loop responsive)
-_TOOL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=12)
-_TOOL_HEAVY = concurrent.futures.ThreadPoolExecutor(max_workers=2)  # slow ops: pipeline, index_rebuild, etc.
+# Lazily initialized + re-created if shut down after a failed startup.
+_TOOL_EXECUTOR: concurrent.futures.ThreadPoolExecutor | None = None
+_TOOL_HEAVY: concurrent.futures.ThreadPoolExecutor | None = None  # slow ops: pipeline, index_rebuild, etc.
+
+def _get_executor(heavy: bool = False) -> concurrent.futures.ThreadPoolExecutor:
+    """Return a healthy executor, replacing it if previously shut down."""
+    global _TOOL_EXECUTOR, _TOOL_HEAVY
+    target = _TOOL_HEAVY if heavy else _TOOL_EXECUTOR
+    if target is None or target._shutdown:
+        new = concurrent.futures.ThreadPoolExecutor(max_workers=2 if heavy else 12)
+        if heavy:
+            _TOOL_HEAVY = new
+        else:
+            _TOOL_EXECUTOR = new
+    return _TOOL_HEAVY if heavy else _TOOL_EXECUTOR
 _TOOL_TIMEOUT = 120  # max seconds for a single tool call
 _HEAVY_TIMEOUT = 600  # max seconds for heavy operations
 
@@ -43,8 +56,10 @@ async def _error_middleware(request: web.Request, handler) -> web.Response:
 # ── Graceful shutdown ──────────────────────────────────────────────────
 async def _on_shutdown(app: web.Application):
     _log.info("MCP HTTP server shutting down")
-    _TOOL_EXECUTOR.shutdown(wait=False)
-    _TOOL_HEAVY.shutdown(wait=False)
+    if _TOOL_EXECUTOR is not None:
+        _TOOL_EXECUTOR.shutdown(wait=False)
+    if _TOOL_HEAVY is not None:
+        _TOOL_HEAVY.shutdown(wait=False)
     # Give in-flight requests time to finish
     await asyncio.sleep(0.5)
 
@@ -191,10 +206,10 @@ async def handle_mcp_post(request: web.Request) -> web.Response:
             tool_name == "memall_write" and action == "forget"
         )
         if is_heavy:
-            _pool = _TOOL_HEAVY
+            _pool = _get_executor(heavy=True)
             _timeout = _HEAVY_TIMEOUT
         else:
-            _pool = _TOOL_EXECUTOR
+            _pool = _get_executor(heavy=False)
             _timeout = _TOOL_TIMEOUT
 
         # Run synchronous tool execution in thread pool (preserves event loop)
@@ -403,7 +418,7 @@ async def handle_info(request: web.Request) -> web.Response:
 
     try:
         loop = asyncio.get_event_loop()
-        db_status, total = await loop.run_in_executor(_TOOL_EXECUTOR, _check_db)
+        db_status, total = await loop.run_in_executor(_get_executor(), _check_db)
     except Exception:
         db_status = "error"
         total = 0

@@ -53,6 +53,16 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "ttl_days": 90,
         "low_value_days": 7,
     },
+    "lifecycle": {
+        "cluster_threshold": 0.85,
+        "connected_component_threshold": 0.85,
+    },
+    "nlp": {
+        "model_dir": os.path.expanduser("~/.memall/.vector_model/"),
+        "embedding_cache_size": 10000,
+        "sentence_transformers": False,
+        "sentence_transformers_model": "paraphrase-multilingual-MiniLM-L12-v2",
+    },
     "plugins": {
         "auto_load": True,
     },

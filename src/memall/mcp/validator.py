@@ -77,7 +77,11 @@ def validate_tool_input(
 
     try:
         validated = model_class(**params)
-        return True, validated.model_dump(exclude_unset=True), ""
+        validated_data = validated.model_dump(exclude_unset=True)
+        # Preserve action field if the model stripped it (not a model field)
+        if "action" not in validated_data and "action" in params:
+            validated_data["action"] = params["action"]
+        return True, validated_data, ""
     except ValidationError as e:
         return False, None, str(e)
 

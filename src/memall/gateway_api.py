@@ -5,6 +5,7 @@ Each handler is an async function that receives (request, gateway) and returns
 web.Response. The ``gateway`` parameter provides access to _read_json,
 _validate, _auth_token, etc.
 """
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -26,7 +27,7 @@ from memall.pipeline.adaptive import adaptive_step, adaptive_report
 from memall.pipeline.security import audit_sensitive, set_permission, check_access, list_agents_by_permission, security_score
 from memall.pipeline.ops import merge_memories, split_memory, tag_memory, batch_tag, batch_archive, batch_restore, deduplicate
 from memall.pipeline.observe import reflection_dashboard
-from memall.pipeline.pipeline import run_pipeline
+from memall.pipeline.pipeline import enqueue_pipeline, run_pipeline
 from memall.mcp.federation_tools import fed_query, fed_publish, fed_conflicts, auto_inject, auto_extract
 from memall.migrations import get_migration_status, run_migrations
 from memall.mcp.models import (
@@ -194,20 +195,26 @@ async def handle_api_run_pipeline(request: web.Request, gw) -> web.Response:
     include_distill = data.get("include_distill", True)
     include_integrate = data.get("include_integrate", True)
     include_persona = data.get("include_persona", True)
-    result = run_pipeline(
+    enqueue_pipeline(
         include_reflect=include_reflect,
         include_distill=include_distill,
         include_integrate=include_integrate,
         include_persona=include_persona,
     )
-    return web.json_response(result, status=200 if result.get("status") == "ok" else 500)
+    return web.json_response({"status": "accepted", "message": "pipeline enqueued"})
 
 
 async def handle_api_run_migrations(request: web.Request, gw) -> web.Response:
-    conn = get_conn()
-    try:
-        result = run_migrations(conn, db_path=str(DB_PATH))
-        conn.commit()
+    def _run():
+        conn = get_conn()
+        try:
+            result = run_migrations(conn, db_path=str(DB_PATH))
+            conn.commit()
+            return result
+        finally:
+            conn.close()
+
+    result = await asyncio.to_thread(_run)
         return web.json_response(result)
     finally:
         conn.close()

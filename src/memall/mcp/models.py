@@ -79,6 +79,7 @@ class AskInput(BaseModel):
 # ── Smart / Batch / Update / VectorSearch tools ──
 
 class SmartStoreInput(BaseModel):
+    action: str = Field("smart_store", pattern=r"^(smart_store|capture|update|forget|append|replace|set_note|upload|upload_images|upload_video|attach_files)$")
     content: str = Field(..., min_length=1, max_length=10000)
     owner: str = Field("", max_length=200)
     agent_name: str = Field("", max_length=200)

@@ -389,12 +389,13 @@ class MemAllGateway:
         app.router.add_get("/migrations/status", lambda r: api.handle_api_migration_status(r, self))
         app.router.add_post("/migrations/run", lambda r: api.handle_api_run_migrations(r, self))
         # v30 API
-        app.router.add_get("/v30api/memories", self._handle_v30_list_memories)
-        app.router.add_get("/v30api/memories/stats", self._handle_v30_memories_stats)
-        app.router.add_get("/v30api/memories/{memory_id}", self._handle_v30_get_memory)
-        app.router.add_delete("/v30api/memories/{memory_id}", self._handle_v30_delete_memory)
-        app.router.add_post("/v30api/memories", self._handle_v30_create_memory)
-        app.router.add_put("/v30api/memories/{memory_id}", self._handle_v30_update_memory)
+        import memall.gateway_v30 as v30
+        app.router.add_get("/v30api/memories", lambda r: v30.handle_list_memories(r, self))
+        app.router.add_get("/v30api/memories/stats", lambda r: v30.handle_memories_stats(r, self))
+        app.router.add_get("/v30api/memories/{memory_id}", lambda r: v30.handle_get_memory(r, self))
+        app.router.add_delete("/v30api/memories/{memory_id}", lambda r: v30.handle_delete_memory(r, self))
+        app.router.add_post("/v30api/memories", lambda r: v30.handle_create_memory(r, self))
+        app.router.add_put("/v30api/memories/{memory_id}", lambda r: v30.handle_update_memory(r, self))
         # Frontend
         app.router.add_get("/", self._handle_serve_frontend)
         app.router.add_get("/api/routes", self._handle_api_routes)

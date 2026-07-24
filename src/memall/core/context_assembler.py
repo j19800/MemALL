@@ -153,7 +153,8 @@ def _build_tier2(agent_name: str, query: str, conn) -> list[str]:
                     vec_results = _vec0_knn(conn, query_vec, len(candidates) * 2)
                     vec_scores = {vr["memory_id"]: vr["score"] for vr in vec_results}
                     if vec_scores:
-                        rrf_k = 60
+                        from memall.config import get_config
+                        rrf_k = get_config("search.rrf_k", 60)
                         tfidf_ranked = list(candidates)
                         for i, c in enumerate(tfidf_ranked):
                             c["rrf_tfidf"] = 1.0 / (rrf_k + i + 1)

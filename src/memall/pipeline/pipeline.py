@@ -2,7 +2,9 @@ import importlib
 import inspect
 import json
 import logging
+import queue
 import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 from functools import partial
@@ -508,4 +510,37 @@ def run_lightweight_pipeline(
         # session, event_processor, enrich, cleanup, etc.).
         # _SKIP_WHEN only gates: reflect, distill, integrate, improve,
         # embed_index, identity, archive.
+        # (the async queue and enqueue_pipeline() are appended below)
     )
+
+
+# ── Async queue for non-blocking pipeline dispatch ───────────────────
+
+_PIPELINE_QUEUE = queue.Queue()
+_PIPELINE_WORKER = None
+
+
+def _pipeline_worker_loop():
+    while True:
+        try:
+            kwargs = _PIPELINE_QUEUE.get()
+            if kwargs is None:
+                break
+            run_pipeline(**kwargs)
+        except Exception:
+            logger.exception("Pipeline worker: unhandled error")
+        finally:
+            _PIPELINE_QUEUE.task_done()
+
+
+def _ensure_pipeline_worker():
+    global _PIPELINE_WORKER
+    if _PIPELINE_WORKER is None or not _PIPELINE_WORKER.is_alive():
+        t = threading.Thread(target=_pipeline_worker_loop, daemon=True, name="pipeline-worker")
+        t.start()
+        _PIPELINE_WORKER = t
+
+
+def enqueue_pipeline(**kwargs):
+    _ensure_pipeline_worker()
+    _PIPELINE_QUEUE.put(kwargs)
