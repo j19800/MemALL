@@ -275,7 +275,7 @@ class MemAllGateway:
         if request.method == "GET" and (path.startswith("/memories") or path.startswith("/api/") or path.startswith("/persona/") or path.startswith("/sessions/") or path.startswith("/federation/") or path.startswith("/graph/") or path.startswith("/api/intelligence")):
             return await handler(request)
         # SPA write endpoints: POST/PUT to known paths
-        if request.method in ("POST", "PUT") and (path in ("/memories", "/memories/smart-store", "/db/optimize", "/db/vacuum", "/debt/scan")):
+        if request.method in ("POST", "PUT") and (path in ("/memories", "/memories/smart-store", "/memories/import", "/db/optimize", "/db/vacuum", "/debt/scan")):
             return await handler(request)
         if request.method == "PUT" and path.startswith("/memories/"):
             return await handler(request)
@@ -358,6 +358,7 @@ class MemAllGateway:
         app.router.add_put("/memories", self._handle_api_update)
         app.router.add_post("/memories/smart-store", self._handle_api_smart_store)
         app.router.add_post("/memories/batch", self._handle_api_batch_store)
+        app.router.add_post("/memories/import", self._handle_api_import)
         app.router.add_get("/memories/stats", lambda r: api.handle_api_memories_stats(r, self))
         app.router.add_get("/memories/{memory_id}", lambda r: api.handle_api_get_memory(r, self))
         app.router.add_get("/timeline/api", self._handle_api_timeline)
@@ -2268,6 +2269,26 @@ class MemAllGateway:
         """POST /memories/batch — batch store."""
         items = await request.json()
         return web.json_response(store_batch(items),)
+
+    async def _handle_api_import(self, request: web.Request) -> web.Response:
+        """POST /memories/import — import memories from file."""
+        data = await request.json()
+        path = data.get("path", "")
+        fmt = data.get("format", "jsonl")
+        agent = data.get("agent_name", "imported")
+        try:
+            if fmt == "mem0":
+                from memall.auto_capture import import_from_mem0
+                result = import_from_mem0(path, agent)
+            elif fmt == "csv":
+                from memall.auto_capture import import_from_csv
+                result = import_from_csv(path, agent)
+            else:
+                from memall.auto_capture import import_from_jsonl
+                result = import_from_jsonl(path, agent)
+            return web.json_response(result)
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
 
     async def _handle_api_memories_stats(self, request: web.Request) -> web.Response:
         """GET /memories/stats — memory statistics."""
