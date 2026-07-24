@@ -256,7 +256,7 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
         passed = False
         gate = "rejected"
     else:
-        passed = avg >= required and min_dim >= 3
+        passed = avg >= required and min_dim >= 1
         gate = "accepted" if passed else ("review" if avg >= required - 1 else "rejected")
 
     result = {"dimensions": scores, "avg": round(avg, 2), "min": min_dim, "gate": gate, "level": data.level}
