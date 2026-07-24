@@ -12,9 +12,22 @@ from aiohttp import web
 
 from memall.core.db import pool_conn, get_conn
 from memall.core.thin_waist import capture, update, MemoryInput
-from memall.gateway_utils import esc_html, _safe_int, _ok
+from memall.gateway_utils import esc_html, _ok
 
 logger = logging.getLogger("memall.gateway.v30")
+
+
+def _safe_int(val, default=0, min_val=None, max_val=None):
+    """Parse integer safely with bounds checking."""
+    try:
+        v = int(val)
+        if min_val is not None:
+            v = max(v, min_val)
+        if max_val is not None:
+            v = min(v, max_val)
+        return v
+    except (ValueError, TypeError):
+        return default
 
 
 async def handle_list_memories(request: web.Request, gw) -> web.Response:

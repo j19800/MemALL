@@ -205,16 +205,10 @@ async def handle_api_run_pipeline(request: web.Request, gw) -> web.Response:
 
 
 async def handle_api_run_migrations(request: web.Request, gw) -> web.Response:
-    def _run():
-        conn = get_conn()
-        try:
-            result = run_migrations(conn, db_path=str(DB_PATH))
-            conn.commit()
-            return result
-        finally:
-            conn.close()
-
-    result = await asyncio.to_thread(_run)
+    conn = get_conn()
+    try:
+        result = run_migrations(conn, db_path=str(DB_PATH))
+        conn.commit()
         return web.json_response(result)
     finally:
         conn.close()
