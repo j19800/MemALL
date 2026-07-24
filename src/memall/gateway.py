@@ -184,7 +184,7 @@ class MemAllGateway:
         port (int): TCP port.  Default 9919.
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 9919,
+    def __init__(self, host: str = "127.0.0.1", port: int = 9920,
                  secret_key: str = "") -> None:
         self.host = host
         self.port = port

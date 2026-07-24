@@ -21,7 +21,7 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "gateway": {
         "host": "127.0.0.1",
-        "port": 9919,
+        "port": 9920,
         "secret_key": "",  # auto-generated on first start if empty
     },
     "discovery": {

@@ -291,7 +291,7 @@ def app():
 
     p_serve = sub.add_parser("serve", help="Start MCP STDIO Server or HTTP API")
     p_serve.add_argument("--http", action="store_true", help="Start HTTP API instead of MCP")
-    p_serve.add_argument("--port", type=int, default=8199, help="HTTP port (default 8199)")
+    p_serve.add_argument("--port", type=int, default=9920, help="HTTP port (default 9920)")
     p_serve.set_defaults(func=cmd_serve)
 
     p_start = sub.add_parser("start-gateway", help="Start Gateway (HTTP + MCP) on port 9920")
