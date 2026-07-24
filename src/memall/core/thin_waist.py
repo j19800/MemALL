@@ -220,7 +220,7 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
     filler = ["嗯", "那个", "然后", "所以", "呃", "啊", "好的，", "明白了，"]
     scores["clarity"] = 10 if text_len > 40 else max(0, 10 - sum(text.count(f) for f in filler) * 2)
     scores["relevance"] = 7
-    scores["specificity"] = min(10, len(_SPECIFICITY_RE.findall(text)) * 2)
+    scores["specificity"] = max(1, min(10, len(_SPECIFICITY_RE.findall(text)) * 2))
 
     # "reasoning" — measures whether content contains evidence/analysis language
     reasoning_hits = sum(1 for p in _REASONING_COMPILED if p.search(text))
@@ -238,10 +238,10 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
 
     # Level-specific thresholds
     threshold_map = {
-        "P0": 5, "P1": 6, "P2": 5,
-        "L4": 6, "L5": 6,           # decisions + tasks need reasoning
-        "L6": 6,                     # reflections need substance
-        "L7": 5, "L9": 5, "L10": 5, "L11": 5,
+        "P0": 4, "P1": 5, "P2": 4, "P3": 4, "P4": 3,
+        "L4": 5, "L5": 5,           # decisions + tasks need reasoning
+        "L6": 5,                     # reflections need substance
+        "L7": 4, "L9": 4, "L10": 4, "L11": 4,
     }
     required = threshold_map.get(data.level or "P2", 5)
 
@@ -256,7 +256,7 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
         passed = False
         gate = "rejected"
     else:
-        passed = avg >= required and min_dim >= 1
+        passed = avg >= required
         gate = "accepted" if passed else ("review" if avg >= required - 1 else "rejected")
 
     result = {"dimensions": scores, "avg": round(avg, 2), "min": min_dim, "gate": gate, "level": data.level}
