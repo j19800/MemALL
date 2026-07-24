@@ -272,7 +272,7 @@ class MemAllGateway:
         if request.method == "OPTIONS" or path in ("/", "/health", "/pair", "/dashboard", "/graph", "/artifact", "/features", "/recent", "/todos", "/static", "/v30", "/favicon.ico", "/timeline", "/timeline/api", "/db/stats", "/agents", "/debt/stats", "/reflection/dashboard", "/ask", "/pipeline/run", "/migrations/run", "/migrations/status"):
             return await handler(request)
         # SPA read-only endpoints: GET /memories and GET /api/* and GET /persona/* and GET /graph/*
-        if request.method == "GET" and (path.startswith("/memories") or path.startswith("/api/") or path.startswith("/persona/") or path.startswith("/sessions/") or path.startswith("/federation/") or path.startswith("/graph/")):
+        if request.method == "GET" and (path.startswith("/memories") or path.startswith("/api/") or path.startswith("/persona/") or path.startswith("/sessions/") or path.startswith("/federation/") or path.startswith("/graph/") or path.startswith("/api/intelligence")):
             return await handler(request)
         # SPA write endpoints: POST/PUT to known paths
         if request.method in ("POST", "PUT") and (path in ("/memories", "/memories/smart-store", "/db/optimize", "/db/vacuum", "/debt/scan")):
@@ -387,6 +387,11 @@ class MemAllGateway:
         app.router.add_get("/agents", lambda r: api.handle_api_agents(r, self))
         app.router.add_get("/db/stats", lambda r: api.handle_api_db_stats(r, self))
         app.router.add_post("/db/vacuum", self._handle_api_db_vacuum)
+        # Intelligence routes
+        import memall.gateway_intelligence as ig
+        app.router.add_get("/api/intelligence", lambda r: ig.handle_intelligence(r, self))
+        app.router.add_get("/api/intelligence/timeline", lambda r: ig.handle_memory_timeline(r, self))
+        app.router.add_get("/api/intelligence/agent/{name}", lambda r: ig.handle_agent_profile(r, self))
         app.router.add_get("/debt/stats", self._handle_api_debt_stats)
         app.router.add_post("/debt/scan", self._handle_api_debt_scan)
         app.router.add_get("/reflection/dashboard", self._handle_api_reflection_dashboard)
