@@ -320,6 +320,10 @@ _PIPELINE_STEPS = [
     ("observation",     "memall.pipeline.observe",     "observation_step",                None),
     ("identity",        "memall.pipeline.identity",        "identity_step",                   None),
     ("reasoning",       "memall.pipeline.reasoning",        "reasoning_step",                  None),
+    ("auto_summarize",  "memall.pipeline.llm_enhance",      "auto_summarize_step",             None),
+    ("discover_assoc",  "memall.pipeline.llm_enhance",      "discover_associations_step",      None),
+    ("cross_agent",     "memall.pipeline.cross_agent",      "knowledge_distill_step",          None),
+    ("adaptive_ttl",    "memall.pipeline.adaptive_memory",  "adaptive_ttl_step",               None),
     ("archive",         "memall.pipeline.archive",         "archive_step",                    None),
 ]
 
