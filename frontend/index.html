@@ -2326,12 +2326,14 @@ function saveApiUrl(){
 }
 
 function testConnection(){
-  var btn = event.target;
+  var btn = event.target || (window.event && window.event.target);
+  if(!btn) return;
   btn.disabled = true;
   btn.textContent = '测试中...';
   document.getElementById('connTestResult').textContent = '';
 
-  api('GET','/health').then(function(data){
+  var testUrl = document.getElementById('apiUrlInput').value.replace(/\/+$/,'') + '/health';
+  fetch(testUrl).then(function(r){
     btn.disabled = false;
     btn.textContent = '测试连接';
     document.getElementById('connTestResult').textContent = '连接成功!';
@@ -2341,10 +2343,10 @@ function testConnection(){
   }).catch(function(err){
     btn.disabled = false;
     btn.textContent = '测试连接';
-    document.getElementById('connTestResult').textContent = '连接失败: '+err.message;
+    document.getElementById('connTestResult').textContent = '连接失败: ' + (err.message || 'Failed to fetch');
     document.getElementById('connTestResult').style.color = 'var(--red)';
     setStatus(false, '连接失败');
-    toast('连接失败: '+err.message, 'error');
+    toast('连接失败: ' + (err.message || 'Failed to fetch'), 'error');
   });
 }
 
