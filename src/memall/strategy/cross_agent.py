@@ -40,16 +40,16 @@ def intelligent_retrieve(agent_name: str, query: str = "", top_k: int = 10) -> l
             item["_source"] = "own"
             results.append(item)
 
-    # 2. 跨 Agent 知识（L10/L11 全局知识）
+    # 2. 跨 Agent 知识（L6 教训 + L7 偏好 + L9/L10/L11 全局知识）
     if query:
         with pool_conn() as conn:
             kw = query[:50]
             shared = conn.execute(
                 "SELECT id, content, subject, level, agent_name, created_at FROM memories "
-                "WHERE level IN ('L9','L10','L11') "
+                "WHERE level IN ('L6','L7','L9','L10','L11') "
                 "AND (content LIKE ? OR subject LIKE ?) "
                 "AND LOWER(agent_name) != LOWER(?) "
-                "ORDER BY level DESC, created_at DESC LIMIT 5",
+                "ORDER BY level DESC, created_at DESC LIMIT 10",
                 (f"%{kw}%", f"%{kw}%", agent_name),
             ).fetchall()
             for r in shared:
@@ -63,9 +63,8 @@ def intelligent_retrieve(agent_name: str, query: str = "", top_k: int = 10) -> l
                     "_source": "cross_agent_knowledge",
                 })
 
-    # 3. 同项目 Agent 的相关教训（L6）
+    # 3. 同主题 Agent 的教训+偏好（L6/L7，按 project 和 category 匹配）
     with pool_conn() as conn:
-        # 先查自己的 project
         my_projects = conn.execute(
             "SELECT DISTINCT project FROM memories "
             "WHERE LOWER(agent_name) = LOWER(?) AND project != '' "
@@ -79,7 +78,7 @@ def intelligent_retrieve(agent_name: str, query: str = "", top_k: int = 10) -> l
                 "SELECT id, content, subject, level, agent_name, created_at FROM memories "
                 "WHERE level IN ('L6','L7') AND project = ? "
                 "AND LOWER(agent_name) != LOWER(?) "
-                "ORDER BY confidence DESC LIMIT 3",
+                "ORDER BY confidence DESC, created_at DESC LIMIT 5",
                 (project, agent_name),
             ).fetchall()
             for r in peers:
@@ -91,6 +90,34 @@ def intelligent_retrieve(agent_name: str, query: str = "", top_k: int = 10) -> l
                     "agent_name": r["agent_name"],
                     "created_at": r["created_at"],
                     "_source": f"peer_{project}",
+                })
+
+        # 4. 同 category 的教训+偏好（按主题匹配，不限于同 project）
+        my_cats = conn.execute(
+            "SELECT DISTINCT category FROM memories "
+            "WHERE LOWER(agent_name) = LOWER(?) AND category != '' AND category != 'general' "
+            "LIMIT 5",
+            (agent_name,),
+        ).fetchall()
+
+        for c in my_cats:
+            cat = c["category"]
+            peers = conn.execute(
+                "SELECT id, content, subject, level, agent_name, created_at FROM memories "
+                "WHERE level IN ('L6','L7') AND category = ? "
+                "AND LOWER(agent_name) != LOWER(?) "
+                "ORDER BY confidence DESC, created_at DESC LIMIT 3",
+                (cat, agent_name),
+            ).fetchall()
+            for r in peers:
+                results.append({
+                    "id": r["id"],
+                    "content": r["content"],
+                    "subject": r["subject"],
+                    "level": r["level"],
+                    "agent_name": r["agent_name"],
+                    "created_at": r["created_at"],
+                    "_source": f"peer_{cat}",
                 })
 
     # 去重
