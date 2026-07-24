@@ -166,8 +166,8 @@ async def _cors_middleware(request: web.Request, handler) -> web.Response:
     except web.HTTPException as exc:
         response = exc
     origin = request.headers.get("Origin", "")
-    if origin in _CORS_ALLOWED_ORIGINS:
-        response.headers["Access-Control-Allow-Origin"] = origin
+    if "*" in _CORS_ALLOWED_ORIGINS or origin in _CORS_ALLOWED_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin if origin else "*"
     response.headers["Access-Control-Allow-Methods"] = _CORS_HEADERS["Access-Control-Allow-Methods"]
     response.headers["Access-Control-Allow-Headers"] = _CORS_HEADERS["Access-Control-Allow-Headers"]
     return response

@@ -19,7 +19,7 @@ _CORS_HEADERS = {
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
 }
 
-_CORS_ALLOWED_ORIGINS = {"http://127.0.0.1:9919", "http://localhost:9919", "http://127.0.0.1:8199"}
+_CORS_ALLOWED_ORIGINS = {"http://127.0.0.1:9919", "http://localhost:9919", "http://127.0.0.1:9920", "http://localhost:9920", "http://127.0.0.1:8199", "*"}
 
 
 def esc_html(text: str) -> str:
@@ -41,8 +41,9 @@ def _density_color(count: int, max_count: int) -> str:
 def _cors_headers(request: web.Request) -> Dict[str, str]:
     """Build CORS headers, echoing Origin if it's in the allowed list."""
     origin = request.headers.get("Origin", "")
-    if origin in _CORS_ALLOWED_ORIGINS:
-        return {**_CORS_HEADERS, "Access-Control-Allow-Origin": origin}
+    if "*" in _CORS_ALLOWED_ORIGINS or origin in _CORS_ALLOWED_ORIGINS:
+        allowed = origin if origin else "*"
+        return {**_CORS_HEADERS, "Access-Control-Allow-Origin": allowed}
     return _CORS_HEADERS
 
 
