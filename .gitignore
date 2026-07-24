@@ -155,3 +155,14 @@ test_frontend.html
 test_mcp_*.jsonl.coverage
 test_mcp_tool.jsonl
 tests/coverage_html/
+__analysis.json
+__*.js
+__*.py
+__*.ps1
+__*.md
+_*.ps1
+_*.cmd
+__deep_data.json
+conversations/
+*.db
+*.jsonl
