@@ -556,7 +556,7 @@ def capture(data: MemoryInput | dict | str, accumulate_key: str | None = None, *
             f"len={len(data.content or '')}) — content too short or low quality"
         )
     elif quality_gate == "review":
-        logger.warning(
+        logger.debug(
             "capture: quality gate review (avg=%.2f, min=%d) agent=%s cat=%s",
             quality_result.get("avg", 0), quality_result.get("min", 0),
             data.agent_name, data.category,

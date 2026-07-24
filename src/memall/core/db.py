@@ -105,6 +105,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS mem_vec USING vec0(
 CREATE INDEX IF NOT EXISTS idx_memories_owner ON memories(owner);
 CREATE INDEX IF NOT EXISTS idx_memories_agent ON memories(agent_name);
 CREATE INDEX IF NOT EXISTS idx_memories_level_agent ON memories(level, agent_name);
+CREATE INDEX IF NOT EXISTS idx_memories_level ON memories(level);
 CREATE INDEX IF NOT EXISTS idx_memories_agent_lower ON memories(LOWER(agent_name));
 CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
 CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project);
