@@ -39,6 +39,15 @@ from memall.gateway_utils import esc_html, _ok, _load_debt_cache, _save_debt_cac
 logger = logging.getLogger("memall.gateway.api")
 
 
+def _memory_to_dict(m):
+    """Convert Memory object or dict to JSON-serializable dict."""
+    if hasattr(m, '__dict__'):
+        return m.__dict__
+    if isinstance(m, dict):
+        return m
+    return {"id": m, "content": str(m)}
+
+
 async def handle_capture(request: web.Request, gw) -> web.Response:
     data = await gw._read_json(request)
     if data is None:
@@ -61,8 +70,8 @@ async def handle_retrieve(request: web.Request, gw) -> web.Response:
     if results is None:
         return web.json_response({"results": []})
     if isinstance(results, list):
-        return web.json_response({"results": [dict(r) if hasattr(r, 'keys') else r for r in results]})
-    return web.json_response({"result": dict(results) if hasattr(results, 'keys') else results})
+        return web.json_response({"results": [_memory_to_dict(r) for r in results]})
+    return web.json_response({"result": _memory_to_dict(results)})
 
 
 async def handle_traverse(request: web.Request, gw) -> web.Response:
@@ -116,12 +125,25 @@ async def handle_api_search(request: web.Request, gw) -> web.Response:
     category = request.query.get("category", "")
     level = request.query.get("level", "")
     limit = int(request.query.get("limit", "20"))
-    results = retrieve(query, owner=owner or None, agent_name=agent_name or None,
-                       category=category or None, level=level or None)
+    filters = {}
+    if owner: filters["owner"] = owner
+    if agent_name: filters["agent_name"] = agent_name
+    if category: filters["category"] = category
+    if level: filters["level"] = level
+    results = retrieve(query, **filters)
     if not isinstance(results, list):
         results = []
     results = results[:limit]
-    return web.json_response({"data": [dict(r) if hasattr(r, 'keys') else r for r in results]})
+    # Convert Memory objects to dicts for JSON serialization
+    items = []
+    for r in results:
+        if hasattr(r, '__dict__'):
+            items.append(r.__dict__)
+        elif isinstance(r, dict):
+            items.append(r)
+        else:
+            items.append({"id": r, "content": str(r)})
+    return web.json_response({"data": items})
 
 
 async def handle_api_vector_search(request: web.Request, gw) -> web.Response:
@@ -142,9 +164,7 @@ async def handle_api_get_memory(request: web.Request, gw) -> web.Response:
     result = retrieve(memory_id)
     if result is None:
         return web.json_response({"error": "not found"}, status=404)
-    if hasattr(result, 'keys'):
-        return web.json_response({"data": dict(result)})
-    return web.json_response({"data": result})
+    return web.json_response({"data": _memory_to_dict(result)})
 
 
 async def handle_api_db_stats(request: web.Request, gw) -> web.Response:
