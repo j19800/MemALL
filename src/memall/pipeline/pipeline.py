@@ -319,6 +319,7 @@ _PIPELINE_STEPS = [
     ("improve",         "memall.pipeline.improve",         "improve_step",                    None),
     ("observation",     "memall.pipeline.observe",     "observation_step",                None),
     ("identity",        "memall.pipeline.identity",        "identity_step",                   None),
+    ("reasoning",       "memall.pipeline.reasoning",        "reasoning_step",                  None),
     ("archive",         "memall.pipeline.archive",         "archive_step",                    None),
 ]
 

@@ -343,6 +343,19 @@ def _handle_system(args: dict) -> str:
         return reflect.handle(args)
     elif action == "index_rebuild":
         return index.handle(args)
+    elif action == "import":
+        import json, pathlib
+        from memall.auto_capture import import_from_jsonl, import_from_csv, import_from_mem0
+        fmt = args.get("format", "jsonl")
+        path = args.get("path", "")
+        agent = args.get("agent_name", "imported")
+        if fmt == "mem0":
+            result = import_from_mem0(path, agent)
+        elif fmt == "csv":
+            result = import_from_csv(path, agent)
+        else:
+            result = import_from_jsonl(path, agent)
+        return json.dumps(result, ensure_ascii=False)
     elif action in ("digest", "每日摘要", "日报", "总结"):
         # Daily digest — count today's memories by category with content snippets
         import json, datetime
