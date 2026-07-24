@@ -878,7 +878,12 @@ pre{font-family:inherit;white-space:pre-wrap;word-break:break-word}
 // ============================================================
 //  State
 // ============================================================
-var API = (new URLSearchParams(window.location.search).get('api_url') || localStorage.getItem('memall_api_url') || 'http://127.0.0.1:9920').replace(/\/+$/,'');
+var API = (new URLSearchParams(window.location.search).get('api_url') || 'http://127.0.0.1:9920').replace(/\/+$/,'');
+// Initialize input field to match API variable
+document.addEventListener('DOMContentLoaded', function(){
+  var input = document.getElementById('apiUrlInput');
+  if(input) input.value = API;
+});
 var chatHistory = [];
 var sending = false;
 var dashboardTimer = null;
@@ -2310,7 +2315,10 @@ function escJS(s){ return (''+s).replace(/'/g,"\\'").replace(/"/g,'&quot;'); }
 //  SETTINGS
 // ============================================================
 function loadSettings(){
-  document.getElementById('apiUrlInput').value = API;
+  // Sync API variable from input field (in case localStorage has stale value)
+  var saved = document.getElementById('apiUrlInput').value.replace(/\/+$/,'');
+  API = saved;
+  localStorage.setItem('memall_api_url', saved);
   loadDbStats();
   loadExportAgents();
 }
