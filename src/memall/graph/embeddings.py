@@ -5,6 +5,7 @@ Stores 512-dim float32 vectors in memory_embeddings table + vec0 virtual table.
 
 import hashlib
 import logging
+import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -83,6 +84,124 @@ def _get_model():
     return _MODEL
 
 
+# ── Torch-free fallback embedder (TF-IDF → SVD) ──────────────────────────
+# Used when sentence-transformers cannot be imported (e.g. torch DLL init
+# failure on this host). Produces deterministic, query/index-consistent
+# EMBED_DIM vectors with a persisted TfidfVectorizer + TruncatedSVD.
+# Chinese text is tokenized with char unigrams + bigrams (no jieba dep).
+
+import re as _re  # noqa: E402
+import pickle as _pickle  # noqa: E402
+
+_CJK_RE = _re.compile(r"[\u4e00-\u9fff]+")
+_ASCII_RE = _re.compile(r"[A-Za-z0-9]+")
+
+
+def _tokenize_mixed(text: str) -> list:
+    """Mixed CN/EN tokenizer: ASCII words + CJK char unigrams/bigrams."""
+    toks = []
+    for m in _ASCII_RE.findall(text.lower()):
+        toks.append(m)
+    for seg in _CJK_RE.findall(text):
+        for i in range(len(seg)):
+            toks.append(seg[i])
+            if i + 1 < len(seg):
+                toks.append(seg[i:i + 2])
+    return toks
+
+
+_TFIDF_MODEL = None
+_TFIDF_MODEL_PATH = None
+
+
+def _tfidf_model_path() -> str:
+    global _TFIDF_MODEL_PATH
+    if _TFIDF_MODEL_PATH is None:
+        base = os.path.join(os.path.expanduser("~/.memall"), ".vector_model")
+        os.makedirs(base, exist_ok=True)
+        _TFIDF_MODEL_PATH = os.path.join(base, "tfidf_svd_vecsearch.pkl")
+    return _TFIDF_MODEL_PATH
+
+
+def _load_tfidf_model():
+    global _TFIDF_MODEL
+    if _TFIDF_MODEL is not None:
+        return _TFIDF_MODEL
+    p = _tfidf_model_path()
+    if os.path.exists(p):
+        try:
+            with open(p, "rb") as f:
+                _TFIDF_MODEL = _pickle.load(f)
+                return _TFIDF_MODEL
+        except Exception:
+            _TFIDF_MODEL = None
+    return None
+
+
+def _save_tfidf_model(model):
+    p = _tfidf_model_path()
+    try:
+        with open(p, "wb") as f:
+            _pickle.dump(model, f, protocol=_pickle.HIGHEST_PROTOCOL)
+    except Exception:
+        logger.warning("failed to persist tfidf vecsearch model", exc_info=True)
+
+
+def _tfidf_embed(texts, normalize: bool = True):
+    """TF-IDF + TruncatedSVD embedding (torch-free). Trains on first batch."""
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.decomposition import TruncatedSVD
+
+    texts = [t or "" for t in texts]
+    model = _load_tfidf_model()
+    if model is None:
+        if len(texts) < 2:
+            return None  # cannot train SVD on a single doc
+        vec = TfidfVectorizer(
+            tokenizer=_tokenize_mixed, token_pattern=None,
+            max_features=4000, stop_words=None,
+        )
+        X = vec.fit_transform(texts)
+        n = X.shape[0]
+        k = min(EMBED_DIM, n, X.shape[1])
+        if k < 2:
+            return None
+        svd = TruncatedSVD(n_components=k, random_state=42)
+        svd.fit(X)
+        model = (vec, svd)
+        _TFIDF_MODEL = model
+        _save_tfidf_model(model)
+    vec, svd = model
+    X = vec.transform(texts)
+    out = svd.transform(X).astype(np.float32)
+    if normalize:
+        norms = np.linalg.norm(out, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        out = out / norms
+    return out
+
+
+def _embed_texts(texts, normalize: bool = True):
+    """Unified embedder: sentence-transformers if available, else TF-IDF/SVD.
+
+    Returns an (n, EMBED_DIM) float32 array, or None when no backend can
+    produce vectors for the given inputs (callers should degrade gracefully).
+    """
+    if _check_st_available():
+        try:
+            model = _get_model()
+            vecs = model.encode(texts, show_progress_bar=False, normalize_embeddings=normalize)
+            return np.asarray(vecs, dtype=np.float32)
+        except Exception:
+            logger.warning("sentence-transformers encode failed; falling back to TF-IDF/SVD", exc_info=True)
+    return _tfidf_embed(texts, normalize=normalize)
+
+
+def _active_model_name() -> str:
+    """Report the backend actually used for embeddings (for diagnostics)."""
+    return _MODEL_NAME if _check_st_available() else "tfidf-svd-fallback"
+
+
 def _ensure_embeddings_table(conn):
     conn.execute("""
         CREATE TABLE IF NOT EXISTS memory_embeddings (
@@ -120,16 +239,19 @@ def _auto_embed(conn, memory_id: int, content: str, content_hash_val: str) -> No
     Raises on failure so callers can track embedding status.
     """
     _ensure_embeddings_table(conn)
-    model = _get_model()
-    vec = model.encode(content[:MAX_TEXT_LEN], normalize_embeddings=True)
-    vec = np.array(vec, dtype=np.float32)
+    emb = _embed_texts([content[:MAX_TEXT_LEN]], normalize=True)
+    if emb is None:
+        # No embedding backend available (e.g. torch DLL failure AND TF-IDF
+        # model not yet trained). Skip; build_index will fill it later.
+        return
+    vec = emb[0]
     now = datetime.now(timezone.utc).isoformat()
     vec_bytes = vec.tobytes()
     conn.execute(
         "INSERT OR REPLACE INTO memory_embeddings "
         "(memory_id, embedding, model_name, dims, content_hash, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        (memory_id, vec_bytes, _MODEL_NAME, EMBED_DIM, content_hash_val, now),
+        (memory_id, vec_bytes, _active_model_name(), EMBED_DIM, content_hash_val, now),
     )
     _vec0_upsert(conn, memory_id, vec_bytes)
 
@@ -138,7 +260,7 @@ def build_index(batch_size: int = BATCH_SIZE, force: bool = False) -> dict:
     with pool_conn() as conn:
         _ensure_embeddings_table(conn)
         rows = conn.execute(
-            "SELECT id, content, content_hash FROM memories WHERE LENGTH(TRIM(content)) > 10 ORDER BY id LIMIT 1000"
+            "SELECT id, content, content_hash FROM memories WHERE LENGTH(TRIM(content)) > 10 ORDER BY id LIMIT 100000"
         ).fetchall()
         total = len(rows)
         if total == 0:
@@ -167,13 +289,18 @@ def build_index(batch_size: int = BATCH_SIZE, force: bool = False) -> dict:
         if not pending:
             return {
                 "total": total, "embedded": total,
-                "new": 0, "status": "up_to_date", "model": _MODEL_NAME,
+                "new": 0, "status": "up_to_date", "model": _active_model_name(),
             }
 
-        model = _get_model()
         texts = [r["content"][:MAX_TEXT_LEN] for r in pending]
-        logger.info("Encoding %d memories with %s ...", len(texts), _MODEL_NAME)
-        vecs = model.encode(texts, show_progress_bar=False, normalize_embeddings=True)
+        logger.info("Encoding %d memories with embedding backend ...", len(texts))
+        vecs = _embed_texts(texts, normalize=True)
+        if vecs is None:
+            logger.error("Embedding backend unavailable; cannot build vector index")
+            return {
+                "total": total, "embedded": total,
+                "new": 0, "status": "embedder_unavailable", "model": _active_model_name(),
+            }
 
         now = datetime.now(timezone.utc).isoformat()
         conn.execute("BEGIN")
@@ -184,7 +311,7 @@ def build_index(batch_size: int = BATCH_SIZE, force: bool = False) -> dict:
                 "INSERT OR REPLACE INTO memory_embeddings "
                 "(memory_id, embedding, model_name, dims, content_hash, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (row["id"], vec_bytes, _MODEL_NAME, EMBED_DIM, row["content_hash"], now),
+                (row["id"], vec_bytes, _active_model_name(), EMBED_DIM, row["content_hash"], now),
             )
             _vec0_upsert(conn, row["id"], vec_bytes)
         conn.commit()
@@ -194,7 +321,7 @@ def build_index(batch_size: int = BATCH_SIZE, force: bool = False) -> dict:
             "embedded": total,
             "new": len(pending),
             "batch_size": batch_size,
-            "model": _MODEL_NAME,
+            "model": _active_model_name(),
         }
 
 
@@ -204,7 +331,7 @@ def index_status() -> dict:
         total = conn.execute("SELECT COUNT(*) FROM memories WHERE LENGTH(TRIM(content)) > 10").fetchone()[0]
         embedded = conn.execute("SELECT COUNT(*) FROM memory_embeddings").fetchone()[0]
         model_row = conn.execute("SELECT DISTINCT model_name FROM memory_embeddings LIMIT 1").fetchone()
-        model = model_row[0] if model_row else _MODEL_NAME
+        model = model_row[0] if model_row else _active_model_name()
         dims = EMBED_DIM
         return {"total_memories": total, "embedded": embedded, "pending": total - embedded, "model": model, "dims": dims}
 

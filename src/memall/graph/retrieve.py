@@ -66,13 +66,13 @@ def _get_embed_model():
 
 
 def _query_embed(query: str) -> np.ndarray | None:
-    """Encode query using bge-small-zh model for consistent vector space."""
-    model = _get_embed_model()
-    if model is None:
-        return None
+    """Encode query into the shared embedding space (bge or TF-IDF/SVD fallback)."""
+    from memall.graph.embeddings import _embed_texts as _embed
     try:
-        vec = model.encode(query[:EMBED_DIM], normalize_embeddings=True)
-        return np.array(vec, dtype=np.float32)
+        vec = _embed([query[:EMBED_DIM]], normalize=True)
+        if vec is None:
+            return None
+        return np.asarray(vec[0], dtype=np.float32)
     except Exception:
         return None
 

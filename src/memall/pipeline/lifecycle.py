@@ -85,10 +85,9 @@ def _cluster_by_embedding(conn) -> list[dict]:
         key = ((r["agent_name"] or "").lower(), r["category"] or "")
         groups[key].append({"id": r["id"], "content": r["content"]})
 
-    from memall.graph.embeddings import _get_model
+    from memall.graph.embeddings import _embed_texts
     import numpy as np
 
-    model = _get_model()
     all_clusters: list[dict] = []
 
     for (agent, cat), members in groups.items():
@@ -97,7 +96,7 @@ def _cluster_by_embedding(conn) -> list[dict]:
 
         texts = [m["content"][:768] for m in members]
         try:
-            embeddings = model.encode(texts, normalize_embeddings=True)
+            embeddings = _embed_texts(texts, normalize=True)
         except Exception:
             logger.warning("lifecycle: encode failed for %s/%s, skipping", agent, cat, exc_info=True)
             continue

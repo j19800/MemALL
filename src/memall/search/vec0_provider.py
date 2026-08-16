@@ -95,15 +95,13 @@ class Vec0Provider(SearchProvider):
         Delegates to the per-memory insertion path in embeddings.
         """
         from memall.core.db import pool_conn
-        from memall.graph.embeddings import _get_model, _vec0_upsert, EMBED_DIM
+        from memall.graph.embeddings import _embed_texts, _vec0_upsert, EMBED_DIM
 
-        model = _get_model()
-        if model is None:
+        vec = _embed_texts([content[:768]], normalize=True)
+        if vec is None:
             logger.warning("Vec0 add_item: embed model unavailable")
             return
-
-        vec = model.encode([content[:768]], normalize_embeddings=True)[0]
-        vec_bytes = np.array(vec, dtype=np.float32).tobytes()
+        vec_bytes = np.array(vec[0], dtype=np.float32).tobytes()
 
         with pool_conn() as conn:
             _vec0_upsert(conn, memory_id, vec_bytes)
