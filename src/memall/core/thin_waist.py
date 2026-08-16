@@ -493,12 +493,15 @@ def _capture_post_insert(conn, mem_id: int, data: MemoryInput, h: str) -> None:
         _bg_conn = _bg_get_conn()
         try:
             try:
-                from memall.graph.embeddings import _auto_embed, _check_st_available
-                if _check_st_available():
-                    _auto_embed(_bg_conn, mem_id, _bg_content, h)
-                    _bg_conn.commit()
+                from memall.graph.embeddings import _auto_embed
+                # 不再用 _check_st_available() 门禁：本机走 ONNX bge 路径时
+                # ST 不可用，原条件恒 False 会导致新记忆漏建向量，只能靠全量
+                # rebuild。_auto_embed 内部经 _embed_texts_named 自动按
+                # ST → ONNX → TF-IDF 顺序降级，无需此处前置门槛。
+                _auto_embed(_bg_conn, mem_id, _bg_content, h)
+                _bg_conn.commit()
             except Exception:
-                logger.debug("bg embedding failed (sentence-transformers not installed)")
+                logger.debug("bg embedding failed", exc_info=True)
 
             try:
                 from memall.config import get_config as _get_dream_config
