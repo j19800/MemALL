@@ -878,12 +878,19 @@ def fts_query(raw: str) -> str:
                 for w in words:
                     if len(w) >= 2 and w != t:
                         cjk_options.append(f'"{w}"')
-            # Fallback: for 4+ char CJK not split by jieba, try 2-char sub-tokens
-            if len(cjk_options) == 1 and len(t) >= 4:
-                for i in range(0, len(t) - 1, 2):
-                    sub = t[i:i+2]
-                    if len(sub) >= 2 and sub != t:
-                        cjk_options.append(f'"{sub}"')
+            # Sliding 2-char windows for any CJK run >= 3 chars.
+            # Covers the residual gap where a 3-char query (e.g. "检索库") is
+            # not present as an exact adjacent run in any memory: we OR in every
+            # adjacent 2-char segment ("检索" OR "索库") so memories containing
+            # any segment are still recalled. Overlapping (step 1) gives full
+            # coverage; for longer runs it also broadens recall beyond the old
+            # non-overlapping step-2 sampling.
+            if len(t) >= 3:
+                for i in range(len(t) - 1):
+                    sub = t[i:i + 2]
+                    tok = f'"{sub}"'
+                    if len(sub) >= 2 and sub != t and tok not in cjk_options:
+                        cjk_options.append(tok)
             if len(cjk_options) > 1:
                 tokenized.append(f'({" OR ".join(cjk_options)})')
             else:
