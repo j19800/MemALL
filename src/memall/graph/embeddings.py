@@ -45,7 +45,9 @@ def _check_st_available(timeout: float = 5.0) -> bool:
         try:
             import sentence_transformers  # noqa: F401
             result[0] = True
-        except ImportError:
+        except Exception:
+            # ImportError OR transformers' numpy version ValueError both mean
+            # sentence-transformers is unusable on this host -> stay unavailable.
             pass
         done.set()
 
@@ -181,8 +183,99 @@ def _tfidf_embed(texts, normalize: bool = True):
     return out
 
 
+# ── ONNX backend (bge-small via onnxruntime, torch-free) ──────────────────
+# Used when sentence-transformers (torch) is unavailable but onnxruntime
+# works (e.g. SSE4.2-only CPUs where torch DLL init fails). Loads a
+# pre-exported BAAI/bge-small-zh-v1.5 ONNX model + HuggingFace tokenizer.json.
+# onnxruntime 1.19.2 is the newest build that runs on SSE4.2 + numpy 2.x.
+
+_ONNX = None  # {"session","tokenizer","input_names","has_token_type"}
+_ONNX_MAX_LEN = 512
+
+
+def _onnx_model_paths():
+    base = os.path.join(os.path.expanduser("~/.memall"), ".vector_model", "bge_onnx")
+    candidates = [
+        os.path.join(base, "model_quantized.onnx"),
+        os.path.join(base, "onnx", "model_quantized.onnx"),
+        os.path.join(base, "model.onnx"),
+        os.path.join(base, "onnx", "model.onnx"),
+    ]
+    tok = os.path.join(base, "tokenizer.json")
+    if not os.path.exists(tok):
+        tok = os.path.join(base, "onnx", "tokenizer.json")
+    return candidates, tok
+
+
+def _load_onnx_model():
+    """Lazy-load the ONNX bge model + tokenizer (cached). Returns dict or None."""
+    global _ONNX
+    if _ONNX is not None:
+        return _ONNX
+    candidates, tok_path = _onnx_model_paths()
+    model_path = next((c for c in candidates if os.path.exists(c)), None)
+    if model_path is None or not os.path.exists(tok_path):
+        logger.info(
+            "ONNX bge model/tokenizer not found under %s; skipping ONNX backend",
+            os.path.dirname(candidates[0]),
+        )
+        return None
+    try:
+        import onnxruntime as ort
+        from tokenizers import Tokenizer
+
+        sess = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+        in_names = [i.name for i in sess.get_inputs()]
+        tok = Tokenizer.from_file(tok_path)
+        _ONNX = {
+            "session": sess,
+            "tokenizer": tok,
+            "input_names": in_names,
+            "has_token_type": "token_type_ids" in in_names,
+        }
+        logger.info("ONNX bge backend loaded: %s (inputs=%s)", model_path, in_names)
+        return _ONNX
+    except Exception:
+        logger.warning("failed to load ONNX bge backend; falling back", exc_info=True)
+        return None
+
+
+def _onnx_embed(texts, normalize: bool = True):
+    """Embed texts with the ONNX bge model (CLS pooling + L2 norm)."""
+    backend = _load_onnx_model()
+    if backend is None:
+        return None
+    texts = [t or "" for t in texts]
+    encs = backend["tokenizer"].encode_batch(texts, add_special_tokens=True)
+    input_ids, attn = [], []
+    for e in encs:
+        ids = e.ids[:_ONNX_MAX_LEN]
+        mask = e.attention_mask[:_ONNX_MAX_LEN]
+        input_ids.append(ids)
+        attn.append(mask)
+    max_len = max(len(i) for i in input_ids)
+    # Hard cap: never let a pathological/over-long input blow up the tensor
+    # (e.g. onnxruntime allocating tens of GB for a giant sequence).
+    max_len = min(max_len, _ONNX_MAX_LEN)
+    input_ids = [i + [0] * (max_len - len(i)) for i in input_ids]
+    attn = [a + [0] * (max_len - len(a)) for a in attn]
+    feeds = {
+        "input_ids": np.array(input_ids, dtype=np.int64),
+        "attention_mask": np.array(attn, dtype=np.int64),
+    }
+    if backend["has_token_type"]:
+        feeds["token_type_ids"] = np.zeros((len(texts), max_len), dtype=np.int64)
+    out = backend["session"].run(None, feeds)[0]  # (batch, seq, 512)
+    cls = out[:, 0, :].astype(np.float32)  # bge uses [CLS] token
+    if normalize:
+        norms = np.linalg.norm(cls, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        cls = cls / norms
+    return cls
+
+
 def _embed_texts(texts, normalize: bool = True):
-    """Unified embedder: sentence-transformers if available, else TF-IDF/SVD.
+    """Unified embedder: sentence-transformers → ONNX bge → TF-IDF/SVD.
 
     Returns an (n, EMBED_DIM) float32 array, or None when no backend can
     produce vectors for the given inputs (callers should degrade gracefully).
@@ -193,13 +286,24 @@ def _embed_texts(texts, normalize: bool = True):
             vecs = model.encode(texts, show_progress_bar=False, normalize_embeddings=normalize)
             return np.asarray(vecs, dtype=np.float32)
         except Exception:
-            logger.warning("sentence-transformers encode failed; falling back to TF-IDF/SVD", exc_info=True)
+            logger.warning("sentence-transformers encode failed; falling back", exc_info=True)
+    # ONNX bge backend (torch-free, SSE4.2 compatible)
+    try:
+        v = _onnx_embed(texts, normalize=normalize)
+        if v is not None:
+            return v
+    except Exception:
+        logger.warning("ONNX embed failed; falling back to TF-IDF/SVD", exc_info=True)
     return _tfidf_embed(texts, normalize=normalize)
 
 
 def _active_model_name() -> str:
     """Report the backend actually used for embeddings (for diagnostics)."""
-    return _MODEL_NAME if _check_st_available() else "tfidf-svd-fallback"
+    if _check_st_available():
+        return _MODEL_NAME
+    if _load_onnx_model() is not None:
+        return "bge-onnx-sse42"
+    return "tfidf-svd-fallback"
 
 
 def _ensure_embeddings_table(conn):
