@@ -9,6 +9,7 @@ falls back to keyword-only mode.
 
 import logging
 import sqlite3
+from typing import Optional
 
 import numpy as np
 
@@ -122,7 +123,8 @@ def _get_one_hop(conn, mem_ids: list, limit: int = 5000):
     return neighbors
 
 
-def retrieve(query: str, mode: str = "hybrid", top_k: int = 10) -> dict:
+def retrieve(query: str, mode: str = "hybrid", top_k: int = 10,
+             rerank: Optional[bool] = None) -> dict:
     with pool_conn() as conn:
         if mode == "keyword":
             raw = _keyword_search(conn, query, top_k * 3)  # more candidates for level reordering
@@ -184,7 +186,29 @@ def retrieve(query: str, mode: str = "hybrid", top_k: int = 10) -> dict:
                     })
                     seen_ids.add(nid)
 
-        sorted_candidates = sorted(candidates, key=lambda x: -x["score"])[:top_k]
+        # Rerank stage (P0-2): re-score candidates by a cross-encoder for
+        # better top-k relevance. ONNX bge-reranker-base (SSE4.2, zero-dep)
+        # is tried first, then sentence-transformers CrossEncoder, then the
+        # original score ordering as fallback.
+        if rerank is None:
+            from memall.config import get_config
+            rerank = get_config("search.rerank_enabled", True)
+        reranked_ok = False
+        if rerank and len(candidates) > 1:
+            try:
+                from memall.core.thin_waist import _rerank as _tw_rerank
+                reranked = _tw_rerank(candidates, query, top_k)
+                if reranked is not None:
+                    candidates = reranked
+                    reranked_ok = True
+            except Exception:
+                logger.warning("rerank failed in retrieve(); using score ordering", exc_info=True)
+
+        if reranked_ok:
+            # _rerank already returns the top_k sorted by rerank_score
+            sorted_candidates = candidates[:top_k]
+        else:
+            sorted_candidates = sorted(candidates, key=lambda x: -x["score"])[:top_k]
         return {
             "query": query, "mode": "hybrid",
             "results": sorted_candidates,

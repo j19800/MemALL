@@ -31,8 +31,9 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "provider": "tfidf",
         "rrf_k": 60,
         "reranker_model": "BAAI/bge-reranker-v2-m3",
-        "rerank_top_k": 30,
-        "rerank_enabled": False,
+        "rerank_top_k": 15,
+        "rerank_enabled": True,
+        "reranker_onnx_dir": "~/.memall/.rerank_model",
         "context_rerank": {
             "enabled": False,
             "weight": 0.15,

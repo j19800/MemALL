@@ -1180,24 +1180,120 @@ _reranker = None          # cached CrossEncoder instance
 _reranker_model_name = None  # track which model is loaded
 
 
-def _rerank(results: list[dict], query: str, top_k: int) -> list[dict]:
-    """Re-rank RRF results with a cross-encoder model.
+# ── ONNX cross-encoder reranker (local, SSE4.2, zero-dep) ──
+_reranker_onnx = None          # cached onnxruntime.InferenceSession
+_reranker_onnx_tok = None      # cached tokenizers.Tokenizer
 
-    Lazy-loads ``CrossEncoder`` on first call (cached thereafter).  Falls
-    back to the original RRF ordering if ``sentence-transformers`` is not
-    installed or the model fails to load / infer.
+
+def _load_reranker_onnx():
+    """Lazy-load the local ONNX cross-encoder reranker (bge-reranker-base INT8).
+
+    Runs on SSE4.2 CPUs via onnxruntime 1.19.2 (no PyTorch / AVX2 needed).
+    Returns (session, tokenizer) or (None, None) if the model files are absent
+    or fail to load.
     """
-    global _reranker, _reranker_model_name
+    global _reranker_onnx, _reranker_onnx_tok
+    if _reranker_onnx is not None:
+        return _reranker_onnx, _reranker_onnx_tok
+    try:
+        import os
+        from memall.config import get_config
+        base = os.path.expanduser(
+            get_config("search.reranker_onnx_dir", "~/.memall/.rerank_model"))
+        model_path = os.path.join(base, "onnx", "model_quantized.onnx")
+        tok_path = os.path.join(base, "tokenizer.json")
+        if not (os.path.exists(model_path) and os.path.exists(tok_path)):
+            logger.info("ONNX reranker not found at %s; skipping", base)
+            return None, None
+        import onnxruntime as ort
+        from tokenizers import Tokenizer
+        sess = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+        tok = Tokenizer.from_file(tok_path)
+        _reranker_onnx = sess
+        _reranker_onnx_tok = tok
+        logger.info("ONNX reranker loaded: %s", model_path)
+        return sess, tok
+    except Exception:
+        logger.warning("failed to load ONNX reranker", exc_info=True)
+        return None, None
 
+
+def _onnx_rerank(results: list[dict], query: str, top_k: int) -> list[dict] | None:
+    """Re-rank candidates via the local ONNX cross-encoder.
+
+    Returns the re-ranked list (top_k) or ``None`` if the reranker is
+    unavailable or inference fails (so the caller can try the next backend).
+    """
+    global _reranker_onnx, _reranker_onnx_tok
+    sess, tok = _load_reranker_onnx()
+    if sess is None or not results:
+        return None
+    import numpy as np
+    from memall.config import get_config
+
+    rerank_top_k = get_config("search.rerank_top_k", 30)
+    candidates = results[:rerank_top_k]
+    if not candidates:
+        return None
+    try:
+        encs = tok.encode_batch(
+            [(query, (r.get("content") or "")[:512]) for r in candidates],
+            add_special_tokens=True,
+        )
+        input_ids, attn = [], []
+        for e in encs:
+            ids = e.ids[:512]
+            mask = e.attention_mask[:512]
+            input_ids.append(ids)
+            attn.append(mask)
+        max_len = min(max(len(i) for i in input_ids), 512)
+        input_ids = [i + [0] * (max_len - len(i)) for i in input_ids]
+        attn = [a + [0] * (max_len - len(a)) for a in attn]
+        feeds = {
+            "input_ids": np.array(input_ids, dtype=np.int64),
+            "attention_mask": np.array(attn, dtype=np.int64),
+        }
+        logits = sess.run(None, feeds)[0]  # (n, 1) single relevance logit
+        scores = np.asarray(logits, dtype=np.float32).flatten()
+        for r, s in zip(candidates, scores):
+            r["rerank_score"] = float(s)
+        candidates.sort(key=lambda x: -x.get("rerank_score", 0))
+        return candidates[:top_k]
+    except Exception:
+        logger.warning("ONNX reranker inference failed; will try cross-encoder", exc_info=True)
+        return None
+
+
+def _rerank(results: list[dict], query: str, top_k: int) -> list[dict]:
+    """Re-rank retrieval candidates with a cross-encoder model.
+
+    Backend order (graceful degradation):
+      1. Local ONNX cross-encoder (bge-reranker-base INT8, SSE4.2, zero new
+         deps) — preferred; runs on this host without PyTorch / AVX2.
+      2. sentence-transformers ``CrossEncoder`` (BAAI/bge-reranker-v2-m3) —
+         for hosts that have ST + PyTorch installed.
+      3. Original RRF / candidate ordering — if no reranker is available.
+
+    Falls back to the previous ordering if every stage fails.
+    """
     if not results:
         return results
 
+    # 1) Local ONNX cross-encoder (preferred, zero-dep, SSE4.2)
+    try:
+        onnx_res = _onnx_rerank(results, query, top_k)
+        if onnx_res is not None:
+            return onnx_res
+    except Exception:
+        logger.debug("ONNX rerank skipped", exc_info=True)
+
+    # 2) sentence-transformers CrossEncoder (for ST-equipped hosts)
+    global _reranker, _reranker_model_name
     from memall.config import get_config
 
     model_name = get_config("search.reranker_model", "BAAI/bge-reranker-v2-m3")
     rerank_top_k = get_config("search.rerank_top_k", 30)
 
-    # (Re)load the model if first call or model changed
     if _reranker is None or _reranker_model_name != model_name:
         _reranker = None
         _reranker_model_name = None
@@ -1348,7 +1444,7 @@ def vector_search(query: str, top_k: int = 10, provider: Optional[str] = None) -
 
 def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
                   category: Optional[str] = None, level: Optional[str] = None,
-                  owner: Optional[str] = None, rerank: bool = False,
+                  owner: Optional[str] = None, rerank: Optional[bool] = None,
                   viewer: Optional[str] = None) -> dict:
     """RRF (Reciprocal Rank Fusion) hybrid search combining FTS5 + vec0.
 
@@ -1361,13 +1457,12 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
     Optional metadata filters (``category``, ``level``, ``owner``) are applied
     before the RRF merge, reducing candidate pool size.
 
-    When ``rerank=True`` the top ``search.rerank_top_k`` candidates
-    are re-scored by a cross-encoder model for improved relevance ordering.
-    If ``viewer`` is also provided, a final context-aware micro-adjustment
-    is applied based on the viewer's recent category preferences.
-
-    Requires ``pip install memall-db[rerank]`` (heavy: ~1.8GB with PyTorch).
-    Falls back to RRF-only ordering if the model is unavailable.
+    Reranking is enabled when ``rerank=True`` (or, when ``rerank`` is left as
+    ``None``, by the ``search.rerank_enabled`` config flag). The top
+    ``search.rerank_top_k`` candidates are re-scored by a cross-encoder:
+    the local ONNX bge-reranker-base (SSE4.2, zero new deps) is tried first,
+    then sentence-transformers ``CrossEncoder`` (needs PyTorch) as a fallback,
+    then the original RRF ordering if no reranker is available.
 
     Returns dict with ``results`` (each includes memory_id, content, subject,
     category, level, owner, agent_name, rrf_score, fts_rank, vec_rank),
@@ -1474,14 +1569,15 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
             visibility_scores = _filter_by_trust_dict(sorted_results, viewer)
             sorted_results = [r for r in sorted_results if visibility_scores.get(r["memory_id"], True)]
 
-        if rerank:
+        # Rerank stage (P0-2): ONNX cross-encoder → CrossEncoder → RRF fallback.
+        # rerank=None means "decide from config" so enabling is one-line config.
+        if rerank is None:
             from memall.config import get_config
-            if get_config("search.rerank_enabled", True):
-                sorted_results = _rerank(sorted_results, query, top_k)
-                # Context-aware re-ranking (micro-adjustment after cross-encoder)
-                sorted_results = _context_rerank(sorted_results, query, top_k, viewer=viewer)
-            else:
-                sorted_results = sorted_results[:top_k]
+            rerank = get_config("search.rerank_enabled", True)
+        if rerank:
+            sorted_results = _rerank(sorted_results, query, top_k)
+            # Context-aware re-ranking (micro-adjustment after cross-encoder)
+            sorted_results = _context_rerank(sorted_results, query, top_k, viewer=viewer)
         else:
             sorted_results = sorted_results[:top_k]
 
