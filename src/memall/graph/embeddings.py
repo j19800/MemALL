@@ -224,7 +224,14 @@ def _load_onnx_model():
         import onnxruntime as ort
         from tokenizers import Tokenizer
 
-        sess = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+        # SSE4.2 host: disable the BFC memory-pattern arena so onnxruntime
+        # does not try to reserve a giant reusable buffer (which previously
+        # blew up to ~34GB for large batches). Keep graph optimization on.
+        so = ort.SessionOptions()
+        so.enable_mem_pattern = False
+        so.intra_op_num_threads = max(1, (os.cpu_count() or 4) // 2)
+        so.inter_op_num_threads = 1
+        sess = ort.InferenceSession(model_path, so, providers=["CPUExecutionProvider"])
         in_names = [i.name for i in sess.get_inputs()]
         tok = Tokenizer.from_file(tok_path)
         _ONNX = {
@@ -240,12 +247,8 @@ def _load_onnx_model():
         return None
 
 
-def _onnx_embed(texts, normalize: bool = True):
-    """Embed texts with the ONNX bge model (CLS pooling + L2 norm)."""
-    backend = _load_onnx_model()
-    if backend is None:
-        return None
-    texts = [t or "" for t in texts]
+def _onnx_embed_chunk(backend, texts, normalize: bool = True):
+    """Embed a single small batch (<=_ONNX_MAX_LEN seq, <=BATCH_SIZE rows)."""
     encs = backend["tokenizer"].encode_batch(texts, add_special_tokens=True)
     input_ids, attn = [], []
     for e in encs:
@@ -274,27 +277,65 @@ def _onnx_embed(texts, normalize: bool = True):
     return cls
 
 
-def _embed_texts(texts, normalize: bool = True):
+def _onnx_embed(texts, normalize: bool = True, chunk_size: int = BATCH_SIZE):
+    """Embed texts with the ONNX bge model (CLS pooling + L2 norm).
+
+    Processes `texts` in chunks of `chunk_size` rows. This is REQUIRED:
+    feeding all rows in one session.run makes onnxruntime allocate an
+    attention buffer of size batch*heads*seq*seq which, for thousands of
+    rows, exceeds available RAM (the earlier ~34GB BFCArena failure). The
+    model is stateless across chunks so results are identical to a single
+    batched call.
+    """
+    backend = _load_onnx_model()
+    if backend is None:
+        return None
+    texts = [t or "" for t in texts]
+    if not texts:
+        return np.zeros((0, EMBED_DIM), dtype=np.float32)
+    chunks = []
+    for s in range(0, len(texts), chunk_size):
+        chunks.append(_onnx_embed_chunk(backend, texts[s:s + chunk_size], normalize=False))
+    cls = np.vstack(chunks).astype(np.float32)
+    if normalize:
+        norms = np.linalg.norm(cls, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        cls = cls / norms
+    return cls
+
+
+def _embed_texts_named(texts, normalize: bool = True):
     """Unified embedder: sentence-transformers → ONNX bge → TF-IDF/SVD.
 
-    Returns an (n, EMBED_DIM) float32 array, or None when no backend can
-    produce vectors for the given inputs (callers should degrade gracefully).
+    Returns a tuple ``(vectors, backend_name)``. ``backend_name`` is the name
+    of the backend that ACTUALLY produced the vectors (not just one that
+    loaded) so callers can persist an accurate ``model_name``. Vectors is an
+    (n, EMBED_DIM) float32 array, or None when no backend can produce them.
     """
     if _check_st_available():
         try:
             model = _get_model()
             vecs = model.encode(texts, show_progress_bar=False, normalize_embeddings=normalize)
-            return np.asarray(vecs, dtype=np.float32)
+            return np.asarray(vecs, dtype=np.float32), _MODEL_NAME
         except Exception:
             logger.warning("sentence-transformers encode failed; falling back", exc_info=True)
     # ONNX bge backend (torch-free, SSE4.2 compatible)
     try:
         v = _onnx_embed(texts, normalize=normalize)
         if v is not None:
-            return v
+            return v, "bge-onnx-sse42"
     except Exception:
         logger.warning("ONNX embed failed; falling back to TF-IDF/SVD", exc_info=True)
-    return _tfidf_embed(texts, normalize=normalize)
+    v = _tfidf_embed(texts, normalize=normalize)
+    if v is not None:
+        return v, "tfidf-svd-fallback"
+    return None, None
+
+
+def _embed_texts(texts, normalize: bool = True):
+    """Convenience wrapper returning only the vectors (drops backend name)."""
+    vecs, _ = _embed_texts_named(texts, normalize=normalize)
+    return vecs
 
 
 def _active_model_name() -> str:
@@ -343,7 +384,7 @@ def _auto_embed(conn, memory_id: int, content: str, content_hash_val: str) -> No
     Raises on failure so callers can track embedding status.
     """
     _ensure_embeddings_table(conn)
-    emb = _embed_texts([content[:MAX_TEXT_LEN]], normalize=True)
+    emb, used_name = _embed_texts_named([content[:MAX_TEXT_LEN]], normalize=True)
     if emb is None:
         # No embedding backend available (e.g. torch DLL failure AND TF-IDF
         # model not yet trained). Skip; build_index will fill it later.
@@ -355,7 +396,7 @@ def _auto_embed(conn, memory_id: int, content: str, content_hash_val: str) -> No
         "INSERT OR REPLACE INTO memory_embeddings "
         "(memory_id, embedding, model_name, dims, content_hash, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        (memory_id, vec_bytes, _active_model_name(), EMBED_DIM, content_hash_val, now),
+        (memory_id, vec_bytes, used_name or _active_model_name(), EMBED_DIM, content_hash_val, now),
     )
     _vec0_upsert(conn, memory_id, vec_bytes)
 
@@ -398,7 +439,7 @@ def build_index(batch_size: int = BATCH_SIZE, force: bool = False) -> dict:
 
         texts = [r["content"][:MAX_TEXT_LEN] for r in pending]
         logger.info("Encoding %d memories with embedding backend ...", len(texts))
-        vecs = _embed_texts(texts, normalize=True)
+        vecs, used_name = _embed_texts_named(texts, normalize=True)
         if vecs is None:
             logger.error("Embedding backend unavailable; cannot build vector index")
             return {
@@ -415,7 +456,7 @@ def build_index(batch_size: int = BATCH_SIZE, force: bool = False) -> dict:
                 "INSERT OR REPLACE INTO memory_embeddings "
                 "(memory_id, embedding, model_name, dims, content_hash, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (row["id"], vec_bytes, _active_model_name(), EMBED_DIM, row["content_hash"], now),
+                (row["id"], vec_bytes, used_name or _active_model_name(), EMBED_DIM, row["content_hash"], now),
             )
             _vec0_upsert(conn, row["id"], vec_bytes)
         conn.commit()
@@ -425,7 +466,7 @@ def build_index(batch_size: int = BATCH_SIZE, force: bool = False) -> dict:
             "embedded": total,
             "new": len(pending),
             "batch_size": batch_size,
-            "model": _active_model_name(),
+            "model": used_name or _active_model_name(),
         }
 
 
