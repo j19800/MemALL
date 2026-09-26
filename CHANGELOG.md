@@ -1,3 +1,17 @@
+## [v0.1.56] - 2026-09-26
+
+### Analysis
+
+- **Phase 3 Architecture Review (mattpocock methodology)**: Comprehensive architectural friction analysis of the entire MemALL codebase. Identified 6 deepening opportunities:
+  1. **Collapse gateway.py** (3759 lines, God file with 8+ responsibilities) — Strong candidate
+  2. **Deepen thin_waist.py** (1779 lines, thick waist with raw SQL and ONNX logic) — Strong candidate
+  3. **Fix strategy modules** (pure pass-throughs, raw SQL bypassing capture()) — Worth exploring
+  4. **Unify ONNX embedding** (split across graph/embeddings.py and core/thin_waist.py) — Worth exploring
+  5. **Extract db.py connection management** (duplicate pool_conn/_pool_conn) — Strong candidate
+  6. **Decompose nlp.py** (4+ concerns in 465 lines) — Worth exploring
+- HTML architecture review report generated at `%TEMP%/architecture-review-memall.html`
+- Installed mattpocock/skills methodology (improve-codebase-architecture, diagnosing-bugs, domain-modeling, codebase-design) to local agent skills directory
+
 ## [v0.1.55] - 2026-07-10
 
 ### Refactored
