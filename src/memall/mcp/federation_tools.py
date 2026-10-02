@@ -33,6 +33,22 @@ def redact_content(content: str) -> str:
     return _REDACT_RE.sub('[REDACTED]', content)
 
 
+_INBOUND_AGENT_RE = re.compile(r'[^A-Za-z0-9_.\-]')
+
+
+def _sanitize_inbound(content: str, sender: str, max_len: int = 2000) -> tuple:
+    """Sanitize untrusted Hub content before writing to the local memory store.
+
+    Strips <private> blocks, printable-only text, caps length, and marks the
+    origin explicitly (agent name is prefixed and scrubbed to prevent
+    impersonation of local agents).
+    """
+    raw = redact_content(content or "")
+    cleaned = "".join(c for c in raw if c.isprintable() or c in "\n\r\t")[:max_len]
+    safe_sender = _INBOUND_AGENT_RE.sub("", (sender or "")[:32]) or "hub-agent"
+    return cleaned, f"hub:{safe_sender}"
+
+
 def _get_family_conn():
     db_path = get_family_db_path()
     init_family_db()
@@ -159,14 +175,20 @@ def fed_deliver(target_agent: str, content: str,
     if subject is None:
         subject = f"[hub:push:{event_type}] {source}"
 
+    # Defect fix: ``capture()``'s first parameter is the positional ``data``
+    # argument — calling it with keyword-only args raised
+    # "TypeError: capture() missing 1 required positional argument: 'data'",
+    # so fed_deliver failed on every invocation.  Also ``metadata_json`` is not
+    # a ``MemoryInput`` field, so it was silently dropped by the override
+    # filter; the correct field name is ``metadata``.
     mem_id = capture(
-        content=content,
+        content,
         agent_name=target_agent,
         subject=subject,
         category=category,
         level="P2",
         project="agent-hub",
-        metadata_json=json.dumps({"event_type": event_type, "source": source}, ensure_ascii=False),
+        metadata=json.dumps({"event_type": event_type, "source": source}, ensure_ascii=False),
     )
     return {
         "delivered": True,
@@ -621,13 +643,14 @@ def hub_sync(direction: str = "bidirectional", limit: int = 20,
                         content = m.get("content", "")
                         if not content.strip():
                             continue
+                        cleaned, safe_sender = _sanitize_inbound(content, sender)
                         capture(
-                        content,
-                        agent_name=sender,
-                        subject=f"[hub:{hub_group_id}] {sender}",
-                        category="reflection",
-                        project="agent-hub",
-                    )
+                            cleaned,
+                            agent_name=safe_sender,
+                            subject=f"[hub:{hub_group_id}] {sender}",
+                            category="reflection",
+                            project="agent-hub",
+                        )
                         result["from_hub"]["messages_pulled"] += 1
                     except Exception as e:
                         result["from_hub"]["errors"].append(f"msg: {e}")
@@ -639,10 +662,12 @@ def hub_sync(direction: str = "bidirectional", limit: int = 20,
                             try:
                                 hub_agent = hm.get("agent_id", "hub-agent")
                                 title = hm.get("title", hm.get("content", "")[:60])
-                                c = hm.get("content", "")[:500]
+                                cleaned, safe_hub_agent = _sanitize_inbound(
+                                    hm.get("content", ""), hub_agent
+                                )
                                 capture(
-                                    c[:500],
-                                    agent_name=hub_agent,
+                                    cleaned,
+                                    agent_name=safe_hub_agent,
                                     subject=f"[hub-mem] {title}",
                                     category=hm.get("category", "fact"),
                                     project="agent-hub",
