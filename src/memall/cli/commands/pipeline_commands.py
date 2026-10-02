@@ -287,14 +287,16 @@ def cmd_pipeline_status(args):
 def cmd_forget(args):
     """CLI handler for `memall forget` — Phase 11 automatic forgetting."""
     if args.expired:
-        result = mcp_call("memall_write", action="forget", sub_action="expired", days=args.days or 90, agent_name=args.agent or None)
+        # Terminal invocation is the operator's confirmation; the MCP layer
+        # requires an explicit confirm flag for irreversible deletions.
+        result = mcp_call("memall_write", action="forget", sub_action="expired", days=args.days or 90, agent_name=args.agent or None, confirm=True)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
         print(f"Expired cleanup: {d['deleted_memories']} memories, {d['deleted_edges']} edges deleted")
 
     elif args.low_value:
-        result = mcp_call("memall_write", action="forget", sub_action="low_value", agent_name=args.agent or None)
+        result = mcp_call("memall_write", action="forget", sub_action="low_value", agent_name=args.agent or None, confirm=True)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -327,7 +329,7 @@ def cmd_forget(args):
         print(f"  Est size:     {d['size_estimate_mb']} MB")
 
     elif args.all:
-        result = mcp_call("memall_write", action="forget", sub_action="all", days=args.days or 90, agent_name=args.agent or None)
+        result = mcp_call("memall_write", action="forget", sub_action="all", days=args.days or 90, agent_name=args.agent or None, confirm=True)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -806,7 +808,7 @@ def cmd_ops(args):
     if action == "merge":
         if not args.source_id or not args.target_id:
             print("error: --from and --to are required", file=sys.stderr); sys.exit(1)
-        result = mcp_call("memall_write", action="ops", sub_action="merge", source_id=args.source_id, target_id=args.target_id)
+        result = mcp_call("memall_write", action="ops", sub_action="merge", source_id=args.source_id, target_id=args.target_id, confirm=True)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -819,7 +821,7 @@ def cmd_ops(args):
         delim = args.delimiter or "\n\n"
         if delim.startswith("\\"):
             delim = delim.encode().decode("unicode_escape")
-        result = mcp_call("memall_write", action="ops", sub_action="split", memory_id=args.split_id, delimiter=delim)
+        result = mcp_call("memall_write", action="ops", sub_action="split", memory_id=args.split_id, delimiter=delim, confirm=True)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -857,7 +859,7 @@ def cmd_ops(args):
         if not args.agent:
             print("error: --agent is required", file=sys.stderr); sys.exit(1)
         days = args.days or 30
-        result = mcp_call("memall_write", action="ops", sub_action="archive", agent_name=args.agent, days=days)
+        result = mcp_call("memall_write", action="ops", sub_action="archive", agent_name=args.agent, days=days, confirm=True)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -875,7 +877,7 @@ def cmd_ops(args):
     elif action == "dedup":
         agent = args.agent or None
         threshold = args.threshold or 0.9
-        result = mcp_call("memall_write", action="ops", sub_action="dedup", agent_name=agent, threshold=threshold)
+        result = mcp_call("memall_write", action="ops", sub_action="dedup", agent_name=agent, threshold=threshold, confirm=True)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data

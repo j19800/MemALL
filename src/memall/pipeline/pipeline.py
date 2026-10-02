@@ -145,6 +145,17 @@ def _run_step(step_name: str, step_fn, step_results: dict,
         elapsed_ms = int((time.time() - start) * 1000)
         records_after = _count_memories(conn)
 
+        # Release the write transaction this step may have opened on the shared
+        # connection.  A step is the smallest unit of work: leaving its writes
+        # uncommitted keeps the write lock for the whole run, and every later
+        # step that opens its own connection then blocks on
+        # "database is locked" (5s busy timeout) and fails.
+        if conn is not None:
+            try:
+                conn.commit()
+            except sqlite3.Error as e:
+                logger.warning(f"post-step commit failed (non-fatal): {e}")
+
         entry: dict = {
             "step": step_name,
             "status": "ok",
@@ -165,6 +176,14 @@ def _run_step(step_name: str, step_fn, step_results: dict,
     except Exception as e:
         elapsed_ms = int((time.time() - start) * 1000)
         logger.error("Pipeline step '%s' failed after %dms: %s", step_name, elapsed_ms, e)
+        # A failed step may have left a partial write transaction on the shared
+        # connection — roll it back so it does not hold the write lock for the
+        # rest of the run.
+        if conn is not None:
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
         step_results[step_name] = 0
         dispatch_lifecycle(HOOK_STEP_FAIL, step_name=step_name, error=str(e)[:300],
                            elapsed_ms=elapsed_ms)
@@ -271,9 +290,9 @@ def check_level_discipline() -> dict:
             msg = f"{l9_from_p0} L9 memories refine P0/P1/P2 sources (non-terminal, auto-migrated by cleanup)"
             logger.info(msg)
 
-        # 4. Check for unexpected level values
-        expected = {"P0", "P1", "P2", "P3", "P4", "L1", "L2", "L3", "L4", "L5",
-                    "L6", "L7", "L8", "L9", "L10", "L11", "deleted", "info", "heartbeat", "archived"}
+        # 4. Check for unexpected level values (ADR-0001 canonical enum only)
+        expected = {"P0", "P1", "P2", "L1", "L2", "L3", "L4", "L5",
+                    "L6", "L7", "L8", "L9", "L10", "L11"}
         unexpected = set(counts.keys()) - expected
         for lev in unexpected:
             msg = f"Unexpected level value '{lev}' ({counts[lev]} memories)"
@@ -431,13 +450,19 @@ def run_pipeline(
                 entries.append({"step": "bridge", "status": "failed", "error": str(e)[:200]})
 
         # ── Trace retention (keep spans ≤ 7 days) ──
+        _tc = None
         try:
             _tc = get_conn()
             _tc.execute("DELETE FROM tracing_spans WHERE created_at < datetime('now', '-7 days')")
             _tc.commit()
-            _tc.close()
         except sqlite3.Error as e:
             logger.warning(f"tracing_spans cleanup failed (non-fatal): {e}")
+        finally:
+            if _tc is not None:
+                try:
+                    _tc.close()
+                except sqlite3.Error:
+                    pass
 
         # ── Metrics ──
         metrics = collect_metrics()

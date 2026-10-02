@@ -111,6 +111,11 @@ class UpdateInput(BaseModel):
     project: Optional[str] = Field(None, max_length=500)
     summary: Optional[str] = Field(None, max_length=2000)
     level: Optional[str] = Field(None, pattern=r"^(P[0-4]|L[1-9]|L10)$")
+    # Caller identity.  Required by the ownership gate — without it the
+    # validator strips the caller and the gate silently never fires.
+    # It is deliberately NOT written to the row: ownership changes must go
+    # through an explicit re-assignment, not a casual update.
+    agent_name: Optional[str] = Field(None, max_length=200)
 
 
 class VectorSearchInput(BaseModel):
@@ -179,6 +184,8 @@ class ForgetInput(BaseModel):
     )
     days: int = Field(90, ge=1, le=3650)
     agent_name: Optional[str] = Field(None, max_length=200)
+    # Explicit opt-in for irreversible deletion (see manage.handle_forget).
+    confirm: bool = False
 
 
 # ── Security (Phase 13) ──
@@ -218,6 +225,8 @@ class OpsInput(BaseModel):
     max_memories: int = Field(10000, ge=2, le=50000)
     length_ratio_max: float = Field(5.0, ge=1.0, le=100.0)
     dry_run: bool = False
+    # Explicit opt-in for destructive ops (merge/split/dedup/archive).
+    confirm: bool = False
     op_id: Optional[int] = Field(None, ge=1)
 
 

@@ -854,7 +854,9 @@ def cmd_db(args):
             print(f"  {name}: {cnt} rows")
 
     elif action == "vacuum":
-        result = mcp_call("memall_system", action="db", sub_action="vacuum")
+        # Terminal invocation is the operator's confirmation (VACUUM rewrites
+        # the whole DB file and cannot be undone).
+        result = mcp_call("memall_system", action="db", sub_action="vacuum", confirm=True)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -880,7 +882,7 @@ def cmd_db(args):
                     print(f"  {level}: {cnt}")
 
     elif action == "archive_vacuum":
-        result = mcp_call("memall_system", action="db", sub_action="archive_vacuum")
+        result = mcp_call("memall_system", action="db", sub_action="archive_vacuum", confirm=True)
         if not result.ok:
             print(f"error: {result.error}", file=sys.stderr); sys.exit(1)
         d = result.data
@@ -1263,3 +1265,30 @@ def _make_hook_handler(action: str):
         def _handler(**kw):
             pass
         return _handler
+
+
+# ──────────────────────────────────────────────
+# cmd_quickstart
+# ──────────────────────────────────────────────
+
+def cmd_quickstart(args):
+    """One-command setup: init DB + configure MCP + start gateway.
+
+    Equivalent to: memall init && memall setup --all && memall start-gateway
+    """
+    import argparse as _argparse
+
+    from memall.cli.commands.base import cmd_init
+
+    # 1) 初始化数据库（幂等）
+    cmd_init(args)
+
+    # 2) 为所有检测到的 Agent 配置 MCP
+    setup_args = _argparse.Namespace(
+        all=True, agent=None, fix=False, config=None,
+        user="admin", db=None,
+    )
+    cmd_setup(setup_args)
+
+    # 3) 启动 Gateway（阻塞运行，Ctrl+C 停止）
+    cmd_start(args)

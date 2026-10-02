@@ -25,10 +25,19 @@ logger = logging.getLogger(__name__)
 _CREDENTIALS_PATH = Path.home() / ".memall" / "bot_credentials.json"
 
 
+def _restrict_file_perms(p: Path) -> None:
+    """Best-effort owner-only permissions on the credentials file."""
+    try:
+        os.chmod(p, 0o600)
+    except OSError:
+        logger.warning("lark/credentials: could not restrict permissions on %s", p)
+
+
 def _ensure_file():
     _CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not _CREDENTIALS_PATH.exists():
         _CREDENTIALS_PATH.write_text("{}", encoding="utf-8")
+    _restrict_file_perms(_CREDENTIALS_PATH)
 
 
 def load_all() -> dict[str, dict]:
@@ -50,6 +59,7 @@ def save_all(creds: dict[str, dict]) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(creds, f, ensure_ascii=False, indent=2)
     os.replace(tmp, _CREDENTIALS_PATH)
+    _restrict_file_perms(_CREDENTIALS_PATH)
 
 
 def get(agent_name: str) -> Optional[dict]:

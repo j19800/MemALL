@@ -373,25 +373,44 @@ def check_access(requester_agent: str, target_agent: str) -> Dict[str, Any]:
                 }
             try:
                 fam_conn = sqlite3.connect(str(fam_db_path), timeout=10)
-                fam_conn.row_factory = sqlite3.Row
-                row = fam_conn.execute(
-                    "SELECT 1 FROM family_circle WHERE member_name = ? AND status = 'active' LIMIT 1",
-                    (requester_agent,),
-                ).fetchone()
-                fam_conn.close()
+                try:
+                    fam_conn.row_factory = sqlite3.Row
+                    # Circles the target agent is an active member of
+                    circles = fam_conn.execute(
+                        "SELECT circle_id FROM family_circle WHERE member_name = ? AND status = 'active'",
+                        (target_agent,),
+                    ).fetchall()
+                    if not circles:
+                        return {
+                            "allowed": False,
+                            "reason": (
+                                f"target '{target_agent}' is trusted but is not an active "
+                                f"member of any family circle"
+                            ),
+                        }
+                    circle_ids = [r["circle_id"] for r in circles]
+                    ph = ",".join("?" * len(circle_ids))
+                    # Requester must be an active member of the SAME circle(s)
+                    row = fam_conn.execute(
+                        f"SELECT 1 FROM family_circle WHERE circle_id IN ({ph}) "
+                        f"AND member_name = ? AND status = 'active' LIMIT 1",
+                        circle_ids + [requester_agent],
+                    ).fetchone()
+                finally:
+                    fam_conn.close()
                 if row:
                     return {
                         "allowed": True,
                         "reason": (
                             f"target '{target_agent}' is trusted and "
-                            f"requester '{requester_agent}' is in family_circle"
+                            f"requester '{requester_agent}' is in the same family circle"
                         ),
                     }
                 return {
                     "allowed": False,
                     "reason": (
                         f"target '{target_agent}' is trusted but "
-                        f"requester '{requester_agent}' is not in any family_circle"
+                        f"requester '{requester_agent}' is not in the same family circle"
                     ),
                 }
             except Exception as e:

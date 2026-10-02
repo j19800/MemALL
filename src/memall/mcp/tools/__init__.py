@@ -51,16 +51,18 @@ def _handle_write(args: dict) -> str:
         args.setdefault("agent_name", args.get("agent_name", "workbuddy"))
         args.setdefault("level", "P2")
         args.setdefault("category", "general")
-        # Auto-infer project from content keywords
+        # Auto-infer project from agent + content via the canonical inference
+        # (single source of truth in memall.core.project_infer) — replaces the
+        # previous divergent hard-coded kw_map in this handler.
         project = args.get("project", "")
         if not project:
-            kw_map = {"股票": "tradingagents", "交易": "tradingagents", "分析": "tradingagents",
-                      "bug": "memall", "修复": "memall", "feature": "memall", "功能": "memall"}
-            for kw, proj in kw_map.items():
-                if kw in content:
-                    project = proj
-                    break
-        args.setdefault("project", project or "general")
+            from memall.core.project_infer import infer_project
+            project = infer_project(
+                agent_name=args.get("agent_name", "workbuddy"),
+                category=args.get("category", "general"),
+                content=content,
+            )
+        args.setdefault("project", project)
         # Generate subject from first line
         first_line = content.strip().split("\n")[0][:50]
         args.setdefault("subject", first_line)
@@ -81,7 +83,7 @@ registry.register(ToolDef(
         "summary": {"type": "string"},
         "project": {"type": "string"},
         "category": {"type": "string"},
-        "level": {"type": "string", "enum": ["P0", "P1", "P2", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9", "L10"]},
+        "level": {"type": "string", "enum": ["P0", "P1", "P2", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9", "L10", "L11"]},
         "metadata": {"type": "string", "description": "JSON metadata string"},
         "thread_id": {"type": "integer", "description": "Parent memory ID for thread context"},
         "memory_id": {"type": "integer", "description": "Memory ID (update/connect/forget)"},
@@ -89,8 +91,10 @@ registry.register(ToolDef(
         "target_id": {"type": "integer"},
         "relation_type": {"type": "string", "enum": ["extends", "contradicts", "refines", "cites", "supersedes"]},
         "weight": {"type": "number"},
-        "sub_action": {"type": "string", "enum": ["expired", "low_value", "review", "stats", "all", "merge", "split", "tag", "batch_tag", "archive", "restore", "dedup"], "description": "Sub-action for forget/ops"},
+        "sub_action": {"type": "string", "enum": ["expired", "low_value", "review", "stats", "all", "merge", "split", "tag", "batch_tag", "archive", "restore", "dedup", "undo"], "description": "Sub-action for forget/ops"},
         "days": {"type": "integer"},
+        "confirm": {"type": "boolean", "description": "Required to execute destructive ops (forget expired/low_value/all, ops merge/split/dedup/archive)"},
+        "dry_run": {"type": "boolean", "description": "Preview-only pass for ops archive/dedup"},
         "tags": {"type": "array", "items": {"type": "string"}},
         "dedup_threshold": {"type": "number"},
         "items": {"type": "array", "description": "Items for store_batch"},
@@ -349,12 +353,19 @@ def _handle_system(args: dict) -> str:
         fmt = args.get("format", "jsonl")
         path = args.get("path", "")
         agent = args.get("agent_name", "imported")
+        if not path or not isinstance(path, str):
+            return json.dumps({"error": "path required"}, ensure_ascii=False)
+        p = pathlib.Path(path)
+        if p.suffix.lower() not in (".jsonl", ".json", ".csv"):
+            return json.dumps({"error": "only .jsonl/.json/.csv files can be imported"}, ensure_ascii=False)
+        if not p.is_file():
+            return json.dumps({"error": "file does not exist"}, ensure_ascii=False)
         if fmt == "mem0":
-            result = import_from_mem0(path, agent)
+            result = import_from_mem0(str(p), agent)
         elif fmt == "csv":
-            result = import_from_csv(path, agent)
+            result = import_from_csv(str(p), agent)
         else:
-            result = import_from_jsonl(path, agent)
+            result = import_from_jsonl(str(p), agent)
         return json.dumps(result, ensure_ascii=False)
     elif action in ("digest", "每日摘要", "日报", "总结"):
         # Daily digest — count today's memories by category with content snippets
@@ -421,7 +432,9 @@ registry.register(ToolDef(
     description="Pipeline, sessions, gateway, hub sync, DB maintenance, security, adaptive, onboarding, reflection, index rebuild, daily digest, hot topics. Actions: run_pipeline | distill | gateway | hub_connect | hub_sync | session_start | session_end | session_summary | db | security | adaptive | onboarding | reflect | index_rebuild | digest (每日摘要/日报/总结) | hot (热门/热点/热榜)",
     input_schema={"type": "object", "properties": {
         "action": {"type": "string", "enum": ["run_pipeline", "distill", "gateway", "hub_connect", "hub_sync", "session_start", "session_end", "session_summary", "db", "security", "adaptive", "onboarding", "reflect", "index_rebuild", "digest", "每日摘要", "日报", "总结", "hot", "热门", "热点", "热榜"]},
-        "sub_action": {"type": "string", "enum": ["list", "summarize", "start", "stop", "export", "import", "discover", "pair", "peers", "federated", "status", "reset", "submit_step", "skip", "audit", "permit", "check", "score", "clean", "index", "distill", "all", "report", "optimize", "stats", "vacuum", "agree", "disagree", "probe", "expired", "archive_stats", "archive_vacuum"], "description": "Sub-action for distill/gateway/security/adaptive/db/onboarding/reflect"},
+        "sub_action": {"type": "string", "enum": ["list", "summarize", "start", "stop", "export", "import", "discover", "pair", "peers", "federated", "status", "reset", "submit_step", "skip", "audit", "permit", "check", "score", "clean", "index", "distill", "all", "report", "optimize", "stats", "vacuum", "agree", "disagree", "probe", "expired", "archive_stats", "archive_vacuum", "backfill_thread", "backfill_project", "dedupe_l9", "dedupe_l10"], "description": "Sub-action for distill/gateway/security/adaptive/db/onboarding/reflect"},
+        "confirm": {"type": "boolean", "description": "Required to execute destructive db ops (vacuum, archive_vacuum, backfill_*, dedupe_l9/l10)"},
+        "dry_run": {"type": "boolean", "description": "Preview-only pass for db backfill_*/dedupe_*"},
         "session_id": {"type": "string", "description": "Session ID"},
         "agent_name": {"type": "string"},
         "auto_inject": {"type": "boolean"},

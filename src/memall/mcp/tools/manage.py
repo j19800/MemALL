@@ -1,4 +1,5 @@
 import json
+from typing import Optional
 from memall.pipeline.forget import forget_stats, forget_review, forget_expired, forget_low_value, forget_step
 from memall.pipeline.adaptive import adaptive_clean, adaptive_index, adaptive_distill, adaptive_step, adaptive_report
 from memall.pipeline.security import audit_sensitive, set_permission, check_access, security_score, list_agents_by_permission
@@ -9,10 +10,48 @@ from memall.core.db import (
 )
 
 
+def _confirm(value) -> bool:
+    """Interpret a ``confirm`` argument (bool / "yes" / "true" / "1")."""
+    if value is True:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in ("yes", "true", "1", "y")
+    return False
+
+
+def _confirmation_required(arguments: dict, op: str, hint: str = "") -> Optional[str]:
+    """Return an error payload unless the caller explicitly confirmed ``op``.
+
+    Destructive maintenance ops (bulk delete / merge / archive / VACUUM) are
+    irreversible, so they must be requested twice: once to see the plan, once
+    with ``confirm=true``.  A ``dry_run=true`` call also counts as the
+    read-only pass and is never gated.
+    """
+    if _confirm(arguments.get("confirm")) or arguments.get("dry_run") is True:
+        return None
+    return json.dumps({
+        "status": "confirmation_required",
+        "op": op,
+        "message": f"'{op}' is destructive and cannot be undone. "
+                   f"Inspect the impact first (stats / dry_run=true), then "
+                   f"re-call with confirm=true to execute."
+                   + (f" {hint}" if hint else ""),
+    }, ensure_ascii=False)
+
+
 def handle_forget(arguments: dict) -> str:
     action = arguments["action"]
     days = arguments.get("days", 90)
     agent = arguments.get("agent_name", None) or None
+
+    # Deletion is irreversible → require an explicit confirmation pass.
+    if action in ("expired", "low_value", "all"):
+        gate = _confirmation_required(
+            arguments, f"forget:{action}",
+            hint="Run forget sub_action=review (or stats) first to see what would go.",
+        )
+        if gate:
+            return gate
 
     if action == "stats":
         result = forget_stats()
@@ -79,6 +118,23 @@ def handle_security(arguments: dict) -> str:
 def handle_ops(arguments: dict) -> str:
     action = arguments["action"]
 
+    # merge / split / dedup rewrite or delete memories → gated.
+    if action in ("merge", "split", "dedup"):
+        gate = _confirmation_required(
+            arguments, f"ops:{action}",
+            hint="Pass dry_run=true for dedup to preview the pairs first.",
+        )
+        if gate:
+            return gate
+    # batch_archive moves memories out of the active set → gated unless dry-run.
+    if action == "archive":
+        gate = _confirmation_required(
+            arguments, f"ops:{action}",
+            hint="Pass dry_run=true to preview what would be archived.",
+        )
+        if gate:
+            return gate
+
     if action == "merge":
         result = merge_memories(arguments["source_id"], arguments["target_id"],
                                 separator=arguments.get("separator", "\n---\n"))
@@ -132,6 +188,21 @@ def handle_ops(arguments: dict) -> str:
 
 def handle_db(arguments: dict) -> str:
     action = arguments["action"]
+
+    # VACUUM rewrites the whole database file (long exclusive lock, not
+    # undoable) → gated.  Backfills / L9-L10 de-dup are reversible-ish but still
+    # bulk writes, so they are gated too unless called as a dry run.
+    if action in ("vacuum", "archive_vacuum"):
+        gate = _confirmation_required(arguments, f"db:{action}")
+        if gate:
+            return gate
+    if action in ("backfill_thread", "backfill_project", "dedupe_l9", "dedupe_l10"):
+        gate = _confirmation_required(
+            arguments, f"db:{action}",
+            hint="Pass dry_run=true to preview the changes first.",
+        )
+        if gate:
+            return gate
 
     if action == "optimize":
         result = optimize_db()

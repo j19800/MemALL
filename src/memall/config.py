@@ -99,6 +99,23 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         # those carry genuine knowledge and must stay distillable/retrievable.
         "ledger_categories": ["heartbeat", "testing"],
     },
+    "security": {
+        # Cross-agent ownership enforcement on memall_write/update: an agent may
+        # only update memories it owns (agent_name match).  ON by default —
+        # otherwise any agent can overwrite another agent's memory *and* reassign
+        # agent_name to itself, i.e. silently take ownership of it.
+        # Deployments that legitimately use a supervisor agent to curate others'
+        # memories should list those agents in ``supervisor_agents`` rather than
+        # turning the whole gate off.
+        "enforce_agent_ownership": True,
+        # Agents exempt from ownership enforcement (supervisor / orchestrator
+        # roles that curate other agents' memories).  Names are normalized the
+        # same way as memory owner names.
+        "supervisor_agents": [],
+        # Gateway: unauthenticated (SPA) endpoints are only reachable from
+        # loopback.  Requests from any other address must present a valid token.
+        "open_api_loopback_only": True,
+    },
     "distill": {
         # Upsert L9 distillations instead of appending a new row per cycle.
         # Root-cause fix for unbounded near-identical L9 accumulation (the old
