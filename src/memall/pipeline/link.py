@@ -2,6 +2,9 @@ import re
 from memall.core.db import pool_conn
 from memall.core.nlp import tokenize, jaccard
 
+# Backward-compat alias: some tests/imports expect a private name for jaccard.
+_jaccard = jaccard
+
 JACCARD_THRESHOLD = 0.6
 MAX_EDGES_PER_MEMORY = 10
 _EDGES_SCAN_LIMIT = 50000

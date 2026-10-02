@@ -20,43 +20,10 @@ from memall.core.thin_waist import capture as _capture, retrieve
 
 logger = logging.getLogger(__name__)
 
-# Default project when none is specified
-_DEFAULT_PROJECT = "memall"
-
-
-def infer_project(agent_name: str = "", category: str = "",
-                  content: str = "") -> str:
-    """Infer a project name from available context when none is explicitly given.
-
-    Priority:
-      1. Known agent → project mappings
-      2. Content keyword hints
-      3. Default project
-    """
-    # Agent-based inference
-    agent_lower = agent_name.lower()
-    _AGENT_MAP = {
-        "workbuddy": "memall",
-        "douyin-daily": "douyin-daily",
-        "marvis": "memall",
-        "opencode": "memall",
-        "claude": "memall",
-    }
-    for key, proj in _AGENT_MAP.items():
-        if key in agent_lower or agent_lower in key:
-            return proj
-
-    # Content-based inference
-    if content:
-        import re
-        if re.search(r'抖音|douyin|短视频|带货', content, re.I):
-            return "douyin-daily"
-        if re.search(r'agent.hub|hub.agent', content, re.I):
-            return "memall-agent-hub"
-        if re.search(r'desktop|electron', content, re.I):
-            return "memall-desktop"
-
-    return _DEFAULT_PROJECT
+# Project inference now lives in memall.core.project_infer (single source of
+# truth, called from capture()). Re-exported here for backward compatibility
+# with existing callers (MCP tools, scripts).
+from memall.core.project_infer import infer_project  # noqa: E402,F401
 
 
 def add(content: str, agent: str = "", owner: str = "",
@@ -133,7 +100,7 @@ def add(content: str, agent: str = "", owner: str = "",
         confidence=confidence,
         visibility=visibility,
         metadata=json.dumps(metadata, ensure_ascii=False) if metadata else "{}",
-        tags=tags or [],
+        tags=json.dumps(tags) if isinstance(tags, (list, tuple)) else (tags or "[]"),
     )
 
     return _capture(inp)

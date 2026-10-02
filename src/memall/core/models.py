@@ -24,6 +24,7 @@ class Memory:
     metadata: str = "{}"
     thread_id: Optional[int] = None
     agent_name_locked: bool = False
+    tags: str = "[]"
 
 
 @dataclass
@@ -41,4 +42,5 @@ class MemoryInput:
     confidence: float = 0.5
     visibility: str = "private"
     metadata: str = "{}"
+    tags: str = "[]"
     thread_id: Optional[int] = None

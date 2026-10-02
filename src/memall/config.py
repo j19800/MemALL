@@ -27,6 +27,13 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
     "discovery": {
         "port": 9920,
     },
+    "identity": {
+        # The human who owns this MemALL deployment.  Invariant #1 (from design
+        # memory #823): owner is ALWAYS a human, creator is the agent that
+        # triggered the write.  When a capture omits owner, it falls back to the
+        # human owner rather than silently becoming the agent that wrote it.
+        "human_owner": "老陈",
+    },
     "search": {
         "provider": "tfidf",
         "rrf_k": 60,
@@ -53,6 +60,44 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
     "forget": {
         "ttl_days": 90,
         "low_value_days": 7,
+    },
+    "capture": {
+        # Project inference is always-on (root-cause fix for empty-project defect).
+        "project_inference_enabled": True,
+        # Semantic de-duplication at the write entry (catches near-duplicates).
+        # OFF by default: TF-IDF cosine can falsely merge legitimately distinct
+        # memories that merely share wording (e.g. "content A" vs "content B").
+        # Enable deliberately where the trade-off is acceptable; the existing
+        # ``deduplicate()`` op remains the recommended remediation for historical
+        # duplicates. Exact-content (hash) de-dup always runs regardless.
+        "semantic_dedup_enabled": False,
+        "semantic_dedup_threshold": 0.92,
+        "semantic_dedup_window": 30,
+        # Thread inference: link new memories to a thread root within N minutes.
+        # 0 disables the feature (thread_id left null). Tune per deployment.
+        "thread_inference_window_minutes": 60,
+        # Category hygiene (root-cause guard for the "field pollution" defect).
+        # A distill.py slicing bug once turned two-char domain names into single
+        # characters ("决策" -> "决"/"策", "[任务]" -> "["/"任"), producing 159
+        # polluted rows that then got re-distilled 40+ times.  The fix is in the
+        # code; this gate stops anything like it from ever landing again.
+        "category_validation_enabled": True,
+        # Minimum length for a structurally valid category.  2 allows legitimate
+        # short tags ("AI", "QA", "决策") while rejecting single chars.
+        "category_min_length": 2,
+        # Optional enum.  Empty list = no enum restriction, only structural
+        # checks (length / whitespace / punctuation / control chars) apply.
+        # Populate with the categories this deployment actually uses to get
+        # hard rejection of anything outside the set.
+        "allowed_categories": [],
+        # "reject" raises ValueError at capture(); "coerce" falls back to
+        # "general" and logs a warning instead of failing the write.
+        "category_invalid_action": "coerce",
+        # Dual-stream split (A2): capture-time categories that are pure
+        # operational bookkeeping (heartbeat/testing) are tagged 'ledger' instead
+        # of 'knowledge'.  Deliberately excludes session/meeting/reflection —
+        # those carry genuine knowledge and must stay distillable/retrievable.
+        "ledger_categories": ["heartbeat", "testing"],
     },
     "lifecycle": {
         "cluster_threshold": 0.85,
@@ -115,10 +160,11 @@ def load_yaml_config(path: Union[str, Path] = "memall.yaml") -> Optional[Dict[st
     if not _HAS_YAML:
         return None
 
-    candidates = [
-        Path(path),
-        Path.home() / ".memall" / Path(path).name,
-    ]
+    candidates = []
+    p = Path(path)
+    if p.is_absolute():
+        candidates.append(p)
+    candidates.append(Path.home() / ".memall" / p.name)
 
     for p in candidates:
         if p.exists():
@@ -140,10 +186,11 @@ def load_json_config(path: Union[str, Path] = "config.json") -> Optional[Dict[st
     Returns:
         Parsed config dict, or None if the file doesn't exist.
     """
-    candidates = [
-        Path(path),
-        Path.home() / ".memall" / Path(path).name,
-    ]
+    candidates = []
+    p = Path(path)
+    if p.is_absolute():
+        candidates.append(p)
+    candidates.append(Path.home() / ".memall" / p.name)
 
     for p in candidates:
         if p.exists():
@@ -180,6 +227,18 @@ def merge_config(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, An
     return result
 
 
+def _has_dot_path(d: Dict[str, Any], key: str) -> bool:
+    """Return True if ``key`` (dot-path) resolves to an existing node in ``d``."""
+    parts = key.split(".")
+    current = d
+    for part in parts:
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return False
+    return True
+
+
 def _apply_env_overrides(config: Dict[str, Any]) -> Dict[str, Any]:
     """Apply environment variable overrides to config.
 
@@ -190,6 +249,19 @@ def _apply_env_overrides(config: Dict[str, Any]) -> Dict[str, Any]:
 
     Underscores in env var names become dots, lowercased. Values are
     type-coerced: int, float, bool, else string.
+
+    Resolution rule (fix for nested keys that themselves contain underscores):
+      1. Try the literal dotted path first (e.g. ``MEMALL_DB_PATH`` →
+         ``db.path``). This preserves the long-standing contract.
+      2. If that dotted path does *not* exist in the config, fall back to the
+         *flattened* key: keep the first segment's nested dot but collapse the
+         remaining dots into underscores (e.g. ``capture.thread.inference.window.minutes``
+         → ``capture.thread_inference_window_minutes``), so config keys that carry
+         underscores within a segment — e.g. ``capture.thread_inference_window_minutes``
+         or ``nlp.sentence_transformers`` — can still be overridden via env vars
+         like ``MEMALL_CAPTURE_THREAD_INFERENCE_WINDOW_MINUTES``.
+      3. If neither exists, create the dotted path anyway (legacy behaviour for
+         custom / unknown sections).
     """
     result = copy.deepcopy(config)
 
@@ -214,8 +286,28 @@ def _apply_env_overrides(config: Dict[str, Any]) -> Dict[str, Any]:
             except ValueError:
                 coerced = env_val
 
-        # Set using dot-path
-        _set_dot_path(result, dot_key, coerced)
+        # Resolve against the PRISTINE config (not the mutating ``result``). This
+        # is critical: the legacy branch below may create unknown dotted paths
+        # (e.g. ``capture.thread``) for one env var, which would otherwise pollute
+        # the existence check for a later var and prevent the flattened-key
+        # fallback from firing.
+        if _has_dot_path(config, dot_key):
+            _set_dot_path(result, dot_key, coerced)
+        else:
+            # Flattened key: keep the first segment's nested dot, but collapse the
+            # REMAINING dots back into underscores. This recovers config keys that
+            # carry underscores within a segment, e.g.
+            #   capture.thread.inference.window.minutes
+            #     -> capture.thread_inference_window_minutes  (real key)
+            # while leaving genuinely dotted keys like ``db.path`` untouched
+            # (``db`` + ``.`` + ``path``).
+            _parts = dot_key.split(".")
+            flat_key = _parts[0] + "." + "_".join(_parts[1:]) if len(_parts) > 1 else dot_key
+            if _has_dot_path(config, flat_key):
+                _set_dot_path(result, flat_key, coerced)
+            else:
+                # Legacy: create the dotted path even if unknown (custom sections).
+                _set_dot_path(result, dot_key, coerced)
 
     return result
 

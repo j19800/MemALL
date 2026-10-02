@@ -148,5 +148,13 @@ def handle_db(arguments: dict) -> str:
     elif action == "archive_vacuum":
         result = _vac_arch()
         return json.dumps(result)
+    elif action == "backfill_thread":
+        from memall.pipeline._backfill_thread import backfill_thread_ids
+        result = backfill_thread_ids(dry_run=arguments.get("dry_run", False))
+        return json.dumps(result, ensure_ascii=False, default=str)
+    elif action == "backfill_project":
+        from memall.pipeline._backfill_project import backfill_project_ids
+        result = backfill_project_ids(dry_run=arguments.get("dry_run", False))
+        return json.dumps(result, ensure_ascii=False, default=str)
     else:
         return json.dumps({"error": f"unknown action: {action}"})
