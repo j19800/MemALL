@@ -130,6 +130,35 @@ def tokenize(text: str) -> list:
     ]
 
 
+def tokenize_cjk(text: str) -> list:
+    """CJK-aware tokenizer that augments :func:`tokenize` with character bigrams.
+
+    ``tokenize`` treats an unbroken run of Chinese characters as a single token
+    (e.g. ``"我负责技术文档撰写"``), so two texts about the same topic rarely
+    share a token unless they contain identical Latin words.  Character bigrams
+    (二字滑窗) recover that overlap: ``"文档"`` appears in both
+    ``"文档协作"`` and ``"技术文档撰写"``, giving a meaningful similarity signal.
+
+    This is the key to making topic→agent relevance work for Chinese.  It is
+    opt-in (see ``compute_tfidf(tokenizer=tokenize_cjk)``) so the global
+    ``tokenize`` behaviour — and any persisted TF-IDF/SVD models — stay stable.
+    """
+    tokens = tokenize(text)
+    if not text:
+        return tokens
+    lowered = text.lower()
+    # Slide a 2-character window over each CJK run to recover cross-text overlap.
+    for m in re.finditer(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]+", lowered):
+        s = m.group(0)
+        if len(s) < 2:
+            continue
+        for i in range(len(s) - 1):
+            bg = s[i:i + 2]
+            if bg not in STOPWORDS_CJK_EN:
+                tokens.append(bg)
+    return tokens
+
+
 # ── Similarity functions ────────────────────────────────────────────
 
 
@@ -140,16 +169,24 @@ def jaccard(a: set, b: set) -> float:
     return len(a & b) / len(a | b)
 
 
-def compute_tfidf(docs: list) -> list:
+def compute_tfidf(docs: list, tokenizer=None) -> list:
     """Compute TF-IDF vectors for a list of documents.
 
     Returns a list of dicts: ``[{term: score, ...}, ...]``.
+
+    Args:
+        docs: List of document strings.
+        tokenizer: Optional callable used to split each document into tokens.
+            Defaults to :func:`tokenize`.  Pass ``tokenize_cjk`` for improved
+            Chinese topic-matching (see :func:`tokenize_cjk`).
     """
+    if tokenizer is None:
+        tokenizer = tokenize
     n = len(docs)
     df = Counter()
     doc_tokens = []
     for d in docs:
-        tokens = tokenize(d)
+        tokens = tokenizer(d)
         doc_tokens.append(tokens)
         df.update(set(tokens))
 

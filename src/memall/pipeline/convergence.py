@@ -34,7 +34,11 @@ def unwrap_meta(meta: dict, key: str):
     """Unwrap a single metadata key; return default (empty list) if absent."""
     raw = meta.get(key)
     if raw is None:
-        return [] if key in ("participants", "options", "open_questions", "action_items") else ""
+        return (
+            []
+            if key in ("participants", "options", "open_questions", "action_items")
+            else ""
+        )
     return unwrap(raw)
 
 
@@ -51,6 +55,7 @@ def create_discussion(
     creator: str = "system",
     participants: list | None = None,
     timeout_hours: int = 24,
+    suggest: bool = False,
 ) -> dict:
     """Create a discussion as an L5 memory (category=discussion).
 
@@ -75,7 +80,10 @@ def create_discussion(
         if background:
             parts.append(f"\n\n== 问题描述（事实与数据）==\n{background}")
         if options:
-            parts.append(f"\n\n== 解决方案 ==\n" + "\n".join(f"{i}. {o}" for i, o in enumerate(options, 1)))
+            parts.append(
+                f"\n\n== 解决方案 ==\n"
+                + "\n".join(f"{i}. {o}" for i, o in enumerate(options, 1))
+            )
         if recommendation:
             parts.append(f"\n\n== 建议 ==\n{recommendation}")
         content = "".join(parts)[:2000]
@@ -84,16 +92,42 @@ def create_discussion(
 
         h = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-        meta = json.dumps({
-            "status": "active",
-            "participants": participants_list,
-            "options": options or [],
-            "open_questions": open_questions or [],
-            "action_items": action_items or [],
-            "conclusion": "",
-            "converged_at": "",
-            "convergence_reason": "",
-        })
+        # 🧠 Capability-aware participant suggestion (rational routing).
+        # Pure advisory — never auto-invites; only records a recommendation so the
+        # creator / calling agent can decide. Skipped unless explicitly requested.
+        suggested_participants: list = []
+        if suggest and not participants_list:
+            try:
+                from memall.pipeline.agent_routing import suggest_participants
+
+                suggested_participants = [
+                    s["agent"]
+                    for s in suggest_participants(
+                        title=title,
+                        background=background,
+                        options=options,
+                        k=3,
+                        exclude=[creator],
+                    )
+                ]
+            except Exception:
+                logger.debug(
+                    "create_discussion: participant suggestion failed", exc_info=True
+                )
+
+        meta = json.dumps(
+            {
+                "status": "active",
+                "participants": participants_list,
+                "suggested_participants": suggested_participants,
+                "options": options or [],
+                "open_questions": open_questions or [],
+                "action_items": action_items or [],
+                "conclusion": "",
+                "converged_at": "",
+                "convergence_reason": "",
+            }
+        )
 
         cur = conn.execute(
             """INSERT INTO memories
@@ -101,18 +135,38 @@ def create_discussion(
                 category, project, summary, occurred_at, created_at, updated_at,
                 supersedes, confidence, visibility, metadata, arc_status)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (content, h, "L5", creator, creator, subject,
-             "discussion", "", "", now, now, now,
-             '[]', 0.5, "private", meta, "open"),
+            (
+                content,
+                h,
+                "L5",
+                creator,
+                creator,
+                subject,
+                "discussion",
+                "",
+                "",
+                now,
+                now,
+                now,
+                "[]",
+                0.5,
+                "private",
+                meta,
+                "open",
+            ),
         )
         memory_id = cur.lastrowid
         conn.commit()
 
         try:
             from memall.lark_notify import notify_discussion_created
+
             notify_discussion_created(
-                title=title, memory_id=memory_id, creator=creator,
-                participants=participants_list, options=options or [],
+                title=title,
+                memory_id=memory_id,
+                creator=creator,
+                participants=participants_list,
+                options=options or [],
                 timeout_hours=timeout_hours,
             )
         except Exception:
@@ -126,6 +180,7 @@ def create_discussion(
             "background": background,
             "status": "active",
             "participants": participants_list,
+            "suggested_participants": suggested_participants,
             "action_items": action_items or [],
             "open_questions": open_questions or [],
             "recommendation": recommendation,
@@ -169,6 +224,15 @@ def get_discussion(discussion_id: int) -> dict:
                 "created_at": disc["created_at"],
                 "conclusion": unwrap_meta(meta, "conclusion"),
                 "converged_at": meta.get("converged_at", ""),
+                # 🧠 Surface the intelligent consensus analysis so callers
+                # (agents / dashboards) can see whether the group agreed,
+                # who dissented, and the synthesized conclusion.
+                "consensus": meta.get("consensus"),
+                "conflict": meta.get("conflict"),
+                "dissenters": meta.get("dissenters", []),
+                "stance_summary": meta.get("stance_summary", {}),
+                "synthesis": meta.get("synthesis", ""),
+                "suggested_participants": meta.get("suggested_participants", []),
             },
             "responses": [dict(r) for r in responses],
         }
@@ -202,15 +266,17 @@ def list_active_discussions() -> list[dict]:
                 (r["id"],),
             ).fetchall()
             responded_agents = [rr["agent_name"] for rr in resp_rows]
-            results.append({
-                "memory_id": r["id"],
-                "subject": r["subject"],
-                "participants": unwrap_meta(meta, "participants"),
-                "responded_agents": responded_agents,
-                "action_items": unwrap_meta(meta, "action_items"),
-                "response_count": count,
-                "created_at": r["created_at"],
-            })
+            results.append(
+                {
+                    "memory_id": r["id"],
+                    "subject": r["subject"],
+                    "participants": unwrap_meta(meta, "participants"),
+                    "responded_agents": responded_agents,
+                    "action_items": unwrap_meta(meta, "action_items"),
+                    "response_count": count,
+                    "created_at": r["created_at"],
+                }
+            )
         return results
     finally:
         conn.close()
@@ -241,16 +307,20 @@ def list_all_discussions() -> list[dict]:
                 (r["id"],),
             ).fetchall()
             responded_agents = [rr["agent_name"] for rr in resp_rows]
-            results.append({
-                "memory_id": r["id"],
-                "subject": r["subject"],
-                "summary": r["summary"] or r["content"][:200] if r["content"] else "",
-                "status": meta.get("status", "active"),
-                "participants": unwrap_meta(meta, "participants"),
-                "responded_agents": responded_agents,
-                "response_count": count,
-                "created_at": r["created_at"],
-            })
+            results.append(
+                {
+                    "memory_id": r["id"],
+                    "subject": r["subject"],
+                    "summary": r["summary"] or r["content"][:200]
+                    if r["content"]
+                    else "",
+                    "status": meta.get("status", "active"),
+                    "participants": unwrap_meta(meta, "participants"),
+                    "responded_agents": responded_agents,
+                    "response_count": count,
+                    "created_at": r["created_at"],
+                }
+            )
         return results
     finally:
         conn.close()
@@ -290,7 +360,10 @@ def _converge_single(conn, disc: dict) -> dict:
                 responded_agents.add(a)
         missing = [p for p in participants if p not in responded_agents]
         if missing:
-            return {"warning": f"waiting for participants: {missing}", "participants": participants}
+            return {
+                "warning": f"waiting for participants: {missing}",
+                "participants": participants,
+            }
 
     return converge_discussion(conn, disc, [dict(r) for r in responses], "confirmed")
 
@@ -324,34 +397,56 @@ def confirm_discussion(
 
         disc_meta = json.loads(disc.get("metadata") or "{}")
         if disc_meta.get("status") != "active":
-            return {"warning": f"discussion #{discussion_id} is already {disc_meta.get('status')}"}
+            return {
+                "warning": f"discussion #{discussion_id} is already {disc_meta.get('status')}"
+            }
 
         # ── P2 response ──
         subject = f"[表态] 讨论#{discussion_id} | {agent_name}: {stance}"
-        content = f"[表态] 讨论#{discussion_id} | {agent_name}: {stance}\n\n{note}"[:2000]
+        content = f"[表态] 讨论#{discussion_id} | {agent_name}: {stance}\n\n{note}"[
+            :2000
+        ]
         h = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        rmeta = json.dumps({
-            "stance": stance,
-            "discussion_id": discussion_id,
-            "agent_name": agent_name,
-            "note": note[:500],
-        })
+        rmeta = json.dumps(
+            {
+                "stance": stance,
+                "discussion_id": discussion_id,
+                "agent_name": agent_name,
+                "note": note[:500],
+            }
+        )
         cur = conn.execute(
             """INSERT INTO memories
                (content, content_hash, level, owner, agent_name, subject,
                 category, project, summary, occurred_at, created_at, updated_at,
                 supersedes, confidence, visibility, metadata, arc_status)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (content, h, "P2", agent_name, agent_name, subject,
-             "discussion_response", "", "", now, now, now,
-             '[]', 0.6, "private", rmeta, "open"),
+            (
+                content,
+                h,
+                "P2",
+                agent_name,
+                agent_name,
+                subject,
+                "discussion_response",
+                "",
+                "",
+                now,
+                now,
+                now,
+                "[]",
+                0.6,
+                "private",
+                rmeta,
+                "open",
+            ),
         )
         resp_id = cur.lastrowid
 
         # Edge: response cites discussion
         conn.execute(
-            "INSERT INTO edges (source_id, target_id, relation_type, created_at) VALUES (?,?,?,?)",
-            (discussion_id, resp_id, "cites", now),
+            "INSERT INTO edges (source_id, target_id, relation_type, created_at, valid_from) VALUES (?,?,?,?,?)",
+            (discussion_id, resp_id, "cites", now, now),
         )
 
         conn.commit()
@@ -393,7 +488,9 @@ def confirm_discussion(
                 }
 
         # All participants (if any) have responded, or no participants listed → converge
-        result = converge_discussion(conn, disc, response_list, f"Confirmed by {agent_name}")
+        result = converge_discussion(
+            conn, disc, response_list, f"Confirmed by {agent_name}"
+        )
         result["response_id"] = resp_id
         return result
 
@@ -423,6 +520,80 @@ def respond_discussion(
 # ── Pipeline step ──
 
 
+def _analyze_stances(responses: list[dict]) -> dict:
+    """Derive a structured consensus analysis from discussion responses.
+
+    This is the intelligence layer that was removed in #7769: instead of just
+    listing stances textually, we compute the agreement distribution, detect
+    conflict, identify dissenters, and *synthesize* a conclusion from the actual
+    deliberation (rather than relying on a pre-supplied, often-empty field).
+
+    Returns::
+
+        {
+            "counts": {"confirm": n, "reject": n, "abstain": n, "other": n},
+            "agents": [agent, ...],
+            "consensus": bool,        # True only when there are supporters and NO reject
+            "conflict": bool,         # True when both confirm and reject present
+            "dissenters": [agent, ...],
+            "synthesis": str,         # derived decision text from the deliberation
+        }
+    """
+    counts = {"confirm": 0, "reject": 0, "abstain": 0, "other": 0}
+    notes = {"confirm": [], "reject": [], "abstain": []}
+    agents: list[str] = []
+    dissenters: list[str] = []
+
+    for resp in responses:
+        rmeta = json.loads(resp.get("metadata") or "{}")
+        agent = rmeta.get("agent_name") or resp.get("agent_name") or ""
+        stance = (rmeta.get("stance") or "confirm").lower()
+        note = (rmeta.get("note") or rmeta.get("arguments") or "")[:200]
+        if stance in counts:
+            counts[stance] += 1
+        else:
+            stance = "other"
+            counts["other"] += 1
+        if isinstance(agent, str) and agent:
+            agents.append(agent)
+        if stance == "reject":
+            dissenters.append(agent)
+        if stance in notes and note:
+            notes[stance].append(f"{agent}: {note}")
+
+    has_confirm = counts["confirm"] > 0
+    has_reject = counts["reject"] > 0
+    consensus = has_confirm and not has_reject
+    conflict = has_confirm and has_reject
+
+    # Synthesize a conclusion from the actual deliberation.
+    if conflict:
+        pros = "；".join(notes["confirm"]) or "（支持方未附理由）"
+        cons = "；".join(notes["reject"]) or "（反对方未附理由）"
+        synthesis = (
+            f"存在分歧，需后续复核。支持方认为：{pros}。"
+            f"反对方（{', '.join(dissenters)}）认为：{cons}。"
+        )
+    elif consensus:
+        synthesis = "各方一致通过。" + (
+            "依据：" + "；".join(notes["confirm"]) if notes["confirm"] else "无附理由。"
+        )
+    elif counts["reject"] > 0:
+        synthesis = "无支持意见，提案被否决。" + (
+            "反对理由：" + "；".join(notes["reject"]) if notes["reject"] else ""
+        )
+    else:
+        synthesis = "无明确立场，按默认通过处理。"
+
+    return {
+        "counts": counts,
+        "agents": agents,
+        "consensus": consensus,
+        "conflict": conflict,
+        "dissenters": dissenters,
+        "synthesis": synthesis,
+    }
+
 
 def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) -> dict:
     """Mark discussion converged, create L4 decision + L5 tasks.
@@ -436,7 +607,7 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
 
     now = now_iso()
     action_items = unwrap_meta(meta, "action_items")
-    title = re.sub(r'^(\[\?\?\] |\[讨论\] )', '', disc.get("subject", ""))
+    title = re.sub(r"^(\[\?\?\] |\[讨论\] )", "", disc.get("subject", ""))
 
     # Collect participant names (used as fallback assignees for string action_items)
     participants = unwrap_meta(meta, "participants") or []
@@ -449,52 +620,100 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
         if isinstance(agent, str) and agent:
             latest[agent] = rmeta
 
+    # 🧠 Intelligent consensus analysis (re-introduced lightweight deliberation)
+    analysis = _analyze_stances(responses)
+    # 🧠 Derive the conclusion from deliberation when no explicit one was set.
+    preset_conclusion = unwrap_meta(meta, "conclusion")
+    conclusion = preset_conclusion if preset_conclusion else analysis["synthesis"]
+
     # ?? 1. Update discussion L5 ??
     meta["status"] = "converged"
     meta["converged_at"] = now
     meta["convergence_reason"] = reason
+    meta["consensus"] = analysis["consensus"]
+    meta["conflict"] = analysis["conflict"]
+    meta["stance_summary"] = analysis["counts"]
+    meta["dissenters"] = analysis["dissenters"]
+    meta["synthesis"] = analysis["synthesis"]
+    if not preset_conclusion:
+        meta["conclusion"] = conclusion
     conn.execute(
         "UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
         (json.dumps(meta), now, disc["id"]),
     )
 
     # ?? 2. Create L4 decision ??
-    conclusion = unwrap_meta(meta, "conclusion")
     stances_lines = []
     for agent, s in latest.items():
         stance = s.get("stance", "confirm")
         args = (s.get("arguments") or s.get("note") or "")[:200]
         stances_lines.append(f"  {agent}: {stance} - {args}")
 
+    consensus_label = (
+        "一致通过"
+        if analysis["consensus"]
+        else ("存在分歧" if analysis["conflict"] else "默认通过")
+    )
+    dissent_line = (
+        f"\n\n## 分歧方\n" + "\n".join(f"  - {a}" for a in analysis["dissenters"])
+        if analysis["dissenters"]
+        else ""
+    )
     l4_content = (
         f"# [L4 会话] {title}\n\n"
-        f"## 结论\n{conclusion if conclusion else '(未记录)'}\n\n"
+        f"## 结论\n{conclusion}\n\n"
+        f"## 共识分析\n状态：{consensus_label}；"
+        f"支持 {analysis['counts']['confirm']} / 反对 {analysis['counts']['reject']} / "
+        f"弃权 {analysis['counts']['abstain']} / 其他 {analysis['counts']['other']}。"
+        f"{dissent_line}\n\n"
         f"## 各方立场\n" + "\n".join(stances_lines) + "\n\n"
         f"## 收敛原因\n{reason}"
     )[:2000]
     l4_hash = hashlib.sha256(l4_content.encode("utf-8")).hexdigest()
-    l4_meta = json.dumps({
-        "source_discussion": disc["id"],
-        "final_stances": latest,
-        "convergence_reason": reason,
-        "converged_at": now,
-    })
+    l4_meta = json.dumps(
+        {
+            "source_discussion": disc["id"],
+            "final_stances": latest,
+            "convergence_reason": reason,
+            "converged_at": now,
+            "consensus": analysis["consensus"],
+            "conflict": analysis["conflict"],
+            "stance_summary": analysis["counts"],
+            "dissenters": analysis["dissenters"],
+            "synthesis": analysis["synthesis"],
+        }
+    )
     cur = conn.execute(
         """INSERT INTO memories
            (content, content_hash, level, owner, agent_name, subject,
             category, summary, occurred_at, created_at, updated_at,
             supersedes, confidence, visibility, metadata, arc_status)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (l4_content, l4_hash, "L4", "system", "system",
-         f"[L4 会话] {title}", "decision", "", now, now, now,
-         '[]', 0.7, "private", l4_meta, "open"),
+        (
+            l4_content,
+            l4_hash,
+            "L4",
+            "system",
+            "system",
+            f"[L4 会话] {title}",
+            "decision",
+            "",
+            now,
+            now,
+            now,
+            "[]",
+            0.7,
+            "private",
+            l4_meta,
+            "open",
+        ),
     )
     l4_id = cur.lastrowid
 
     # edge: discussion --refines--> decision
     conn.execute(
-        "INSERT INTO edges (source_id, target_id, relation_type, created_at) VALUES (?,?,?,?)",
-        (disc["id"], l4_id, "refines", now),
+        "INSERT INTO edges (source_id, target_id, relation_type, created_at, valid_from) VALUES (?,?,?,?,?)",
+        (disc["id"], l4_id, "refines", now, now),
     )
 
     # ?? 3. Archive response P2 memories ??
@@ -519,35 +738,54 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
         task_subject = f"[任务] {title} — {_smart_subject(desc)}"[:200]
         task_content = f"[任务] {title} | {desc}"[:2000]
         task_hash = hashlib.sha256(task_content.encode("utf-8")).hexdigest()
-        task_meta = json.dumps({
-            "status": "active",
-            "assignee": assigned_to,
-            "source_discussion": disc["id"],
-            "source_decision": l4_id,
-        })
+        task_meta = json.dumps(
+            {
+                "status": "active",
+                "assignee": assigned_to,
+                "source_discussion": disc["id"],
+                "source_decision": l4_id,
+            }
+        )
         cur = conn.execute(
             """INSERT INTO memories
                (content, content_hash, level, owner, agent_name, subject,
                 category, project, summary, occurred_at, created_at, updated_at,
                 supersedes, confidence, visibility, metadata, arc_status)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (task_content, task_hash, "L5", assigned_to, assigned_to,
-             task_subject, "task", disc.get("project", ""), "", now, now, now,
-             '[]', 0.6, "private", task_meta, "open"),
+            (
+                task_content,
+                task_hash,
+                "L5",
+                assigned_to,
+                assigned_to,
+                task_subject,
+                "task",
+                disc.get("project", ""),
+                "",
+                now,
+                now,
+                now,
+                "[]",
+                0.6,
+                "private",
+                task_meta,
+                "open",
+            ),
         )
         tid = cur.lastrowid
         task_ids.append(tid)
 
         # edge: decision --refines--> task
         conn.execute(
-            "INSERT INTO edges (source_id, target_id, relation_type, created_at) VALUES (?,?,?,?)",
-            (l4_id, tid, "refines", now),
+            "INSERT INTO edges (source_id, target_id, relation_type, created_at, valid_from) VALUES (?,?,?,?,?)",
+            (l4_id, tid, "refines", now, now),
         )
 
     conn.commit()
 
     try:
         from memall.lark_notify import notify_discussion_converged
+
         notify_discussion_converged(
             discussion_id=disc["id"],
             title=title[:80],
@@ -676,34 +914,51 @@ def check_pending_discussions(agent_name: str) -> list[dict]:
             meta = json.loads(dd.get("metadata") or "{}")
 
             # Capture P2 reminder
-            content = (
-                f"[待回应讨论] {dd['subject']} — "
-                f"提醒: {agent_name} 尚未确认"
-            )[:2000]
+            content = (f"[待回应讨论] {dd['subject']} — 提醒: {agent_name} 尚未确认")[
+                :2000
+            ]
             h = hashlib.sha256(content.encode("utf-8")).hexdigest()
-            rem_meta = json.dumps({
-                "discussion_id": disc["id"],
-                "title": dd["subject"],
-                "reminder_for": agent_name,
-            })
+            rem_meta = json.dumps(
+                {
+                    "discussion_id": disc["id"],
+                    "title": dd["subject"],
+                    "reminder_for": agent_name,
+                }
+            )
             conn.execute(
                 """INSERT OR IGNORE INTO memories
                    (content, content_hash, level, owner, agent_name, subject,
                     category, summary, occurred_at, created_at, updated_at,
                     supersedes, confidence, visibility, metadata, arc_status)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (content, h, "P2", agent_name, agent_name,
-                 f"待回应: {dd['subject']}", "discussion_pending", "",
-                 now.isoformat(), now.isoformat(), now.isoformat(),
-                 None, 0.5, "private", rem_meta, "open"),
+                (
+                    content,
+                    h,
+                    "P2",
+                    agent_name,
+                    agent_name,
+                    f"待回应: {dd['subject']}",
+                    "discussion_pending",
+                    "",
+                    now.isoformat(),
+                    now.isoformat(),
+                    now.isoformat(),
+                    None,
+                    0.5,
+                    "private",
+                    rem_meta,
+                    "open",
+                ),
             )
             conn.commit()
 
-            pending.append({
-                "discussion_id": disc["id"],
-                "subject": dd["subject"],
-                "reminder_captured": True,
-            })
+            pending.append(
+                {
+                    "discussion_id": disc["id"],
+                    "subject": dd["subject"],
+                    "reminder_captured": True,
+                }
+            )
 
         return pending
     finally:

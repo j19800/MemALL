@@ -14,6 +14,7 @@ class Memory:
     subject: str = ""
     project: str = ""
     category: str = "general"
+    stream: str = "knowledge"
     summary: str = ""
     occurred_at: str = ""
     created_at: str = ""
@@ -38,6 +39,7 @@ class MemoryInput:
     subject: str = ""
     project: str = ""
     category: str = "general"
+    stream: str = "knowledge"
     summary: str = ""
     occurred_at: str = ""
     supersedes: Optional[str] = None

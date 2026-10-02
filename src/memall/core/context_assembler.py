@@ -175,6 +175,62 @@ def _build_tier2(agent_name: str, query: str, conn) -> list[str]:
     return lines
 
 
+def _build_collab(agent_name: str, query: str, conn) -> list[str]:
+    """Collaboration-awareness block: surface the agent's active deliberations
+    and relevant cross-agent decisions it would otherwise be blind to.
+
+    Two cheap, additive signals:
+      1. Active discussions this agent is a participant in (so it knows it must
+         weigh in) — capped at 2.
+      2. Recent cross-agent L4 decisions relevant to *query* (so it inherits what
+         other agents already decided) — capped at 2, scored by TF-IDF cosine.
+
+    Never raises: any failure degrades silently to an empty block so the core
+    context path is never blocked by collaboration lookups.
+    """
+    lines: list[str] = []
+    try:
+        # 1. Active discussions where this agent is a participant
+        rows = conn.execute(
+            "SELECT DISTINCT m.id, m.subject FROM memories m "
+            "JOIN json_each(json_extract(m.metadata, '$.participants')) AS p "
+            "WHERE m.level='L5' AND m.category='discussion' "
+            "AND json_extract(m.metadata, '$.status') = 'active' "
+            "AND LOWER(p.value) = LOWER(?) "
+            "ORDER BY m.created_at DESC LIMIT 2",
+            (agent_name,),
+        ).fetchall()
+        for r in rows:
+            lines.append(f"[协作-待回应] 讨论#{r['id']}: {r['subject']}")
+
+        # 2. Cross-agent L4 decisions relevant to the query
+        if query:
+            dec = conn.execute(
+                "SELECT id, subject, content, agent_name FROM memories "
+                "WHERE level='L4' AND LOWER(agent_name) != LOWER(?) "
+                "ORDER BY created_at DESC LIMIT 25",
+                (agent_name,),
+            ).fetchall()
+            if dec:
+                docs = [query] + [(r["subject"] or "") + " " + (r["content"] or "")[:300] for r in dec]
+                tfidf = compute_tfidf(docs)
+                qv = tfidf[0]
+                scored = []
+                for i, r in enumerate(dec):
+                    sim = cosine_sim(qv, tfidf[i + 1])
+                    if sim > 0:
+                        scored.append((sim, i))
+                scored.sort(reverse=True)
+                for _, i in scored[:2]:
+                    r = dec[i]
+                    lines.append(
+                        f"[协作-他agent决定] {r['agent_name']}: {r['subject'] or r['content'][:60]}"
+                    )
+    except Exception as e:
+        logger.debug("Collaboration block skipped: %s", e)
+    return lines
+
+
 def _build_tier3(agent_name: str, conn) -> list[str]:
     """Tier 3 — recency-ordered: P0-P2, L2, L9, L10, L11."""
     lines: list[str] = []
@@ -231,6 +287,10 @@ def build_context(
     tier3_cap = min(800, max(0, max_tokens - header_tokens - tier1_cap - tier2_cap))
 
     with pool_conn() as conn:
+        # 🧠 Collaboration-awareness: what this agent should know about the
+        # shared deliberation state (cheap, capped, additive).
+        collab_lines = _build_collab(agent_name, query, conn)
+
         t1_lines = _build_tier1(agent_name, conn)
         t2_lines = _build_tier2(agent_name, query, conn)
 
@@ -274,13 +334,17 @@ def build_context(
     t2_cap = min(800, max(0, remaining))
     t2_block, t2_tokens = _format_block("Recent Context", t2_lines, t2_cap)
     remaining -= t2_tokens
+    # Collaboration block: capped to a small fixed budget so it never starves
+    # the personal tiers. Degrades to empty on any failure.
+    collab_block, collab_tokens = _format_block("Collaboration", collab_lines, min(300, max(0, remaining)))
+    remaining -= collab_tokens
     t3_block, t3_tokens = _format_block("Additional Context", t3_lines, max(0, remaining))
 
-    context = header + t1_block + t2_block + t3_block
+    context = header + t1_block + collab_block + t2_block + t3_block
     return {
         "context": context,
         "tokens": _estimate_tokens(context),
-        "sources": {"tier1": t1_tokens, "tier2": t2_tokens, "tier3": t3_tokens},
+        "sources": {"tier1": t1_tokens, "tier2": t2_tokens, "tier3": t3_tokens, "collab": collab_tokens},
     }
 
 

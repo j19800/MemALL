@@ -147,6 +147,7 @@ def distill_step() -> dict:
                     conn.execute(
                     "UPDATE memories SET content = ?, content_hash = ?, "
                     "summary = ?, subject = ?, updated_at = ?, occurred_at = ?, "
+                    "stream = 'ledger', "
                     "thread_id = ?, project = CASE "
                     "  WHEN project IS NULL OR project = '' THEN ? "
                     "  ELSE project END "
@@ -158,8 +159,8 @@ def distill_step() -> dict:
 
             if new_id is None:
                 cur = conn.execute(
-                    "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, summary, created_at, updated_at, occurred_at, subject, project, trust_level, access_count, metadata, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (merged_content, ch, "L9", "", l9_agent, l9_category, l9_subject, now, now, now, l9_subject, l9_project, 0, 0, "{}", l9_thread_id),
+                    "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, summary, created_at, updated_at, occurred_at, subject, project, trust_level, access_count, metadata, thread_id, stream) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (merged_content, ch, "L9", "", l9_agent, l9_category, l9_subject, now, now, now, l9_subject, l9_project, 0, 0, "{}", l9_thread_id, "ledger"),
                 )
                 if cur.rowcount == 0:
                     # Duplicate hash → record already exists, skip

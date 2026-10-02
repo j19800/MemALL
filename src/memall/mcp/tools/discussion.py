@@ -34,3 +34,15 @@ def handle_status(arguments: dict) -> str:
     else:
         result = {"active_topics": list_active_discussions()}
     return json.dumps(result, ensure_ascii=False, default=str)
+
+
+def handle_suggest_participants(arguments: dict) -> str:
+    from memall.pipeline.agent_routing import suggest_participants
+    result = suggest_participants(
+        title=arguments.get("title", ""),
+        background=arguments.get("background", ""),
+        options=arguments.get("options"),
+        k=int(arguments.get("k", 3)),
+        exclude=arguments.get("exclude"),
+    )
+    return json.dumps({"suggested_participants": result}, ensure_ascii=False, default=str)
