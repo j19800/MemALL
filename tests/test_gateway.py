@@ -158,6 +158,46 @@ def test_export_import_bundle():
     )
 
 
+def test_api_graph_center():
+    """Test: GET /api/graph/center returns a real, existing hub node.
+
+    Regression for the knowledge-graph "opens empty" bug: the endpoint must
+    return a node_id that actually exists in the memories table (previously
+    the frontend defaulted to id=1 which never existed).
+    """
+    gw = MemAllGateway(host="127.0.0.1", port=GW_PORT_CAPTURE)
+    gw.start()
+    assert _wait_for_health("127.0.0.1", GW_PORT_CAPTURE), "Gateway did not start in time"
+
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{GW_PORT_CAPTURE}/api/graph/center",
+        )
+        resp = urllib.request.urlopen(req, timeout=3)
+        payload = json.loads(resp.read().decode())
+        # /api/graph/center returns a raw dict (not _ok-wrapped), matching the
+        # /graph/* family. The frontend handles both shapes via (c.data || c).
+        node = payload.get("data") or payload
+        node_id = node.get("node_id")
+        assert node_id is not None, f"no node_id returned: {payload}"
+
+        from memall.core.db import get_conn
+        conn = get_conn()
+        try:
+            row = conn.execute(
+                "SELECT id, content FROM memories WHERE id = ?", (node_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row is not None, f"center node_id={node_id} does not exist in memories"
+        assert node.get("edge_count", 0) > 0, f"center node has no edges: {node}"
+        print(f"  PASS test_api_graph_center — center node={node_id}, edges={node.get('edge_count')}")
+    finally:
+        gw.stop()
+        assert _wait_for_stop("127.0.0.1", GW_PORT_CAPTURE), "Gateway did not stop in time"
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("MemALL Gateway Tests")

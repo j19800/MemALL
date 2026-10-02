@@ -64,7 +64,7 @@ def handle_recent(conn) -> str:
     ).fetchall()
     items = "".join(
         f"<tr><td>{r['id']}</td>"
-        f"<td><span class='tag lv-{r['level']}'>{esc_html(r['level'] or '-')}</span></td>"
+        f"<td><span class='tag lv-{esc_html(str(r['level'] or '-'))}'>{esc_html(r['level'] or '-')}</span></td>"
         f"<td>{esc_html(r['subject'] or (r['content'] or '')[:60])}</td>"
         f"<td>{esc_html(r['category'] or '-')}</td>"
         f"<td>{esc_html(r['agent_name'] or '-')}</td>"
@@ -147,7 +147,7 @@ def handle_graph_stats(conn) -> str:
         for r in agents
     )
     level_rows = "".join(
-        f"<tr><td><span class='tag lv-{r['level']}'>{esc_html(r['level'])}</span></td><td>{r['cnt']}</td></tr>"
+        f"<tr><td><span class='tag lv-{esc_html(str(r['level'] or '-'))}'>{esc_html(r['level'] or '-')}</span></td><td>{r['cnt']}</td></tr>"
         for r in level_dist
     )
     edge_rows = "".join(
