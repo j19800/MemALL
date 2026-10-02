@@ -5,7 +5,7 @@
 | 维度 | MemALL | Mem0 | Letta | Zep |
 |------|--------|------|-------|-----|
 | **定位** | Multi-agent Memory OS / Loop Engineering 记忆基础设施 | 个人 AI 记忆层 | Agent 服务端框架 | 对话记忆中间件 |
-| **记忆模型** | 10 层生命周期（P0-L10） | 用户/会话 两层 | 智能体/记忆块 | 会话/摘要 两层 |
+| **记忆模型** | 11 层生命周期（P0-L11） | 用户/会话 两层 | 智能体/记忆块 | 会话/摘要 两层 |
 | **持久化** | SQLite（本地优先） | 云 API | PostgreSQL | 云 API |
 | **协议** | MCP Server | REST API | REST + gRPC | REST API |
 | **开源** | ✅ 全开源 | ⚠️ 部分 | ✅ | ⚠️ 部分 |
@@ -36,7 +36,7 @@ MemALL 独有：P0（紧急）→ P1/P2（规划）→ L1-L10（认知层级）�
 
 ### 记忆管线
 
-MemALL 有 21 步自动管线（enrich → classify → time_slice → arc_status → echo → epoch → reflect → distill → integrate → ...）。竞品依赖用户手动触发或简单 CRUD。
+MemALL 有 30 步自动管线（enrich → classify → time_slice → arc_status → echo → epoch → reflect → distill → integrate → ...）。竞品依赖用户手动触发或简单 CRUD。
 
 ### 讨论收敛
 
@@ -64,8 +64,8 @@ MemALL Phase 1.5 支持多 Agent 讨论自动推进到共识并 capture 为可�
 
 ## MemALL 的核心差异总结
 
-1. **生命周期深度**：10 层不是噱头，每条记忆知道自己的"认知权重"
+1. **生命周期深度**：11 层不是噱头，每条记忆知道自己的"认知权重"
 2. **时间线维度**：time_slices + epochs = Agent 知道自己"从哪来、在哪个阶段"
 3. **决策弧**：让 Agent 知道"哪些决策没有收尾"，这是 Loop Engineering 中 Sub-agents 协作的前提
 4. **离线优先**：SQLite 本地运行，不依赖云 API，适合需要数据主权的场景
-5. **管线自动化**：21 步管线自动处理，无需手动维护
+5. **管线自动化**：30 步管线自动处理，无需手动维护

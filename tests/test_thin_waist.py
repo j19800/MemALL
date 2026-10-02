@@ -196,6 +196,24 @@ def test_update_fields():
         cleanup_temp_db(db_path, patcher)
 
 
+def test_sanitize_level_whitelist():
+    """Level input is restricted to safe shapes (XSS defense for gateway_html)."""
+    from memall.core.thin_waist import _sanitize_level
+
+    # Allowed shapes pass through
+    assert _sanitize_level("L10") == "L10"
+    assert _sanitize_level("P2") == "P2"
+    assert _sanitize_level("l4") == "L4"       # case-normalized
+    assert _sanitize_level("L11") == "L11"     # used in production DB
+    assert _sanitize_level("medium") == "medium"
+
+    # Dangerous / unknown values fall back to the default
+    assert _sanitize_level('"><script>alert(1)</script>') == "P2"
+    assert _sanitize_level("../../etc") == "P2"
+    assert _sanitize_level(None) == "P2"
+    assert _sanitize_level("") == "P2"
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("thin_waist Core Tests")

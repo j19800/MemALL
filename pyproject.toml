@@ -5,13 +5,16 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/memall"]
 
+[tool.hatch.version]
+path = "src/memall/__init__.py"
+
 [project]
 name = "memall-os"
-version = "0.1.34"
+dynamic = ["version"]
 description = "Multi-agent collaborative memory OS"
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     { name = "MemALL Contributors" },
 ]
@@ -26,9 +29,9 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
 ]
@@ -41,6 +44,10 @@ dependencies = [
     "sqlite-vec>=0.1.9",
     "jieba>=0.42.0",
     "pyyaml>=6.0",
+    # ONNX embedding (bge-onnx) & reranker (P0-1/P0-2): pinned to the
+    # versions verified against SSE4.2-only CPUs (no AVX2 required).
+    "onnxruntime==1.19.2",
+    "tokenizers==0.19.1",
 ]
 
 # Optional dependency groups

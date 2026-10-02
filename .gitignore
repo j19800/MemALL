@@ -166,3 +166,18 @@ __deep_data.json
 conversations/
 *.db
 *.jsonl
+
+# ── Coverage / tool caches ──
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ── Local agent tooling caches ──
+.skills-mattpocock/
+.trae-html-share-packages/
+
+# ── Local scratch / archived temp files (physical isolation) ──
+scratch/

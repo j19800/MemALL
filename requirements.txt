@@ -6,3 +6,7 @@ python-dateutil>=2.8.0
 sqlite-vec>=0.1.9
 jieba>=0.42.0
 pyyaml>=6.0
+# ONNX embedding (bge-onnx) & reranker (P0-1/P0-2): pinned to the
+# versions verified against SSE4.2-only CPUs (no AVX2 required).
+onnxruntime==1.19.2
+tokenizers==0.19.1

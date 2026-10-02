@@ -1,3 +1,5 @@
+__test__ = False  # standalone script, not for pytest collection
+
 """
 MemALL 记忆质量评估 — 端到端质量测试
 

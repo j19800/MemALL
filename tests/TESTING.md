@@ -4,18 +4,17 @@
 
 ```bash
 # 安装测试依赖
-pip install pytest coverage
+pip install pytest pytest-cov coverage
 
-# 运行全部测试（不含 e2e 和 link）
-python -m pytest tests/ --tb=short --ignore=tests/test_link.py --ignore=tests/test_e2e.py --ignore=tests/smoke_test.py
+# 运行全部测试（standalone 脚本 smoke_test/stress_test/quality_test 已由 conftest 自动排除）
+python -m pytest tests/ --tb=short
 
 # 运行特定模块
 python -m pytest tests/test_thin_waist.py -v
 python -m pytest tests/test_strategy_*.py -v
 
-# 带覆盖率
-python -m coverage run -m pytest tests/ --tb=short --ignore=tests/test_link.py --ignore=tests/test_e2e.py --ignore=tests/smoke_test.py
-python -m coverage report --omit="*/migrations/*,*/tests/*,*/site-packages/*"
+# 带覆盖率门控（与 CI 一致）
+python -m pytest tests/ --cov=src/memall --cov-report=term-missing --cov-fail-under=35
 ```
 
 ## 测试统计
@@ -155,7 +154,8 @@ python -m coverage report --omit="*/migrations/*,*/tests/*,*/site-packages/*"
 |---------|------|
 | `test_gateway.py` | Gateway HTTP 服务（start/stop/capture） |
 | `test_e2e.py` | 端到端流程 |
-| `smoke_test.py` | 冒烟测试（不通过 pytest 收集） |
+| `smoke_test.py` | 冒烟测试（standalone 脚本，`conftest.collect_ignore` 排除） |
+| `stress_test.py` / `quality_test.py` | 压力/质量 standalone 脚本（同上，不参与 pytest 收集） |
 
 ### 7. 辅助
 

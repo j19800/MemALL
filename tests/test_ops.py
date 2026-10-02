@@ -189,8 +189,11 @@ def test_batch_archive_global_dry_run():
 
         # verify original_level saved in metadata
         conn2 = get_conn()
-        row = conn2.execute("SELECT level, metadata FROM memories WHERE id=?", (nid,)).fetchone()
-        assert row["level"] == "archived", f"expected archived: {row}"
+        row = conn2.execute(
+            "SELECT level, memory_status, metadata FROM memories WHERE id=?", (nid,)
+        ).fetchone()
+        assert row["memory_status"] == "archived", f"expected archived: {row}"
+        assert row["level"] != "archived", f"level must stay canonical: {row}"
         assert '"original_level"' in row["metadata"], f"original_level missing: {row['metadata']}"
         conn2.close()
 

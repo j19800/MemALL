@@ -880,10 +880,6 @@ pre{font-family:inherit;white-space:pre-wrap;word-break:break-word}
 // ============================================================
 var API = (new URLSearchParams(window.location.search).get('api_url') || 'http://127.0.0.1:9920').replace(/\/+$/,'');
 // Initialize input field to match API variable
-document.addEventListener('DOMContentLoaded', function(){
-  var input = document.getElementById('apiUrlInput');
-  if(input) input.value = API;
-});
 var chatHistory = [];
 var sending = false;
 var dashboardTimer = null;
@@ -910,7 +906,10 @@ function toast(msg, type){
 // ============================================================
 //  Utility
 // ============================================================
-function esc(t){var d=document.createElement('div');d.textContent=t;return d.innerHTML}
+function esc(t){
+  if(t===null||t===undefined) t='';
+  return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\\/g,'&#92;');
+}
 function fmtTime(d){
   if(!d) return '';
   try{var dt=new Date(d);if(isNaN(dt.getTime()))return d;return dt.getHours().toString().padStart(2,'0')+':'+dt.getMinutes().toString().padStart(2,'0')}
@@ -2074,12 +2073,44 @@ function loadGraph(){
     toast('vis-network 尚未加载完成', 'info');
     return;
   }
-  var nodeId = document.getElementById('graphNodeId').value.trim() || '1';
+  var nodeId = document.getElementById('graphNodeId').value.trim();
   var depth = document.getElementById('graphDepth').value || '2';
   var threadAware = document.getElementById('graphThreadAware').checked;
   var loading = document.getElementById('graphLoading');
   loading.style.display = 'flex';
 
+  // 默认节点（如数据库不存在 id=1）时，自动取推荐中心节点
+  if(!nodeId || nodeId==='1'){
+    api('GET','/api/graph/center')
+      .then(function(c){
+        var center = (c && c.data) ? c.data : c;
+        if(center && center.node_id){ document.getElementById('graphNodeId').value = center.node_id; _renderGraph(center.node_id, depth, threadAware); }
+        else { loading.style.display='none'; _emptyGraph('暂无可用于图谱的记忆数据'); }
+      })
+      .catch(function(){ _renderGraph('1', depth, threadAware); });
+    return;
+  }
+  _renderGraph(nodeId, depth, threadAware);
+}
+
+function useCenterNode(){
+  api('GET','/api/graph/center').then(function(c){
+    var center = (c && c.data) ? c.data : c;
+    if(center && center.node_id){ document.getElementById('graphNodeId').value = center.node_id; loadGraph(); }
+    else toast('暂无推荐中心节点', 'info');
+  });
+}
+
+function _emptyGraph(msg){
+  document.getElementById('graphLoading').style.display='none';
+  document.getElementById('graphCanvas').innerHTML =
+    '<div class="empty-state" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">'+
+    '<p>'+esc(msg||'未找到节点数据，请尝试其他节点ID')+'</p>'+
+    '<button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="useCenterNode()">使用推荐中心节点</button></div>';
+}
+
+function _renderGraph(nodeId, depth, threadAware){
+  var loading = document.getElementById('graphLoading');
   var url = '/graph/'+encodeURIComponent(nodeId)+'?depth='+depth;
   if(threadAware) url += '&thread_aware=true';
 
@@ -2091,9 +2122,7 @@ function loadGraph(){
       var edges = g.edges || g.links || [];
 
       if(!nodes || nodes.length===0){
-        document.getElementById('graphCanvas').innerHTML =
-          '<div class="empty-state" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">'+
-          '<p>未找到节点数据，请尝试其他节点ID</p></div>';
+        _emptyGraph('未找到节点数据，请尝试其他节点ID');
         return;
       }
 
@@ -2134,6 +2163,7 @@ function loadGraph(){
         layout: { improvedLayout:true }
       };
 
+      if(graphNetwork){ try{ graphNetwork.destroy(); }catch(e){} graphNetwork = null; }
       graphNetwork = new vis.Network(container, {nodes:visNodes,edges:visEdges}, options);
 
       // Double-click navigation
@@ -2426,7 +2456,7 @@ function loadMigrations(){
   api('GET','/migrations/status').then(function(data){
     var d = data || {};
     if(d.pending && d.pending.length > 0){
-      el.innerHTML = '<span class="text-warning">待迁移: ' + d.pending.join(', ') + '</span>';
+      el.innerHTML = '<span class="text-warning">待迁移: ' + esc(d.pending.join(', ')) + '</span>';
     } else {
       el.innerHTML = '<span class="text-success">全部迁移已执行 (' + (d.total_applied || d.applied||'?') + ' 个)</span>';
     }
@@ -2531,8 +2561,9 @@ document.addEventListener('DOMContentLoaded', function(){
   var saved = localStorage.getItem('memall_api_url');
   if(saved){
     API = saved.replace(/\/+$/,'');
-    document.getElementById('apiUrlInput').value = API;
   }
+  var apiInput = document.getElementById('apiUrlInput');
+  if(apiInput) apiInput.value = API;
   // Load dashboard
   loadDashboard();
   document.getElementById('chatInput').focus();

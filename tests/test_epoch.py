@@ -145,7 +145,7 @@ def test_epoch_l6_viewpoint():
 
 
 def test_epoch_manual():
-    """A memory with level='epoch' creates a manual epoch."""
+    """A memory with memory_status='epoch' creates a manual epoch."""
     from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
     from memall.pipeline.epoch import epoch_step
     from memall.core.db import get_conn
@@ -156,13 +156,13 @@ def test_epoch_manual():
         conn = get_conn()
         now = datetime.now(timezone.utc).isoformat()
 
-        # Insert a memory with level='epoch' directly
+        # Insert a memory with memory_status='epoch' directly
         import hashlib
         ch = hashlib.sha256("Starting architecture redesign phase".encode("utf-8")).hexdigest()
         conn.execute(
-            "INSERT INTO memories (content, content_hash, level, agent_name, category, "
-            "subject, occurred_at, created_at, updated_at) "
-            "VALUES (?, ?, 'epoch', 'manual_test', 'architecture', "
+            "INSERT INTO memories (content, content_hash, level, memory_status, agent_name, "
+            "category, subject, occurred_at, created_at, updated_at) "
+            "VALUES (?, ?, 'P2', 'epoch', 'manual_test', 'architecture', "
             "'Architecture redesign', ?, ?, ?)",
             ("Starting architecture redesign phase", ch, now, now, now),
         )

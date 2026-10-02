@@ -1,3 +1,5 @@
+__test__ = False  # standalone script, not for pytest collection
+
 """
 MemALL 暴力测试 — 记忆容量与性能极限
 测试: 大量写入 | 长文本 | 高并发检索 | 数据库膨胀

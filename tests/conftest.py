@@ -10,6 +10,11 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+# Standalone runnable scripts that match pytest's default ``*_test.py`` pattern
+# but are not suites. They run heavy work at module top level, so they must be
+# excluded before import — otherwise plain ``pytest tests/`` executes them.
+collect_ignore = ["smoke_test.py", "stress_test.py", "quality_test.py"]
+
 
 @pytest.fixture(autouse=True)
 def _test_db(monkeypatch, tmp_path):

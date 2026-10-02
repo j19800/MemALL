@@ -9,7 +9,7 @@
 <p align="center"><strong>Multi-agent Memory OS</strong> — 本地优先的 AI Agent 持久化记忆系统</p>
 
 <p align="center">
-  <i>6 MCP tools · 11-layer memory lifecycle · 24-step self-evolving pipeline · Knowledge graph · Multi-agent shared memory · <b>Hook-driven automation</b></i>
+  <i>7 MCP tools · 11-layer memory lifecycle · 30-step self-evolving pipeline · Knowledge graph · Multi-agent shared memory · <b>Hook-driven automation</b></i>
 </p>
 
 <p align="center">
@@ -76,7 +76,7 @@ Not just "store and retrieve". Every memory has a semantic level with exclusion-
 | **L10** | **System insight** | Cross-domain pattern detection |
 | **L11** | **Domain intelligence** | Cross-project domain patterns |
 
-**24 core steps + 5 optional** auto pipeline: enriches → classifies → detects epochs → reflects → distills → integrates → observes. No manual CRUD needed.
+**30 core steps + 5 optional** auto pipeline: enriches → classifies → detects epochs → reflects → distills → integrates → observes. No manual CRUD needed.
 
 ### 🔗 Knowledge Graph
 
@@ -176,7 +176,7 @@ pip install -e .
 |---------|--------|------|-------|-----|
 | **Memory model** | 11 layers (P0-L11) | user/session | agent/memory-block | session/summary |
 | **Knowledge graph** | ✅ Native + traversal | ❌ | ❌ | ❌ |
-| **Self-evolving pipeline** | ✅ 24-step auto + 5 optional | ❌ | ❌ | ❌ |
+| **Self-evolving pipeline** | ✅ 30-step auto + 5 optional | ❌ | ❌ | ❌ |
 | **Multi-agent shared** | ✅ Federation + active push | ❌ | Same agent only | ❌ |
 | **Decision tracking** | ✅ Arc lifecycle | ❌ | ❌ | ❌ |
 | **Discussion convergence** | ✅ Multi-agent auto | ❌ | ❌ | ❌ |
@@ -194,7 +194,7 @@ src/memall/
 ├── core/         # SQLite / NLP / vector search / event processor / echo scoring
 ├── api/          # FastAPI REST (35 routes)
 ├── mcp/          # MCP adapter (6 consolidated tools)
-├── pipeline/     # 24-step auto pipeline + 5 optional
+├── pipeline/     # 30-step auto pipeline + 5 optional
 │   ├── observe/  # OODA observation step
 │   ├── distill/  # L9/L10/L11 distillation, L7 preference, epoch detection
 │   ├── classify/ # Exclusion-based priority classification
