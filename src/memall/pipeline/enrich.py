@@ -5,21 +5,32 @@ from memall.core.db import get_conn
 from memall.pipeline.behavior import annotate_text
 
 _FROM_TO_TOPIC_RE = re.compile(
-    r'from[：:]\s*(?P<from>[^\s]+)\s+to[：:]\s*(?P<to>[^\s]+)'
-    r'(?:\s+topic[：:]\s*(?P<topic>[^\n]+?))?',
+    r"from[：:]\s*(?P<from>[^\s]+)\s+to[：:]\s*(?P<to>[^\s]+)"
+    r"(?:\s+topic[：:]\s*(?P<topic>[^\n]+?))?",
     re.I,
 )
-_MODULE_REF_RE = re.compile(r'\[MODULE[^\]]*\]\s*(?P<module_path>[^\s]+)', re.I)
+_MODULE_REF_RE = re.compile(r"\[MODULE[^\]]*\]\s*(?P<module_path>[^\s]+)", re.I)
 
 
 def _find_memory_refs(text: str) -> list:
-    refs = re.findall(r'(?:ID|#|id|Id)\s*(\d{3,5})', text)
-    refs += re.findall(r'(?:综合|参考|基于|来自|源自|关联)\s*(\d{3,5})', text)
+    refs = re.findall(r"(?:ID|#|id|Id)\s*(\d{3,5})", text)
+    refs += re.findall(r"(?:综合|参考|基于|来自|源自|关联)\s*(\d{3,5})", text)
     return [int(r) for r in set(refs) if 1 <= int(r) <= 1800]
 
 
 def _is_summary_like(text: str) -> bool:
-    keywords = ['总结', '摘要', '提炼', '融合', '汇总', '综合', '融合了', '提炼自', '基于以上', '综合以上']
+    keywords = [
+        "总结",
+        "摘要",
+        "提炼",
+        "融合",
+        "汇总",
+        "综合",
+        "融合了",
+        "提炼自",
+        "基于以上",
+        "综合以上",
+    ]
     return any(k in text for k in keywords)
 
 
@@ -32,12 +43,14 @@ def _parse_from_to_topic(text: str) -> list:
         to = (d.get("to") or "").strip()
         topic = (d.get("topic") or "").strip()
         if fr and to:
-            edges.append({
-                "source_agent": fr,
-                "target_agent": to,
-                "relation": "delegates",
-                "topic": topic,
-            })
+            edges.append(
+                {
+                    "source_agent": fr,
+                    "target_agent": to,
+                    "relation": "delegates",
+                    "topic": topic,
+                }
+            )
     return edges
 
 
@@ -55,24 +68,31 @@ def _ensure_edges_table(conn) -> None:
       relation_type TEXT NOT NULL DEFAULT 'related',
       weight REAL DEFAULT 1.0,
       created_by TEXT DEFAULT 'pipeline',
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      valid_from TEXT,
+      invalid_at TEXT
     )
     """)
+    # Bitemporal (P0-3): dedup only among currently-VALID edges, so the
+    # historical versions kept for temporal reasoning are never deleted.
     rows = conn.execute(
-      "SELECT source_id, target_id, relation_type, COUNT(*) as cnt "
-      "FROM edges GROUP BY source_id, target_id, relation_type HAVING cnt > 1"
+        "SELECT source_id, target_id, relation_type, COUNT(*) as cnt "
+        "FROM edges WHERE invalid_at IS NULL "
+        "GROUP BY source_id, target_id, relation_type HAVING cnt > 1"
     ).fetchall()
     if rows:
-      for r in rows:
-        conn.execute(
-          "DELETE FROM edges WHERE rowid NOT IN ("
-          "SELECT MIN(rowid) FROM edges "
-          "WHERE source_id=? AND target_id=? AND relation_type=?"
-          ")", (r["source_id"], r["target_id"], r["relation_type"])
-        )
+        for r in rows:
+            conn.execute(
+                "DELETE FROM edges WHERE invalid_at IS NULL AND rowid NOT IN ("
+                "SELECT MIN(rowid) FROM edges "
+                "WHERE source_id=? AND target_id=? AND relation_type=? AND invalid_at IS NULL"
+                ")",
+                (r["source_id"], r["target_id"], r["relation_type"]),
+            )
+    # Only currently-valid edges are unique; historical versions coexist.
     conn.execute(
-      "CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique "
-      "ON edges(source_id, target_id, relation_type)"
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique_active "
+        "ON edges(source_id, target_id, relation_type) WHERE invalid_at IS NULL"
     )
 
 
@@ -93,22 +113,24 @@ def enrich_step() -> int:
             text = row["content"]
 
             # Basic enrichment: entities / times / problems / decisions
-            entities = re.findall(r'[A-Z][a-zA-Z]*(?:\s[A-Z][a-zA-Z]*)*', text)
+            entities = re.findall(r"[A-Z][a-zA-Z]*(?:\s[A-Z][a-zA-Z]*)*", text)
             if entities:
                 meta["entities"] = list(set(entities))
 
             time_refs = re.findall(
-                r'(\d{4}-\d{2}-\d{2}|\d{1,2}月\s?\d{1,2}日|上周|这周|下个月|昨天|今天|明天)',
+                r"(\d{4}-\d{2}-\d{2}|\d{1,2}月\s?\d{1,2}日|上周|这周|下个月|昨天|今天|明天)",
                 text,
             )
             if time_refs:
                 meta["time_refs"] = time_refs
 
-            problems = re.findall(r'(问题|瓶颈|不足|太慢|太复杂|不够|没法)[^。]*', text)
+            problems = re.findall(r"(问题|瓶颈|不足|太慢|太复杂|不够|没法)[^。]*", text)
             if problems:
                 meta["problems"] = [p.strip() for p in problems]
 
-            decisions = re.findall(r'(决定|选择|采用|改用|替换|用\s+\w+\s+替代)[^。]*', text)
+            decisions = re.findall(
+                r"(决定|选择|采用|改用|替换|用\s+\w+\s+替代)[^。]*", text
+            )
             if decisions:
                 meta["decisions"] = [d.strip() for d in decisions]
 
@@ -131,7 +153,10 @@ def enrich_step() -> int:
                 existing = json.loads(row["metadata"] or "{}")
                 existing["enrich"] = {
                     "value": meta,
-                    "_meta": {"version": 1, "written_at": datetime.now(timezone.utc).isoformat()},
+                    "_meta": {
+                        "version": 1,
+                        "written_at": datetime.now(timezone.utc).isoformat(),
+                    },
                 }
                 conn.execute(
                     "UPDATE memories SET metadata = ? WHERE id = ?",
@@ -167,26 +192,26 @@ def enrich_step() -> int:
                 to = edge["target_agent"]
                 _topic = edge.get("topic", "")
                 target_row = conn.execute(
-                  "SELECT id FROM memories WHERE agent_name = ? ORDER BY id DESC LIMIT 1",
-                  (to,),
+                    "SELECT id FROM memories WHERE agent_name = ? ORDER BY id DESC LIMIT 1",
+                    (to,),
                 ).fetchone()
                 if target_row:
-                  rel = "delegates"
-                  dup = conn.execute(
-                    "SELECT 1 FROM edges WHERE source_id = ? AND target_id = ? "
-                    "AND relation_type = ?",
-                    (row["id"], target_row["id"], rel),
-                  ).fetchone()
-                  if not dup:
-                    conn.execute(
-                      "INSERT OR IGNORE INTO edges "
-                      "(source_id, target_id, relation_type, weight, created_at) "
-                      "VALUES (?,?,?,?,datetime('now'))",
-                      (row["id"], target_row["id"], rel, 1.0),
-                    )
-                  count += 1
+                    rel = "delegates"
+                    dup = conn.execute(
+                        "SELECT 1 FROM edges WHERE source_id = ? AND target_id = ? "
+                        "AND relation_type = ?",
+                        (row["id"], target_row["id"], rel),
+                    ).fetchone()
+                    if not dup:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO edges "
+                            "(source_id, target_id, relation_type, weight, created_at) "
+                            "VALUES (?,?,?,?,datetime('now'))",
+                            (row["id"], target_row["id"], rel, 1.0),
+                        )
+                    count += 1
 
-            conn.commit()
+        conn.commit()
         return count
     finally:
         conn.close()

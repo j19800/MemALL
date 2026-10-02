@@ -98,7 +98,8 @@ def import_from_mem0(jsonl_path: str, agent_name: str = "imported") -> dict:
                     continue
                 intelligent_capture(content, agent_name=agent_name)
                 imported += 1
-            except (json.JSONDecodeError, Exception):
+            except Exception:
+                logger.warning("auto_capture: mem0 line import failed", exc_info=True)
                 skipped += 1
 
     return {"imported": imported, "skipped": skipped, "source": "mem0"}
@@ -151,7 +152,8 @@ def import_from_jsonl(jsonl_path: str, agent_name: str = "imported") -> dict:
                     intelligent_capture(content, agent_name=agent)
 
                 imported += 1
-            except (json.JSONDecodeError, Exception) as e:
+            except Exception as e:
+                logger.warning("auto_capture: jsonl line import failed: %s", e, exc_info=True)
                 skipped += 1
 
     return {"imported": imported, "skipped": skipped, "source": "jsonl"}

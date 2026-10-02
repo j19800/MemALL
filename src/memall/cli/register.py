@@ -5,6 +5,7 @@ Registered agents are visible to `memall doctor` for connection status checks.
 """
 
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,11 @@ def register_agent(name: str, agent_type: str, url: str = "", command: str = "",
     Register a new agent in ~/.memall/agents/<name>.json
     """
     _ensure_agents_dir()
+
+    # Agent names are used as filenames — reject anything unsafe
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}$", name):
+        return {"status": "error",
+                "reason": "agent name must be 1-64 chars of [A-Za-z0-9_.-], no path separators"}
 
     valid_types = ["mcp", "http", "stdio"]
     if agent_type not in valid_types:

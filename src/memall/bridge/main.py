@@ -6,6 +6,7 @@ Without agent_name, starts bridges for all configured bots.
 """
 
 import logging
+import re
 import sys
 import time
 import threading
@@ -106,6 +107,8 @@ class AgentBridge:
             msg_id = msg.get("message_id", "")
         if not msg_id:
             return
+        # msg_id is external input and is used to build filenames — sanitize it
+        msg_id = re.sub(r"[^A-Za-z0-9_.\-]", "", msg_id or "")
 
         msg_type = msg.get("msg_type", "")
         if msg_type not in ("text", "post", ""):

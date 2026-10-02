@@ -147,6 +147,15 @@ def _complete(user_id: str):
     try:
         _ensure_table(conn)
         now = datetime.now(timezone.utc).isoformat()
+
+        # Idempotency: already completed → no-op (do not re-store welcome memory)
+        existing = conn.execute(
+            "SELECT completed FROM onboarding_status WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if existing and existing["completed"]:
+            return {"completed": True, "idempotent": True}
+
         conn.execute("""
             INSERT INTO onboarding_status (user_id, current_step, completed, started_at, completed_at)
             VALUES (?, 5, 1, ?, ?)

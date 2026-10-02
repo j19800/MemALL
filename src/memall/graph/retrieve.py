@@ -24,10 +24,20 @@ logger = logging.getLogger(__name__)
 # L4-L5: summaries/decisions → moderate
 # L6-L10: reflections/distillations → lower (let P0-P2 surface)
 _LEVEL_BOOST = {
-    "P0": 1.0, "P1": 1.0, "P2": 1.0,
-    "L1": 0.7, "L2": 0.7, "L3": 0.7,
-    "L4": 0.6, "L5": 0.6,
-    "L6": 0.4, "L7": 0.4, "L8": 0.4, "L9": 0.3, "L10": 0.3, "L11": 0.3,
+    "P0": 1.0,
+    "P1": 1.0,
+    "P2": 1.0,
+    "L1": 0.7,
+    "L2": 0.7,
+    "L3": 0.7,
+    "L4": 0.6,
+    "L5": 0.6,
+    "L6": 0.4,
+    "L7": 0.4,
+    "L8": 0.4,
+    "L9": 0.3,
+    "L10": 0.3,
+    "L11": 0.3,
 }
 _DEFAULT_BOOST = 0.4
 
@@ -44,15 +54,18 @@ def _apply_level_boost(conn, raw_results: list) -> list[dict]:
         row = conn.execute("SELECT level FROM memories WHERE id = ?", (mid,)).fetchone()
         boost = _LEVEL_BOOST.get(row["level"] if row else "", _DEFAULT_BOOST)
         score = round(boost, 4)
-        results.append({
-            "memory_id": mid,
-            "content": r[1][:200],
-            "category": r[2],
-            "score": score,
-            "source": "keyword",
-        })
+        results.append(
+            {
+                "memory_id": mid,
+                "content": r[1][:200],
+                "category": r[2],
+                "score": score,
+                "source": "keyword",
+            }
+        )
     results.sort(key=lambda x: -x["score"])
     return results
+
 
 _EMBED_MODEL = None
 
@@ -60,6 +73,7 @@ _EMBED_MODEL = None
 def _get_embed_model():
     """Lazy-load the embedding model — delegates to embeddings module singleton."""
     from memall.graph.embeddings import _get_model as _emb_get_model
+
     try:
         return _emb_get_model()
     except ImportError:
@@ -69,6 +83,7 @@ def _get_embed_model():
 def _query_embed(query: str) -> np.ndarray | None:
     """Encode query into the shared embedding space (bge or TF-IDF/SVD fallback)."""
     from memall.graph.embeddings import _embed_texts as _embed
+
     try:
         vec = _embed([query[:EMBED_DIM]], normalize=True)
         if vec is None:
@@ -89,11 +104,13 @@ def _vec0_knn(conn, query_vec: np.ndarray, top_k: int) -> list[dict]:
         results = []
         for r in rows:
             score = 1.0 / (1.0 + r["distance"])
-            results.append({
-                "memory_id": r["rowid"],
-                "distance": float(r["distance"]),
-                "score": round(score, 4),
-            })
+            results.append(
+                {
+                    "memory_id": r["rowid"],
+                    "distance": float(r["distance"]),
+                    "score": round(score, 4),
+                }
+            )
         return results
     except sqlite3.Error:
         return []
@@ -111,10 +128,15 @@ def _keyword_search(conn, query: str, top_k: int):
 def _get_one_hop(conn, mem_ids: list, limit: int = 5000):
     if not mem_ids:
         return set()
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
     placeholders = ",".join("?" * len(mem_ids))
     edges = conn.execute(
-        f"SELECT source_id, target_id FROM edges WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders}) LIMIT ?",
-        tuple(mem_ids * 2 + [limit]),
+        f"SELECT source_id, target_id FROM edges "
+        f"WHERE (source_id IN ({placeholders}) OR target_id IN ({placeholders})) "
+        f"AND (valid_from IS NULL OR valid_from <= ?) AND (invalid_at IS NULL OR invalid_at > ?) LIMIT ?",
+        tuple(mem_ids * 2 + [now, now, limit]),
     ).fetchall()
     neighbors = set()
     for e in edges:
@@ -123,12 +145,20 @@ def _get_one_hop(conn, mem_ids: list, limit: int = 5000):
     return neighbors
 
 
-def retrieve(query: str, mode: str = "hybrid", top_k: int = 10,
-             rerank: Optional[bool] = None) -> dict:
+def retrieve(
+    query: str, mode: str = "hybrid", top_k: int = 10, rerank: Optional[bool] = None
+) -> dict:
     with pool_conn() as conn:
         if mode == "keyword":
-            raw = _keyword_search(conn, query, top_k * 3)  # more candidates for level reordering
-            return {"query": query, "mode": "keyword", "results": _apply_level_boost(conn, raw)[:top_k], "total": len(raw)}
+            raw = _keyword_search(
+                conn, query, top_k * 3
+            )  # more candidates for level reordering
+            return {
+                "query": query,
+                "mode": "keyword",
+                "results": _apply_level_boost(conn, raw)[:top_k],
+                "total": len(raw),
+            }
 
         # Encode query using embedding model
         query_vec = _query_embed(query)
@@ -137,7 +167,9 @@ def retrieve(query: str, mode: str = "hybrid", top_k: int = 10,
             return retrieve(query, mode="keyword", top_k=top_k)
 
         # vec0 KNN
-        vec0_results = _vec0_knn(conn, query_vec, top_k * 3 if mode == "hybrid" else top_k)
+        vec0_results = _vec0_knn(
+            conn, query_vec, top_k * 3 if mode == "hybrid" else top_k
+        )
 
         if not vec0_results:
             # vec0 unavailable or empty
@@ -152,16 +184,23 @@ def retrieve(query: str, mode: str = "hybrid", top_k: int = 10,
             if row:
                 boost = _LEVEL_BOOST.get(row["level"] if row else "", _DEFAULT_BOOST)
                 score = vr["score"] * boost
-                candidates.append({
-                    "memory_id": vr["memory_id"],
-                    "content": row["content"][:200],
-                    "category": row["category"],
-                    "score": round(score, 4),
-                    "source": "vector",
-                })
+                candidates.append(
+                    {
+                        "memory_id": vr["memory_id"],
+                        "content": row["content"][:200],
+                        "category": row["category"],
+                        "score": round(score, 4),
+                        "source": "vector",
+                    }
+                )
 
         if mode == "vector":
-            return {"query": query, "mode": "vector", "results": candidates[:top_k], "total": len(candidates)}
+            return {
+                "query": query,
+                "mode": "vector",
+                "results": candidates[:top_k],
+                "total": len(candidates),
+            }
 
         # Hybrid: vector + graph expansion
         vector_ids = [c["memory_id"] for c in candidates]
@@ -169,21 +208,28 @@ def retrieve(query: str, mode: str = "hybrid", top_k: int = 10,
         seen_ids = set(vector_ids)
         for nid in neighbors:
             if nid not in seen_ids:
-                row = conn.execute("SELECT id, content FROM memories WHERE id = ?", (nid,)).fetchone()
+                row = conn.execute(
+                    "SELECT id, content FROM memories WHERE id = ?", (nid,)
+                ).fetchone()
                 if row:
+                    from datetime import datetime, timezone
+                    now = datetime.now(timezone.utc).isoformat()
                     edge_count = conn.execute(
-                        "SELECT COUNT(*) FROM edges WHERE (source_id = ? AND target_id IN ({})) OR (target_id = ? AND source_id IN ({}))".format(
+                        "SELECT COUNT(*) FROM edges WHERE ((source_id = ? AND target_id IN ({})) OR (target_id = ? AND source_id IN ({}))) "
+                        "AND (valid_from IS NULL OR valid_from <= ?) AND (invalid_at IS NULL OR invalid_at > ?)".format(
                             ",".join("?" * len(vector_ids)), ",".join("?" * len(vector_ids)),
                         ),
-                        tuple([nid] + vector_ids + [nid] + vector_ids),
+                        tuple([nid] + vector_ids + [nid] + vector_ids + [now, now]),
                     ).fetchone()[0]
                     score = 0.1 * min(1.0, edge_count / 3.0)
-                    candidates.append({
-                        "memory_id": nid,
-                        "content": row["content"][:200],
-                        "score": round(score, 4),
-                        "source": "graph_expansion",
-                    })
+                    candidates.append(
+                        {
+                            "memory_id": nid,
+                            "content": row["content"][:200],
+                            "score": round(score, 4),
+                            "source": "graph_expansion",
+                        }
+                    )
                     seen_ids.add(nid)
 
         # Rerank stage (P0-2): re-score candidates by a cross-encoder for
@@ -192,17 +238,21 @@ def retrieve(query: str, mode: str = "hybrid", top_k: int = 10,
         # original score ordering as fallback.
         if rerank is None:
             from memall.config import get_config
+
             rerank = get_config("search.rerank_enabled", True)
         reranked_ok = False
         if rerank and len(candidates) > 1:
             try:
                 from memall.core.thin_waist import _rerank as _tw_rerank
+
                 reranked = _tw_rerank(candidates, query, top_k)
                 if reranked is not None:
                     candidates = reranked
                     reranked_ok = True
             except Exception:
-                logger.warning("rerank failed in retrieve(); using score ordering", exc_info=True)
+                logger.warning(
+                    "rerank failed in retrieve(); using score ordering", exc_info=True
+                )
 
         if reranked_ok:
             # _rerank already returns the top_k sorted by rerank_score
@@ -210,7 +260,8 @@ def retrieve(query: str, mode: str = "hybrid", top_k: int = 10,
         else:
             sorted_candidates = sorted(candidates, key=lambda x: -x["score"])[:top_k]
         return {
-            "query": query, "mode": "hybrid",
+            "query": query,
+            "mode": "hybrid",
             "results": sorted_candidates,
             "total": len(candidates),
             "vector_hits": len(vector_ids),

@@ -48,7 +48,7 @@ async def _error_middleware(request: web.Request, handler) -> web.Response:
     except Exception as e:
         _log.error("Unhandled error in %s %s: %s", request.method, request.path, e, exc_info=True)
         return web.json_response(
-            {"jsonrpc": "2.0", "error": {"code": -32603, "message": f"internal error: {e}"}},
+            {"jsonrpc": "2.0", "error": {"code": -32603, "message": "internal error"}},
             status=500,
         )
 
@@ -86,10 +86,14 @@ if not _MCP_TOKEN:
 
 
 async def _check_auth(request: web.Request) -> bool:
-    """Return True if request is authorized (token not configured = always OK)."""
+    """Return True if request carries a valid Bearer token.
+
+    Deny-by-default: if no token is configured the endpoint refuses all
+    requests (operator must set MEMALL_MCP_TOKEN or MEMALL_AUTH_TOKEN).
+    """
     if not _MCP_TOKEN:
-        _log.warning("MCP HTTP auth disabled — set MEMALL_MCP_TOKEN or MEMALL_AUTH_TOKEN for production")
-        return True
+        _log.warning("MCP HTTP auth not configured — refusing requests; set MEMALL_MCP_TOKEN or MEMALL_AUTH_TOKEN")
+        return False
     auth = request.headers.get("Authorization", "")
     ok = hmac.compare_digest(auth, f"Bearer {_MCP_TOKEN}")
     if not ok:

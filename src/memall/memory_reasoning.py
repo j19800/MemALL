@@ -224,7 +224,7 @@ def query_causal_chain(entity_name: str, depth: int = 3) -> dict:
                 f"LEFT JOIN memories m ON t.source_memory_id = m.id "
                 f"WHERE t.predicate IN ('causes','caused_by','prevents','enables','sequence','leads_to') "
                 f"AND (t.subject_id IN ({ph}) OR t.object_id IN ({ph}))",
-                *([id_list, id_list]),
+                tuple(id_list + id_list),
             ).fetchall()
 
             new_ids = set()
@@ -483,18 +483,21 @@ def discover_patterns(agent_name: str = "", min_occurrences: int = 3) -> dict:
 
         # 3. 高频教训模式 (L6/L7 关键词)
         lesson_words = Counter()
+        lesson_params = []
         level_filter = "WHERE level IN ('L6','L7')"
         if agent_name:
-            level_filter += f" AND LOWER(agent_name) = LOWER('{agent_name}')"
+            level_filter += " AND LOWER(agent_name) = LOWER(?)"
+            lesson_params.append(agent_name)
         try:
             lessons = conn.execute(
-                f"SELECT content FROM memories {level_filter} LIMIT 200"
+                f"SELECT content FROM memories {level_filter} LIMIT 200",
+                lesson_params,
             ).fetchall()
             for r in lessons:
                 for word in re.findall(r'[一-鿿]{2,6}', r["content"] or ""):
                     lesson_words[word] += 1
         except Exception:
-            pass
+            logger.warning("discover_patterns: lesson scan failed", exc_info=True)
 
         top_lesson_words = [{"word": w, "count": c} for w, c in lesson_words.most_common(10) if c >= min_occurrences]
 

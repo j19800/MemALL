@@ -5,7 +5,7 @@ Detects epoch boundaries for each agent using four rules:
 1. GAP: >48h between consecutive memories
 2. CATEGORY_SHIFT: sliding window category change
 3. L6_VIEWPOINT: reflection with viewpoint-change keywords
-4. MANUAL: explicit level='epoch' memories
+4. MANUAL: explicit memory_status='epoch' memories
 
 Auto-labels each epoch from its dominant category and top subjects.
 """
@@ -166,13 +166,13 @@ def _build_lookup(memories: list[dict]) -> dict[int, int]:
 
 
 def _process_manual_epochs(conn) -> int:
-    """Find memories with level='epoch' that haven't been processed.
+    """Find memories with memory_status='epoch' that haven't been processed.
 
     Returns count of new manual epoch declarations found.
     """
     rows = conn.execute(
         "SELECT id, content, agent_name, occurred_at, subject, metadata "
-        "FROM memories WHERE level = 'epoch'"
+        "FROM memories WHERE memory_status = 'epoch'"
     ).fetchall()
     count = 0
     now = datetime.now(timezone.utc).isoformat()
@@ -210,6 +210,12 @@ def _process_manual_epochs(conn) -> int:
             json.dumps({"memory_id": r["id"]}, ensure_ascii=False),
             now,
         ))
+        # Mark the source memory as processed to avoid re-upserts on every run
+        meta["epoch_processed"] = True
+        conn.execute(
+            "UPDATE memories SET metadata = ? WHERE id = ?",
+            (json.dumps(meta, ensure_ascii=False), r["id"]),
+        )
         count += 1
 
     return count
@@ -333,7 +339,7 @@ def epoch_step() -> dict:
                 total_epochs_created += 1
                 prev_epoch_start = epoch_start
 
-        # Process manual (level='epoch') memories
+        # Process manual (memory_status='epoch') memories
         manual_count = _process_manual_epochs(conn)
 
         # Save pipeline_state

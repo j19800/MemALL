@@ -50,6 +50,15 @@ def _vacuum_backup(source: Path, dest: Path) -> bool:
         return False
 
 
+def _ensure_relative_within(base: Path, p: Path) -> bool:
+    """True if *p* resolves to a path inside *base* (blocks ../ traversal)."""
+    try:
+        p.resolve().relative_to(base.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def backup_db(output_path: str = None) -> dict:
     """
     Manually backup the database to daily/YYYY-MM-DD.db.
@@ -69,6 +78,8 @@ def backup_db(output_path: str = None) -> dict:
         dest = Path(output_path)
         if not dest.is_absolute():
             dest = DAILY_DIR / output_path
+            if not _ensure_relative_within(DAILY_DIR, dest):
+                return {"status": "error", "reason": "output_path escapes backup directory"}
     else:
         today = datetime.now().strftime("%Y-%m-%d")
         dest = DAILY_DIR / f"{today}.db"
@@ -127,6 +138,12 @@ def restore_db(backup_path: str, auto: bool = False) -> dict:
 
     if not source.exists():
         return {"status": "error", "reason": f"Backup file not found: {source}"}
+
+    # Block path traversal outside the backup directory for relative inputs
+    if not auto and not source.is_absolute():
+        if not _ensure_relative_within(BACKUP_DIR, source):
+            return {"status": "error",
+                    "reason": "backup path escapes the backup directory"}
 
     # Verify it's a valid SQLite database
     try:

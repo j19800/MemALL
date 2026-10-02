@@ -68,14 +68,18 @@ class KnowledgeDistiller:
 
             for row in lessons:
                 agents_seen.add(row["agent_name"])
-                h = content_hash(f"[L10] {row['content']}")
+                lesson_content = (
+                    f"[L10 全局知识] {row['content']}\n"
+                    f"(来自 {row['cnt']} 个 Agent 的 {row['cnt']} 次教训)"
+                )
+                # Dedup against the EXACT content that will be stored
+                h = content_hash(lesson_content)
                 if h in existing:
                     continue
 
                 try:
                     capture(
-                        f"[L10 全局知识] {row['content']}\n"
-                        f"(来自 {row['cnt']} 个 Agent 的 {row['cnt']} 次教训)",
+                        lesson_content,
                         agent_name="system",
                         level="L10",
                         category="reflection",
@@ -88,14 +92,17 @@ class KnowledgeDistiller:
 
             for row in decisions:
                 agents_seen.add(row["agent_name"])
-                h = content_hash(f"[L11] {row['content']}")
+                decision_content = (
+                    f"[L11 全局知识] {row['content']}\n"
+                    f"(来自 {row['cnt']} 个 Agent 的决策共识)"
+                )
+                h = content_hash(decision_content)
                 if h in existing:
                     continue
 
                 try:
                     capture(
-                        f"[L11 全局知识] {row['content']}\n"
-                        f"(来自 {row['cnt']} 个 Agent 的决策共识)",
+                        decision_content,
                         agent_name="system",
                         level="L11",
                         category="knowledge",

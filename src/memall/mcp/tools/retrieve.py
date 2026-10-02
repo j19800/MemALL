@@ -116,11 +116,14 @@ def handle_trace(arguments: dict) -> str:
         except Exception:
             logger.warning("retrieve.py: silent error", exc_info=True)
 
+        from datetime import datetime, timezone
+        _now = datetime.now(timezone.utc).isoformat()
         rels = conn.execute(
             "SELECT m.id, m.subject, m.level, e.relation_type "
             "FROM edges e JOIN memories m ON m.id = CASE WHEN e.source_id = ? THEN e.target_id ELSE e.source_id END "
-            "WHERE e.source_id = ? OR e.target_id = ? LIMIT 10",
-            (mem_id, mem_id, mem_id),
+            "WHERE (e.source_id = ? OR e.target_id = ?) "
+            "AND (e.valid_from IS NULL OR e.valid_from <= ?) AND (e.invalid_at IS NULL OR e.invalid_at > ?) LIMIT 10",
+            (mem_id, mem_id, mem_id, _now, _now),
         ).fetchall()
 
         ctx = conn.execute(

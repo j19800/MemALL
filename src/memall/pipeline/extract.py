@@ -145,7 +145,7 @@ def extract_step() -> dict:
                         if len(sentences) >= _MAX_KEY_SENTENCES:
                             break
 
-                key_sentences = "｜".join(sentences[: _MAX_KEY_SENTENCES])
+                key_sentences = "｜".join(sentences[:_MAX_KEY_SENTENCES])
 
                 # Check if L6 already exists for this session+category
                 existing = conn.execute(
@@ -172,7 +172,11 @@ def extract_step() -> dict:
                 project = ""
                 if meta_row:
                     try:
-                        meta = json.loads(meta_row["project"] or "{}") if meta_row["project"] else {}
+                        meta = (
+                            json.loads(meta_row["project"] or "{}")
+                            if meta_row["project"]
+                            else {}
+                        )
                         if isinstance(meta, dict):
                             project = meta.get("project", "") or ""
                     except (json.JSONDecodeError, TypeError):
@@ -197,12 +201,14 @@ def extract_step() -> dict:
                         now,
                         0.6,
                         "private",
-                        json.dumps({
-                            "session_id": session_id,
-                            "extract_category": cat,
-                            "source_memory_count": len(cat_rows),
-                            "source": "pipeline_extract",
-                        }),
+                        json.dumps(
+                            {
+                                "session_id": session_id,
+                                "extract_category": cat,
+                                "source_memory_count": len(cat_rows),
+                                "source": "pipeline_extract",
+                            }
+                        ),
                         thread_id,
                     ),
                 )
@@ -226,13 +232,18 @@ def extract_step() -> dict:
                     if not edge_exists:
                         try:
                             conn.execute(
-                                "INSERT INTO edges (source_id, target_id, relation_type, weight, created_at) "
-                                "VALUES (?, ?, 'derived_from', 1.0, ?)",
-                                (l6_id, src_id, now),
+                                "INSERT INTO edges (source_id, target_id, relation_type, weight, created_at, valid_from) "
+                                "VALUES (?, ?, 'derived_from', 1.0, ?, ?)",
+                                (l6_id, src_id, now, now),
                             )
                             edge_count += 1
                         except Exception:
-                            logger.warning("extract: edge insert failed for L6=%s src=%s", l6_id, src_id, exc_info=True)
+                            logger.warning(
+                                "extract: edge insert failed for L6=%s src=%s",
+                                l6_id,
+                                src_id,
+                                exc_info=True,
+                            )
 
                 l6_created += 1
                 edges_created += edge_count
@@ -250,7 +261,10 @@ def extract_step() -> dict:
 
         logger.info(
             "extract_step: scanned=%d processed=%d l6=%d edges=%d",
-            scanned, sessions_processed, l6_created, edges_created,
+            scanned,
+            sessions_processed,
+            l6_created,
+            edges_created,
         )
         return {
             "scanned": scanned,

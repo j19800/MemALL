@@ -117,7 +117,7 @@ def narrative_step() -> dict:
                     span_end = now
 
                 existing = conn.execute(
-                    "SELECT id FROM narratives WHERE agent_name = ? AND narrative_type = ? AND span_start >= ?",
+                    "SELECT id FROM narratives WHERE agent_name = ? AND narrative_type = ? AND span_start = ?",
                     (agent, ntype, span_start.isoformat()),
                 ).fetchone()
                 if existing:
@@ -133,6 +133,7 @@ def narrative_step() -> dict:
                         "UPDATE narratives SET narrative_text=?, events=?, summary=?, memory_count=?, generated_at=? WHERE id=?",
                         (ntext, json.dumps(events, ensure_ascii=False), summary, len(events), now.isoformat(), existing["id"]),
                     )
+                    conn.commit()
                     key = f"{agent}/{ntype}"
                     results[key] = {"events": len(events), "summary": summary, "updated": True}
                     continue

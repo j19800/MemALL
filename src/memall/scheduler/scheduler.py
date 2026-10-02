@@ -14,6 +14,8 @@ from memall.config import get_config
 
 logger = logging.getLogger("memall.scheduler")
 PID_FILE = Path.home() / ".memall" / "scheduler.pid"
+# Separate PID file for the watchdog so daemon_stop can kill it independently.
+WATCHDOG_PID_FILE = Path.home() / ".memall" / "scheduler_watchdog.pid"
 HEARTBEAT_LOG = Path.home() / ".memall" / "heartbeat.log"
 
 INTERVAL_HEARTBEAT = get_config("scheduler.heartbeat_interval", 300)
@@ -60,21 +62,33 @@ class Scheduler:
     def _tick(self):
         now = time.time()
 
-        self._heartbeat()
+        try:
+            self._heartbeat()
+        except Exception as e:
+            logger.warning(f"heartbeat error: {e}")
 
         if now - self._last_pipeline >= INTERVAL_PIPELINE:
-            result = run_pipeline()
-            logger.info(f"pipeline run: {result}")
-            self._last_pipeline = now
+            try:
+                result = run_pipeline()
+                logger.info(f"pipeline run: {result}")
+                self._last_pipeline = now
+            except Exception as e:
+                logger.warning(f"pipeline run error: {e}")
 
         if now - self._last_doctor >= INTERVAL_DOCTOR:
-            self._doctor_check()
-            self._last_doctor = now
+            try:
+                self._doctor_check()
+                self._last_doctor = now
+            except Exception as e:
+                logger.warning(f"doctor check error: {e}")
 
         if now - self._last_forget >= INTERVAL_FORGET:
-            result = forget_step()
-            logger.info(f"daily forget: {result}")
-            self._last_forget = now
+            try:
+                result = forget_step()
+                logger.info(f"daily forget: {result}")
+                self._last_forget = now
+            except Exception as e:
+                logger.warning(f"daily forget error: {e}")
 
         if now - self._last_security >= INTERVAL_SECURITY:
             try:
@@ -176,10 +190,12 @@ def run_daemon():
 
 def run_daemon_with_watchdog():
     """Run scheduler daemon with auto-restart if it crashes.
-    
+
     This function is intended to be run as a subprocess by daemon_start().
-    It writes its PID to the scheduler PID file, spawns the scheduler
+    It writes its PID to the watchdog PID file, spawns the scheduler
     as a child subprocess, and restarts it if it exits unexpectedly.
+    The watchdog exits when its own PID file is removed (daemon_stop),
+    or after MAX_RESTARTS consecutive quick exits (crash loop).
     """
     import subprocess
     import time
@@ -189,12 +205,21 @@ def run_daemon_with_watchdog():
     stderr_path = PID_FILE.parent / "scheduler_err.log"
     
     PID_FILE.parent.mkdir(parents=True, exist_ok=True)
-    PID_FILE.write_text(str(os.getpid()))
+    WATCHDOG_PID_FILE.write_text(str(os.getpid()))
     
     scheduler_script = "from memall.scheduler.scheduler import run_daemon; run_daemon()"
     restart_count = 0
+    MAX_RESTARTS = 5
     
     while True:
+        if not WATCHDOG_PID_FILE.exists():
+            break  # daemon_stop removed the sentinel file
+        if restart_count >= MAX_RESTARTS:
+            with open(str(log_path), "a") as f:
+                f.write("[{}] watchdog giving up after {} restarts\n".format(
+                    datetime.now(timezone.utc).isoformat(), restart_count))
+            WATCHDOG_PID_FILE.unlink(missing_ok=True)
+            break
         stderr_handle = open(str(stderr_path), "a", encoding="utf-8")
         try:
             proc = subprocess.Popen(
@@ -241,21 +266,30 @@ def _validate_our_pid(pid: int) -> bool:
 
 def daemon_start():
     import subprocess
-    if PID_FILE.exists():
-        raw = PID_FILE.read_text().strip()
+
+    def _stale_or_running(pf):
+        """Return True if *pf* points to a live scheduler process."""
+        if not pf.exists():
+            return False
+        raw = pf.read_text().strip()
         try:
             pid = int(raw)
             if pid <= 0:
                 raise ValueError
-            if not _validate_our_pid(pid):
-                logger.warning(f"stale PID file {PID_FILE}; removing")
-                PID_FILE.unlink(missing_ok=True)
-            else:
-                print(f"scheduler already running (pid={pid})")
-                return False
         except (ValueError, TypeError):
-            logger.warning(f"invalid PID in {PID_FILE}; removing")
-            PID_FILE.unlink(missing_ok=True)
+            logger.warning(f"invalid PID in {pf.name}; removing")
+            pf.unlink(missing_ok=True)
+            return False
+        if not _validate_our_pid(pid):
+            logger.warning(f"stale PID file {pf.name}; removing")
+            pf.unlink(missing_ok=True)
+            return False
+        return True
+
+    for pf in (WATCHDOG_PID_FILE, PID_FILE):
+        if _stale_or_running(pf):
+            print(f"scheduler already running (pid from {pf.name})")
+            return False
     script = "from memall.scheduler.scheduler import run_daemon; run_daemon()"
     err_log = str(PID_FILE.parent / "scheduler_err.log")
     stderr_handle = open(err_log, "a", encoding="utf-8")
@@ -271,25 +305,40 @@ def daemon_start():
 
 def daemon_stop():
     import subprocess
-    if not PID_FILE.exists():
+
+    def _kill_pid_file(pf):
+        """Kill the process tree whose PID is in *pf*, then remove the file."""
+        if not pf.exists():
+            return False
+        raw = pf.read_text().strip()
+        try:
+            pid = int(raw)
+            if pid <= 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            pf.unlink(missing_ok=True)
+            return False
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], check=True, capture_output=True)
+            print(f"killed pid {pid} from {pf.name}")
+        except subprocess.CalledProcessError:
+            print(f"pid {pid} not found, cleaning up")
+        pf.unlink(missing_ok=True)
+        return True
+
+    stopped = False
+    if WATCHDOG_PID_FILE.exists():
+        stopped = _kill_pid_file(WATCHDOG_PID_FILE) or stopped
+        # Give the watchdog a chance to notice its sentinel was removed
+        import time as _t
+        _t.sleep(1)
+    if PID_FILE.exists():
+        stopped = _kill_pid_file(PID_FILE) or stopped
+    if not stopped:
         print("scheduler not running")
-        return False
-    raw = PID_FILE.read_text().strip()
-    try:
-        pid = int(raw)
-        if pid <= 0:
-            raise ValueError
-    except (ValueError, TypeError):
-        print(f"invalid PID in {PID_FILE}")
-        PID_FILE.unlink(missing_ok=True)
-        return False
-    try:
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], check=True, capture_output=True)
-        print(f"scheduler stopped (pid={pid})")
-    except subprocess.CalledProcessError:
-        print(f"scheduler pid={pid} not found, cleaning up")
-    PID_FILE.unlink(missing_ok=True)
-    return True
+    else:
+        print("scheduler stopped")
+    return stopped
 
 
 if __name__ == "__main__":

@@ -214,7 +214,6 @@ def _cluster_method_embedding(conn):
     conn.execute("DELETE FROM clusters")
     conn.execute("DELETE FROM memory_clusters")
     conn.execute("DELETE FROM narrative_clusters")
-    conn.commit()
 
     cluster_map = {}
     for cidx in range(k):
@@ -291,7 +290,6 @@ def _cluster_method_tfidf(conn):
     conn.execute("DELETE FROM clusters")
     conn.execute("DELETE FROM memory_clusters")
     conn.execute("DELETE FROM narrative_clusters")
-    conn.commit()
 
     cluster_map = {}
     for cidx in range(k):

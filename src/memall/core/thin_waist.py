@@ -4,44 +4,105 @@ import re
 import threading
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 from .db import get_pool, content_hash
 from .models import Memory, MemoryInput
 from .nlp import cosine_sim, compute_tfidf
-from memall.core.lifecycle import (dispatch_lifecycle, HOOK_PRE_CAPTURE,
-                              HOOK_POST_CAPTURE, HOOK_PRE_STORE,
-                              HOOK_POST_STORE, HOOK_PRE_RETRIEVE,
-                              HOOK_POST_RETRIEVE, HOOK_PRE_SEARCH,
-                              HOOK_POST_SEARCH)
+from .project_infer import infer_project
+from memall.config import get_config
+from memall.core.lifecycle import (
+    dispatch_lifecycle,
+    HOOK_PRE_CAPTURE,
+    HOOK_POST_CAPTURE,
+    HOOK_PRE_STORE,
+    HOOK_POST_STORE,
+    HOOK_PRE_RETRIEVE,
+    HOOK_POST_RETRIEVE,
+    HOOK_PRE_SEARCH,
+    HOOK_POST_SEARCH,
+)
 
 logger = logging.getLogger(__name__)
 
 
 # Valid agent_name pattern: simple identifiers (alphanumeric, underscore, hyphen, dot, @, CJK)
-_VALID_AGENT_RE = re.compile(r'^[a-z0-9_@.\u4e00-\u9fff-]+$')
-_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u2e80-\u2eff\u2f00-\u2fdf]+")
-_CJK_STOP: set[str] = {"的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一", "个", "上", "也", "很", "到", "说", "要", "去", "你", "会", "着", "没有", "看", "好", "自己", "这", "那", "哪", "什么", "怎么", "如何", "为什么"}
+_VALID_AGENT_RE = re.compile(r"^[a-z0-9_@.\u4e00-\u9fff-]+$")
+_CJK_RE = re.compile(
+    r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u2e80-\u2eff\u2f00-\u2fdf]+"
+)
+_CJK_STOP: set[str] = {
+    "的",
+    "了",
+    "在",
+    "是",
+    "我",
+    "有",
+    "和",
+    "就",
+    "不",
+    "人",
+    "都",
+    "一",
+    "个",
+    "上",
+    "也",
+    "很",
+    "到",
+    "说",
+    "要",
+    "去",
+    "你",
+    "会",
+    "着",
+    "没有",
+    "看",
+    "好",
+    "自己",
+    "这",
+    "那",
+    "哪",
+    "什么",
+    "怎么",
+    "如何",
+    "为什么",
+}
 
 _HAS_JIEBA = False
 try:
     import jieba
+
     _HAS_JIEBA = True
 except ImportError:
     pass
-_AGENT_TAG_RE = re.compile(r'(\d{4}-\d{2}-\d{2}|\d{10,})')
-_AGENT_BLACKLIST = frozenset({
-    "architecture", "brainstorm", "unknown", "session_active",
-    "general",
-})
+_AGENT_TAG_RE = re.compile(r"(\d{4}-\d{2}-\d{2}|\d{10,})")
+_AGENT_BLACKLIST = frozenset(
+    {
+        "architecture",
+        "brainstorm",
+        "unknown",
+        "session_active",
+        "general",
+    }
+)
 
 
 # Security: whitelist of column names permitted in UPDATE SET clause
-_ALLOWED_UPDATE_FIELDS = frozenset({
-    "level", "category", "project", "summary", "subject",
-    "confidence", "visibility", "content", "agent_name", "owner",
-    "metadata",
-})
+_ALLOWED_UPDATE_FIELDS = frozenset(
+    {
+        "level",
+        "category",
+        "project",
+        "summary",
+        "subject",
+        "confidence",
+        "visibility",
+        "content",
+        "agent_name",
+        "owner",
+        "metadata",
+    }
+)
 
 # Valid L5 status values for lifecycle management
 _VALID_L5_STATUSES = frozenset({"active", "done", "archived"})
@@ -49,12 +110,28 @@ _VALID_L5_STATUSES = frozenset({"active", "done", "archived"})
 
 @contextmanager
 def _pool_conn():
-    """Context manager wrapping ConnectionPool.get() / .put()."""
+    """Context manager wrapping ConnectionPool.get() / .put().
+
+    Commits on success, rolls back on exception — mirrors db.pool_conn.
+    """
+    import sys as _sys
+
     pool = get_pool()
     conn = pool.get()
     try:
         yield conn
+    except Exception:
+        try:
+            conn.rollback()
+        except sqlite3.Error as e:
+            logger.warning("Rollback failed during exception path: %s", e)
+        raise
     finally:
+        if not _sys.exc_info()[0]:
+            try:
+                conn.commit()
+            except sqlite3.Error as e:
+                logger.warning("Commit failed on context exit: %s", e)
         pool.put(conn)
 
 
@@ -83,24 +160,48 @@ _SUBJECT_PREFIX = {
 
 # Level-based subject prefixes (Phase 1: level naming unification)
 _LEVEL_SUBJECT_PREFIX = {
-    "L1": "[L1 身份]", "L2": "[L2 时间]", "L3": "[L3 流程]",
-    "L4": "[L4 会话]", "L5": "[L5 计划]",
+    "L1": "[L1 身份]",
+    "L2": "[L2 时间]",
+    "L3": "[L3 流程]",
+    "L4": "[L4 会话]",
+    "L5": "[L5 计划]",
     "L6": "[L6 反思]",
-    "L6-聚合": "[L6 聚合]", "L6-周反思": "[L6 周反思]", "L6-月反思": "[L6 月反思]",
+    "L6-聚合": "[L6 聚合]",
+    "L6-周反思": "[L6 周反思]",
+    "L6-月反思": "[L6 月反思]",
     "L7": "[L7 教训]",
     "L8": "[L8 关系]",
-    "L9": "[L9 蒸馏]", "L9-聚合": "[L9 聚合]",
-    "L10": "[L10 整合]", "L11": "[L11 商业]",
-    "P0": "[P0 原始]", "P1": "[P1 原始]", "P2": "[P2 原始]",
-    "P3": "[P3 原始]", "P4": "[P4 原始]",
+    "L9": "[L9 蒸馏]",
+    "L9-聚合": "[L9 聚合]",
+    "L10": "[L10 整合]",
+    "L11": "[L11 商业]",
+    "P0": "[P0 原始]",
+    "P1": "[P1 原始]",
+    "P2": "[P2 原始]",
+    "P3": "[P3 原始]",
+    "P4": "[P4 原始]",
 }
 
 # Conversation filler starts to strip when generating subject
 _FILLER_STARTS = [
-    "好的，", "好的 ", "明白了，", "明白了 ", "我知道了，", "我知道了 ",
-    "我觉得", "我认为", "我想", "关于",
-    "嗯，", "嗯 ", "呃，", "呃 ", "那个", "这个",
-    "然后", "所以",
+    "好的，",
+    "好的 ",
+    "明白了，",
+    "明白了 ",
+    "我知道了，",
+    "我知道了 ",
+    "我觉得",
+    "我认为",
+    "我想",
+    "关于",
+    "嗯，",
+    "嗯 ",
+    "呃，",
+    "呃 ",
+    "那个",
+    "这个",
+    "然后",
+    "所以",
 ]
 
 
@@ -109,9 +210,11 @@ def normalize_agent_name(name: str) -> str:
     if not name:
         return "system"
     name = name.strip().lower()
-    if (not _VALID_AGENT_RE.match(name)
-            or name in _AGENT_BLACKLIST
-            or _AGENT_TAG_RE.search(name)):
+    if (
+        not _VALID_AGENT_RE.match(name)
+        or name in _AGENT_BLACKLIST
+        or _AGENT_TAG_RE.search(name)
+    ):
         return "system"
     # Reject single-character names (template leaks, parse artifacts, stray symbols)
     if len(name) < 2:
@@ -131,7 +234,9 @@ def normalize_agent_name(name: str) -> str:
     return name
 
 
-def _make_subject(content: str, category: str, level: str, agent_name: str, owner: str) -> str:
+def _make_subject(
+    content: str, category: str, level: str, agent_name: str, owner: str
+) -> str:
     """Auto-generate a human-readable subject line.
 
     Format: [LevelPrefix] Who: core_phrase  (≤60 chars)
@@ -145,7 +250,7 @@ def _make_subject(content: str, category: str, level: str, agent_name: str, owne
     core = content.strip()
     for filler in _FILLER_STARTS:
         if core.startswith(filler):
-            core = core[len(filler):].strip()
+            core = core[len(filler) :].strip()
             break
 
     # Try sentence boundary first (Chinese then English)
@@ -174,28 +279,59 @@ def _make_subject(content: str, category: str, level: str, agent_name: str, owne
 
 def _row_to_memory(row) -> Memory:
     return Memory(
-        id=row["id"], content=row["content"], content_hash=row["content_hash"],
-        level=row["level"], owner=row["owner"], agent_name=row["agent_name"],
-        subject=row["subject"], project=row["project"], category=row["category"],
-        summary=row["summary"], occurred_at=row["occurred_at"],
-        created_at=row["created_at"], updated_at=row["updated_at"],
-        supersedes=row["supersedes"], confidence=row["confidence"],
+        id=row["id"],
+        content=row["content"],
+        content_hash=row["content_hash"],
+        level=row["level"],
+        owner=row["owner"],
+        agent_name=row["agent_name"],
+        subject=row["subject"],
+        project=row["project"],
+        category=row["category"],
+        summary=row["summary"],
+        occurred_at=row["occurred_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        supersedes=row["supersedes"],
+        confidence=row["confidence"],
         visibility=row["visibility"],
-        access_count=row["access_count"], metadata=row["metadata"],
-        thread_id=row["thread_id"], agent_name_locked=bool(row["agent_name_locked"]),
+        access_count=row["access_count"],
+        metadata=row["metadata"],
+        thread_id=row["thread_id"],
+        agent_name_locked=bool(row["agent_name_locked"]),
+        tags=row["tags"] if "tags" in row.keys() else "[]",
     )
 
 
 # Pre-compiled regex for specificity scoring in _score_quality
-_SPECIFICITY_RE = re.compile(r'\d{4}|v\d+\.\d+|[A-Z]{2,}\d*|#\d+')
+_SPECIFICITY_RE = re.compile(r"\d{4}|v\d+\.\d+|[A-Z]{2,}\d*|#\d+")
 # Reasoning markers (pre-compiled)
 _REASONING_COMPILED: list[re.Pattern] = []
 _REASONING_MARKERS = [
-    "因为", "所以", "根因", "原因是", "取决于", "比较", "权衡",
-    "方案", "选", "采用", "决定", "结论",
-    "数据", "从.*看", "分析", "调研", "实测",
-    "问题", "瓶颈", "不足", "改进",
-    "用户说", "你的意思是", "确认",
+    "因为",
+    "所以",
+    "根因",
+    "原因是",
+    "取决于",
+    "比较",
+    "权衡",
+    "方案",
+    "选",
+    "采用",
+    "决定",
+    "结论",
+    "数据",
+    "从.*看",
+    "分析",
+    "调研",
+    "实测",
+    "问题",
+    "瓶颈",
+    "不足",
+    "改进",
+    "用户说",
+    "你的意思是",
+    "确认",
 ]
 _REASONING_COMPILED = [re.compile(p) for p in _REASONING_MARKERS]
 
@@ -204,7 +340,7 @@ _QUALITY_DIMS = [
     "clarity",
     "relevance",
     "specificity",
-    "reasoning",       # replaces persistence — measures "有理有据"
+    "reasoning",  # replaces persistence — measures "有理有据"
     "source_traceability",
     "context_stability",
     "sensitivity",
@@ -218,7 +354,9 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
 
     scores["completeness"] = min(10, max(0, (text_len - 10) // 20))
     filler = ["嗯", "那个", "然后", "所以", "呃", "啊", "好的，", "明白了，"]
-    scores["clarity"] = 10 if text_len > 40 else max(0, 10 - sum(text.count(f) for f in filler) * 2)
+    scores["clarity"] = (
+        10 if text_len > 40 else max(0, 10 - sum(text.count(f) for f in filler) * 2)
+    )
     scores["relevance"] = 7
     scores["specificity"] = max(1, min(10, len(_SPECIFICITY_RE.findall(text)) * 2))
 
@@ -228,7 +366,13 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
 
     scores["source_traceability"] = 8 if data.agent_name and data.owner else 4
     scores["context_stability"] = 8 if "临时" not in text and "暂时" not in text else 3
-    scores["sensitivity"] = 10 if not re.search(r'(password|token|secret|apikey|api_key|sk-)\s*[:=]', text, re.I) else 2
+    scores["sensitivity"] = (
+        10
+        if not re.search(
+            r"(password|token|secret|apikey|api_key|sk-)\s*[:=]", text, re.I
+        )
+        else 2
+    )
 
     for k in _QUALITY_DIMS:
         scores[k] = max(0, min(10, scores[k]))
@@ -238,10 +382,18 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
 
     # Level-specific thresholds
     threshold_map = {
-        "P0": 4, "P1": 5, "P2": 4, "P3": 4, "P4": 3,
-        "L4": 5, "L5": 5,           # decisions + tasks need reasoning
-        "L6": 5,                     # reflections need substance
-        "L7": 4, "L9": 4, "L10": 4, "L11": 4,
+        "P0": 4,
+        "P1": 5,
+        "P2": 4,
+        "P3": 4,
+        "P4": 3,
+        "L4": 5,
+        "L5": 5,  # decisions + tasks need reasoning
+        "L6": 5,  # reflections need substance
+        "L7": 4,
+        "L9": 4,
+        "L10": 4,
+        "L11": 4,
     }
     required = threshold_map.get(data.level or "P2", 5)
 
@@ -257,13 +409,105 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
         gate = "rejected"
     else:
         passed = avg >= required
-        gate = "accepted" if passed else ("review" if avg >= required - 1 else "rejected")
+        gate = (
+            "accepted" if passed else ("review" if avg >= required - 1 else "rejected")
+        )
 
-    result = {"dimensions": scores, "avg": round(avg, 2), "min": min_dim, "gate": gate, "level": data.level}
+    result = {
+        "dimensions": scores,
+        "avg": round(avg, 2),
+        "min": min_dim,
+        "gate": gate,
+        "level": data.level,
+    }
     return result
 
 
-def _capture_normalize_and_validate(data: MemoryInput | dict | str, **overrides) -> MemoryInput:
+def _category_validity(cat: str, min_len: int) -> tuple[bool, str]:
+    """Structural check on a category value.
+
+    Guards against the class of pollution that once filled the DB with values
+    like ``决``/``策``/``[``/`` `` — produced when a distill step sliced a
+    two-char domain name into single characters.  Legitimate short tags
+    (``AI``, ``QA``, ``决策``) must still pass, so the bar is structural only:
+    at least ``min_len`` chars, no whitespace, printable, and containing at
+    least one alphanumeric character.
+    """
+    c = (cat or "").strip()
+    if not c:
+        return False, "empty"
+    if len(c) < min_len:
+        return False, f"too short ({len(c)} < {min_len})"
+    if any(ch.isspace() for ch in c):
+        return False, "contains whitespace"
+    if not c.isprintable():
+        return False, "contains control character"
+    if not any(ch.isalnum() for ch in c):
+        return False, "no alphanumeric characters"
+    return True, ""
+
+
+def _validate_category(data: MemoryInput) -> None:
+    """Reject or coerce structurally invalid categories at the write entry.
+
+    The enum (``capture.allowed_categories``) is opt-in: leaving it empty keeps
+    the system open to new domain names while still blocking garbage.  Populate
+    it where a closed vocabulary is known up front.
+    """
+    if not get_config("capture.category_validation_enabled", True):
+        return
+    min_len = int(get_config("capture.category_min_length", 2) or 2)
+    allowed = get_config("capture.allowed_categories", None) or []
+    action = (
+        get_config("capture.category_invalid_action", "coerce") or "coerce"
+    ).lower()
+
+    cat = (data.category or "").strip()
+    ok, why = _category_validity(cat, min_len)
+    if ok and allowed:
+        ok = cat.lower() in {str(a).strip().lower() for a in allowed}
+        why = "outside allowed_categories" if not ok else ""
+
+    if ok:
+        data.category = cat
+        return
+
+    msg = f"invalid category {cat!r} ({why})"
+    if action == "reject":
+        raise ValueError(f"capture: {msg}")
+    logger.warning(
+        "capture: %s -> coercing to 'general' (agent=%s)", msg, data.agent_name
+    )
+    data.category = "general"
+
+
+def classify_stream(category: str, source: str = "") -> str:
+    """Separate system bookkeeping (``ledger``) from genuine knowledge.
+
+    Design principle #1 (memory #2833): 旁路捕捉，Agent 感觉不到 MemALL 存在。
+    But the implementation drifted into recording its OWN actions as memories
+    (915 "本次会话记录了 N 条记忆").  The cure is a two-stream split:
+
+    * ``knowledge`` — real captured content (decisions, discussions, rules,
+      genuine reflections).  Eligible for distillation and retrieval.  This is
+      the DEFAULT for every user capture.
+    * ``ledger`` — pipeline-generated operational bookkeeping (session-harvest
+      L4/L6, distillation L9/L10/L11).  Tagged at the producer, never
+      re-distilled, low retrieval priority.
+
+    ``ledger_categories`` is a deployment hook for operational noise that
+    arrives through the normal capture() path (heartbeat/testing).  It is empty
+    by default so real session/meeting/reflection captures stay ``knowledge``.
+    """
+    ledger = get_config("capture.ledger_categories", [])
+    if category and category in ledger:
+        return "ledger"
+    return "knowledge"
+
+
+def _capture_normalize_and_validate(
+    data: MemoryInput | dict | str, **overrides
+) -> MemoryInput:
     """Normalize input type, apply overrides, validate content, set agent/owner defaults."""
     if isinstance(data, str):
         data = MemoryInput(content=data)
@@ -278,17 +522,34 @@ def _capture_normalize_and_validate(data: MemoryInput | dict | str, **overrides)
 
     content_len = len(data.content.strip())
     if content_len < 50:
-        logger.warning(f"capture: very short memory ({content_len} chars) agent={data.agent_name} cat={data.category}: {data.content[:60]}")
+        logger.warning(
+            f"capture: very short memory ({content_len} chars) agent={data.agent_name} cat={data.category}: {data.content[:60]}"
+        )
     elif content_len < 80:
-        logger.info(f"capture: short memory ({content_len} chars) agent={data.agent_name} cat={data.category}: {data.content[:60]}")
+        logger.info(
+            f"capture: short memory ({content_len} chars) agent={data.agent_name} cat={data.category}: {data.content[:60]}"
+        )
 
     data.agent_name = normalize_agent_name(data.agent_name)
+    _validate_category(data)
+    # creator = the agent that triggered the write; default to the writing agent.
+    if not data.creator:
+        data.creator = data.agent_name
+    # owner must ALWAYS be a human (design invariant #1 from memory #823).  A
+    # missing owner falls back to the configured human owner — never to the
+    # writing agent, which would silently turn a human-owned memory into an
+    # agent-owned one.
     if not data.owner:
-        data.owner = data.agent_name
+        data.owner = get_config("identity.human_owner", "老陈")
+    # stream: default every user capture to 'knowledge' (see classify_stream).
+    # Pipeline artifacts are tagged 'ledger' at their producer instead.
+    data.stream = data.stream or classify_stream(data.category)
     return data
 
 
-def _capture_inject_metadata(data: MemoryInput, accumulate_key: str | None = None) -> MemoryInput:
+def _capture_inject_metadata(
+    data: MemoryInput, accumulate_key: str | None = None
+) -> MemoryInput:
     """Inject provenance source and optional accumulate_key into metadata."""
     if isinstance(data.metadata, dict):
         if "source" not in data.metadata:
@@ -315,7 +576,9 @@ def _capture_inject_metadata(data: MemoryInput, accumulate_key: str | None = Non
     return data
 
 
-def _capture_inject_quality(data: MemoryInput, quality_result: dict, now: str) -> MemoryInput:
+def _capture_inject_quality(
+    data: MemoryInput, quality_result: dict, now: str
+) -> MemoryInput:
     """Inject quality scoring result into metadata."""
     quality_entry = {
         "value": quality_result,
@@ -333,12 +596,12 @@ def _capture_inject_quality(data: MemoryInput, quality_result: dict, now: str) -
     return data
 
 
-def _capture_dedup_check(conn, data: MemoryInput, h: str, now: str, accumulate_key: str | None = None) -> int | None:
+def _capture_dedup_check(
+    conn, data: MemoryInput, h: str, now: str, accumulate_key: str | None = None
+) -> int | None:
     """Check for existing memories: content_hash, L7 accumulate, L5 dedup.
     Returns existing memory id on hit, None to proceed with insert."""
-    cur = conn.execute(
-        "SELECT id FROM memories WHERE content_hash = ?", (h,)
-    )
+    cur = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (h,))
     existing = cur.fetchone()
     if existing:
         conn.execute(
@@ -347,6 +610,32 @@ def _capture_dedup_check(conn, data: MemoryInput, h: str, now: str, accumulate_k
         )
         conn.commit()
         return existing["id"]
+
+    # ── Defect fix: semantic de-duplication (config-gated) ──
+    # Exact-hash matching above misses near-duplicate memories that differ in
+    # wording but mean the same thing — the source of the ~166 semantic
+    # duplicates. We run a TF-IDF cosine check over recent same-agent memories
+    # here, at the single write entry, so every caller benefits. DISABLED by
+    # default (see config) to avoid falsely merging legitimately distinct
+    # memories; enable where the trade-off is acceptable.
+    if get_config("capture.semantic_dedup_enabled", False):
+        threshold = get_config("capture.semantic_dedup_threshold", 0.92)
+        window = get_config("capture.semantic_dedup_window", 30)
+        if threshold > 0 and window > 0:
+            dup_id = _semantic_dedup_lookup(conn, data, threshold, window)
+            if dup_id is not None:
+                conn.execute(
+                    "UPDATE memories SET access_count = access_count + 1, updated_at = ? WHERE id = ?",
+                    (now, dup_id),
+                )
+                conn.commit()
+                logger.info(
+                    "capture: semantic dedup -> reuse mem_id=%d (agent=%s, threshold=%.2f)",
+                    dup_id,
+                    data.agent_name,
+                    threshold,
+                )
+                return dup_id
 
     # L7 accumulate_key: same pattern corrected again → weight++
     if accumulate_key and data.level == "L7":
@@ -361,7 +650,12 @@ def _capture_dedup_check(conn, data: MemoryInput, h: str, now: str, accumulate_k
                 (new_weight, data.content, h, now, dup["id"]),
             )
             conn.commit()
-            logger.info("capture: L7 accumulate_key '%s' → weight=%d (mem_id=%d)", accumulate_key, new_weight, dup["id"])
+            logger.info(
+                "capture: L7 accumulate_key '%s' → weight=%d (mem_id=%d)",
+                accumulate_key,
+                new_weight,
+                dup["id"],
+            )
             return dup["id"]
 
     # L5 duplicate: same agent + subject → merge metadata, don't duplicate
@@ -374,7 +668,9 @@ def _capture_dedup_check(conn, data: MemoryInput, h: str, now: str, accumulate_k
             existing_meta = {}
             try:
                 raw = dup["metadata"]
-                existing_meta = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+                existing_meta = (
+                    json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+                )
             except json.JSONDecodeError:
                 existing_meta = {}
             incoming = data.metadata or {}
@@ -399,8 +695,7 @@ def _capture_prepare_identity(conn, data: MemoryInput) -> None:
     if not data.agent_name:
         return
     ident = conn.execute(
-        "SELECT id FROM identities WHERE agent_name = ?",
-        (data.agent_name,)
+        "SELECT id FROM identities WHERE agent_name = ?", (data.agent_name,)
     ).fetchone()
     if not ident:
         conn.execute(
@@ -408,26 +703,94 @@ def _capture_prepare_identity(conn, data: MemoryInput) -> None:
             "VALUES (?, 'ai')",
             (data.agent_name,),
         )
-        logger.info("capture: auto-registered agent '%s' in identities table", data.agent_name)
+        logger.info(
+            "capture: auto-registered agent '%s' in identities table", data.agent_name
+        )
 
-    if data.owner and data.owner != data.agent_name:
-        ident = conn.execute(
-            "SELECT agent_type, trusted_by FROM identities WHERE agent_name = ?",
-            (data.agent_name,),
+    # NOTE: previously this block silently rewrote ``owner`` to the writing agent
+    # whenever the agent had no ``trusted_by`` entry for it — violating invariant
+    # #1 ("owner is always a human; creator is the writing agent").  That
+    # degradation has been removed.  ``owner`` is now validated-only: an illegal
+    # owner is never silently changed, so a caller-supplied human owner (e.g.
+    # owner='老陈', agent_name='claude') survives the write intact.
+
+    data.visibility = _get_allowed_write_visibility(
+        conn, data.agent_name, data.visibility
+    )
+
+
+def _infer_thread_root(conn, data: MemoryInput, now: str) -> Optional[int]:
+    """Return a stable thread root id for ``data`` inside a recent time window.
+
+    A "thread" groups memories of the same agent and (inferred) project that
+    arrive close together in time. The root is the *earliest* memory in the
+    window, so every subsequent memory in the thread shares the same root and
+    ``traverse(..., thread_aware=True)`` can surface all siblings.
+
+    Returns None when the feature is disabled (window <= 0) or no recent
+    same-agent + same-project memory exists yet.
+    """
+    window_min = get_config("capture.thread_inference_window_minutes", 0)
+    if not window_min or window_min <= 0:
+        return None
+    proj = data.project or ""
+    try:
+        cutoff = (
+            datetime.fromisoformat(now) - timedelta(minutes=int(window_min))
+        ).isoformat()
+    except (ValueError, OverflowError):
+        return None
+    try:
+        row = conn.execute(
+            "SELECT id FROM memories "
+            "WHERE agent_name = ? AND project = ? AND created_at >= ? "
+            "ORDER BY created_at ASC LIMIT 1",
+            (data.agent_name, proj, cutoff),
         ).fetchone()
-        if ident and ident["agent_type"] != "human":
-            trusted = json.loads(ident["trusted_by"]) if ident["trusted_by"] else []
-            if data.owner not in trusted:
-                owners = [data.agent_name] + trusted[:3]
-                data.owner = owners[0] if owners else data.agent_name
+    except sqlite3.Error:
+        return None
+    return row["id"] if row else None
 
-    data.visibility = _get_allowed_write_visibility(conn, data.agent_name, data.visibility)
+
+def _semantic_dedup_lookup(
+    conn, data: MemoryInput, threshold: float, window: int
+) -> Optional[int]:
+    """Find the most similar recent same-agent memory exceeding ``threshold``.
+
+    Uses TF-IDF cosine similarity over the ``window`` most recent memories of the
+    same agent. Returns the best match id, or None if nothing clears the bar.
+    """
+    try:
+        recent = conn.execute(
+            "SELECT id, content FROM memories "
+            "WHERE agent_name = ? AND LENGTH(TRIM(content)) > 10 "
+            "ORDER BY created_at DESC LIMIT ?",
+            (data.agent_name, int(window)),
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+    if not recent:
+        return None
+    texts = [data.content[:1000]] + [r["content"][:1000] for r in recent]
+    try:
+        tfidf_docs = compute_tfidf(texts)
+    except Exception:
+        return None
+    base = tfidf_docs[0]
+    best_id, best_sim = None, 0.0
+    for i, r in enumerate(recent):
+        sim = cosine_sim(base, tfidf_docs[i + 1])
+        if sim >= threshold and sim > best_sim:
+            best_sim, best_id = sim, r["id"]
+    return best_id
 
 
 def _capture_insert_row(conn, data: MemoryInput, h: str, now: str) -> int:
     """Insert the memory row with race-condition fallback on content_hash collision."""
     occurred = data.occurred_at or now
-    supersedes = data.supersedes if data.supersedes and data.supersedes != "[]" else '[]'
+    supersedes = (
+        data.supersedes if data.supersedes and data.supersedes != "[]" else "[]"
+    )
 
     # Extract memory_status and accumulate_key from metadata if present
     meta = data.metadata
@@ -438,21 +801,37 @@ def _capture_insert_row(conn, data: MemoryInput, h: str, now: str) -> int:
     try:
         cur = conn.execute(
             """INSERT INTO memories
-               (content, content_hash, level, owner, agent_name, subject,
+               (content, content_hash, level, owner, agent_name, creator, subject,
                 project, category, summary, occurred_at, created_at, updated_at,
-                supersedes, confidence, visibility, metadata, thread_id,
-                agent_name_locked, memory_status, accumulate_key)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                supersedes, confidence, visibility, metadata, tags, thread_id,
+                agent_name_locked, memory_status, accumulate_key, stream)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                data.content, h, data.level, data.owner, data.agent_name,
-                data.subject, data.project, data.category, data.summary,
-                occurred, now, now,
-                supersedes, data.confidence, data.visibility,
-                json.dumps(data.metadata) if isinstance(data.metadata, dict) else data.metadata,
+                data.content,
+                h,
+                data.level,
+                data.owner,
+                data.agent_name,
+                data.creator,
+                data.subject,
+                data.project,
+                data.category,
+                data.summary,
+                occurred,
+                now,
+                now,
+                supersedes,
+                data.confidence,
+                data.visibility,
+                json.dumps(data.metadata)
+                if isinstance(data.metadata, dict)
+                else data.metadata,
+                data.tags,
                 data.thread_id,
                 0,
                 memory_status,
                 accumulate_key_val,
+                data.stream,
             ),
         )
         return cur.lastrowid
@@ -490,10 +869,12 @@ def _capture_post_insert(conn, mem_id: int, data: MemoryInput, h: str) -> None:
     def _background_post_process():
         """Run embedding and dream_scan in a daemon thread."""
         from memall.core.db import get_conn as _bg_get_conn
+
         _bg_conn = _bg_get_conn()
         try:
             try:
                 from memall.graph.embeddings import _auto_embed
+
                 # 不再用 _check_st_available() 门禁：本机走 ONNX bge 路径时
                 # ST 不可用，原条件恒 False 会导致新记忆漏建向量，只能靠全量
                 # rebuild。_auto_embed 内部经 _embed_texts_named 自动按
@@ -505,8 +886,10 @@ def _capture_post_insert(conn, mem_id: int, data: MemoryInput, h: str) -> None:
 
             try:
                 from memall.config import get_config as _get_dream_config
+
                 if _get_dream_config("dream.enabled", True):
                     from memall.pipeline.dream import dream_scan
+
                     _dreams = dream_scan(
                         _bg_conn,
                         new_mem_id=mem_id,
@@ -533,8 +916,23 @@ def _capture_post_insert(conn, mem_id: int, data: MemoryInput, h: str) -> None:
     dispatch_lifecycle(HOOK_POST_CAPTURE, data=data, memory_id=mem_id)
 
 
-def capture(data: MemoryInput | dict | str, accumulate_key: str | None = None, **overrides) -> int:
+def capture(
+    data: MemoryInput | dict | str, accumulate_key: str | None = None, **overrides
+) -> int:
     data = _capture_normalize_and_validate(data, **overrides)
+
+    # ── Defect fix: project must never be empty ──
+    # capture() is the single write entry for every path (MCP capture / smart_store /
+    # store_batch / agent_memory.add / raw calls). Inferring the project HERE — instead
+    # of only in a few outer callers — guarantees the field is populated no matter who
+    # invoked us. This is the root-cause fix for the ~77% empty-project data-quality issue.
+    if not data.project and get_config("capture.project_inference_enabled", True):
+        data.project = infer_project(
+            agent_name=data.agent_name,
+            category=data.category,
+            content=data.content,
+        )
+
     now = datetime.now(timezone.utc).isoformat()
     h = content_hash(data.content)
 
@@ -542,12 +940,20 @@ def capture(data: MemoryInput | dict | str, accumulate_key: str | None = None, *
 
     # Auto-generate subject if not provided by caller
     if not data.subject:
-        data.subject = _make_subject(data.content, data.category, data.level, data.agent_name, data.owner)
+        data.subject = _make_subject(
+            data.content, data.category, data.level, data.agent_name, data.owner
+        )
 
     # Enforce subject for L4+
     if data.level in ("L4", "L5", "L6", "L7", "L9", "L10", "L11") and not data.subject:
-        logger.warning("capture: %s memory missing subject, content=%.60s", data.level, data.content or "")
-        data.subject = _make_subject(data.content, data.category, data.level, data.agent_name, data.owner)
+        logger.warning(
+            "capture: %s memory missing subject, content=%.60s",
+            data.level,
+            data.content or "",
+        )
+        data.subject = _make_subject(
+            data.content, data.category, data.level, data.agent_name, data.owner
+        )
 
     quality_result = _score_quality(data, h)
     quality_gate = quality_result.get("gate", "accepted")
@@ -561,8 +967,10 @@ def capture(data: MemoryInput | dict | str, accumulate_key: str | None = None, *
     elif quality_gate == "review":
         logger.debug(
             "capture: quality gate review (avg=%.2f, min=%d) agent=%s cat=%s",
-            quality_result.get("avg", 0), quality_result.get("min", 0),
-            data.agent_name, data.category,
+            quality_result.get("avg", 0),
+            quality_result.get("min", 0),
+            data.agent_name,
+            data.category,
         )
 
     data = _capture_inject_metadata(data, accumulate_key)
@@ -574,6 +982,16 @@ def capture(data: MemoryInput | dict | str, accumulate_key: str | None = None, *
             return existing_id
 
         _capture_prepare_identity(conn, data)
+
+        # ── Defect fix: populate thread_id so thread-aware retrieve/traverse works ──
+        # thread_id is a back-pointer to the *root* memory of the current
+        # conversation thread. It was never assigned on the write path, leaving
+        # traverse(..., thread_aware=True) permanently dead. We link the new memory
+        # to the earliest same-agent + same-project memory inside a recent window,
+        # which establishes a stable thread root all siblings share.
+        if data.thread_id is None:
+            data.thread_id = _infer_thread_root(conn, data, now)
+
         mem_id = _capture_insert_row(conn, data, h, now)
         _capture_post_insert(conn, mem_id, data, h)
         return mem_id
@@ -589,7 +1007,9 @@ def update(memory_id: int, **fields) -> bool:
     any f-string interpolation.
     """
     with _pool_conn() as conn:
-        existing = conn.execute("SELECT id, level, metadata FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        existing = conn.execute(
+            "SELECT id, level, metadata FROM memories WHERE id = ?", (memory_id,)
+        ).fetchone()
         if not existing:
             return False
         sets = []
@@ -622,7 +1042,11 @@ def update(memory_id: int, **fields) -> bool:
             raw_existing = existing["metadata"]
             if raw_existing:
                 try:
-                    existing_meta = json.loads(raw_existing) if isinstance(raw_existing, str) else raw_existing
+                    existing_meta = (
+                        json.loads(raw_existing)
+                        if isinstance(raw_existing, str)
+                        else raw_existing
+                    )
                 except (json.JSONDecodeError, TypeError):
                     existing_meta = {}
             incoming = fields["metadata"]
@@ -643,7 +1067,8 @@ def update(memory_id: int, **fields) -> bool:
                     if normalized != v:
                         logger.warning(
                             f"update({memory_id}): agent_name %r normalized to %r",
-                            v, normalized,
+                            v,
+                            normalized,
                         )
                     v = normalized
                 sets.append(f"{k} = ?")  # safe: k is whitelisted
@@ -657,9 +1082,13 @@ def update(memory_id: int, **fields) -> bool:
         conn.execute(f"UPDATE memories SET {', '.join(sets)} WHERE id = ?", params)
 
         # Decision Arc: if memory is now L4 with NULL arc_status, set to 'open'
-        after = conn.execute("SELECT level, arc_status FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        after = conn.execute(
+            "SELECT level, arc_status FROM memories WHERE id = ?", (memory_id,)
+        ).fetchone()
         if after and after["level"] == "L4" and after["arc_status"] is None:
-            conn.execute("UPDATE memories SET arc_status = 'open' WHERE id = ?", (memory_id,))
+            conn.execute(
+                "UPDATE memories SET arc_status = 'open' WHERE id = ?", (memory_id,)
+            )
 
         conn.commit()
 
@@ -669,10 +1098,14 @@ def update(memory_id: int, **fields) -> bool:
             h = content_hash(new_content)
             try:
                 from memall.graph.embeddings import _auto_embed
+
                 _auto_embed(conn, memory_id, new_content, h)
                 conn.commit()
             except Exception:
-                logger.warning("embedding re-embed failed (install sentence-transformers for vector search)", exc_info=True)
+                logger.warning(
+                    "embedding re-embed failed (install sentence-transformers for vector search)",
+                    exc_info=True,
+                )
 
         return True
 
@@ -682,7 +1115,10 @@ def retrieve(query=None, viewer=None, **filters) -> list | Memory | None:
     with _pool_conn() as conn:
         if isinstance(query, int) or (isinstance(query, str) and query.isdigit()):
             rid = int(query)
-            conn.execute("UPDATE memories SET access_count = access_count + 1 WHERE id = ?", (rid,))
+            conn.execute(
+                "UPDATE memories SET access_count = access_count + 1 WHERE id = ?",
+                (rid,),
+            )
             conn.commit()
             cur = conn.execute("SELECT * FROM memories WHERE id = ?", (rid,))
             row = cur.fetchone()
@@ -728,7 +1164,9 @@ def retrieve(query=None, viewer=None, **filters) -> list | Memory | None:
         if query and isinstance(query, str):
             q = fts_query(query)
             if q:
-                where.append("memories.id IN (SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?)")
+                where.append(
+                    "memories.id IN (SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?)"
+                )
                 params.append(q)
 
         sql = f"SELECT * FROM memories WHERE {' AND '.join(where)} ORDER BY occurred_at DESC LIMIT ?"
@@ -852,7 +1290,7 @@ def _split_cjk(text: str) -> str:
     pos = 0
     for m in _CJK_RE.finditer(text):
         if m.start() > pos:
-            parts.append(text[pos:m.start()])
+            parts.append(text[pos : m.start()])
         parts.append(" ".join(m.group()))
         pos = m.end()
     if pos < len(text):
@@ -876,8 +1314,11 @@ def fts_query(raw: str) -> str:
             # Base: the raw CJK run (a valid unicode61 token)
             cjk_options = [f'"{t}"']
             if _HAS_JIEBA:
-                words = [w for w in jieba.cut(t, cut_all=False)
-                         if len(w.strip()) >= 2 and w not in _CJK_STOP]
+                words = [
+                    w
+                    for w in jieba.cut(t, cut_all=False)
+                    if len(w.strip()) >= 2 and w not in _CJK_STOP
+                ]
                 for w in words:
                     if len(w) >= 2 and w != t:
                         cjk_options.append(f'"{w}"')
@@ -890,12 +1331,12 @@ def fts_query(raw: str) -> str:
             # non-overlapping step-2 sampling.
             if len(t) >= 3:
                 for i in range(len(t) - 1):
-                    sub = t[i:i + 2]
+                    sub = t[i : i + 2]
                     tok = f'"{sub}"'
                     if len(sub) >= 2 and sub != t and tok not in cjk_options:
                         cjk_options.append(tok)
             if len(cjk_options) > 1:
-                tokenized.append(f'({" OR ".join(cjk_options)})')
+                tokenized.append(f"({' OR '.join(cjk_options)})")
             else:
                 tokenized.append(cjk_options[0])
         else:
@@ -906,18 +1347,24 @@ def fts_query(raw: str) -> str:
 
 
 VALID_RELATIONS = [
-    "extends", "contradicts", "refines", "cites", "supersedes", "related",
-    "updates", "derives",
+    "extends",
+    "contradicts",
+    "refines",
+    "cites",
+    "supersedes",
+    "related",
+    "updates",
+    "derives",
 ]
 
 # Ontology hierarchy: broader → narrower.
 # Used for traversing up/down the relation type hierarchy.
 # Example: "updates" implies "supersedes" — querying for updates also returns supersedes.
 ONTOLOGY_HIERARCHY = {
-    "updates": ["supersedes"],          # updating something → superseding the old
-    "derives": ["refines"],             # deriving from → refining
-    "extends": ["cites"],               # extending → citing the source
-    "refines": [],                       # leaf in ontology (no further narrowing)
+    "updates": ["supersedes"],  # updating something → superseding the old
+    "derives": ["refines"],  # deriving from → refining
+    "extends": ["cites"],  # extending → citing the source
+    "refines": [],  # leaf in ontology (no further narrowing)
     "cites": [],
     "supersedes": [],
     "contradicts": [],
@@ -937,7 +1384,24 @@ for _parent, _children in ONTOLOGY_HIERARCHY.items():
 ONTOLOGY_PARENTS = _ONTOLOGY_PARENTS
 
 
-def connect(source_id: int, target_id: int, relation_type: str = "refines", weight: float = 1.0, metadata: str = "{}") -> int:
+def connect(
+    source_id: int,
+    target_id: int,
+    relation_type: str = "refines",
+    weight: float = 1.0,
+    metadata: str = "{}",
+    replace: bool = False,
+) -> int:
+    """Create an edge between two memories.
+
+    Bitemporal semantics (P0-3): an edge carries a validity window
+    (``valid_from``/``invalid_at``) instead of being overwritten.
+    - Default: same (source, target, relation) with a still-valid edge is
+      idempotent — returns the existing edge id without duplicating it.
+    - ``replace=True``: marks the currently-valid edge ``invalid_at=now``
+      and inserts a fresh edge, preserving the historical version
+      ("mark old edge invalid + insert new edge" on write conflict).
+    """
     if source_id == target_id:
         raise ValueError("self-connection is not allowed")
     if relation_type not in VALID_RELATIONS:
@@ -945,35 +1409,57 @@ def connect(source_id: int, target_id: int, relation_type: str = "refines", weig
 
     with _pool_conn() as conn:
         for rid in (source_id, target_id):
-            if not conn.execute("SELECT 1 FROM memories WHERE id = ?", (rid,)).fetchone():
+            if not conn.execute(
+                "SELECT 1 FROM memories WHERE id = ?", (rid,)
+            ).fetchone():
                 raise ValueError(f"memory {rid} does not exist")
 
+        now = datetime.now(timezone.utc).isoformat()
         cur = conn.execute(
-            "SELECT id FROM edges WHERE source_id = ? AND target_id = ? AND relation_type = ?",
+            "SELECT id FROM edges WHERE source_id = ? AND target_id = ? AND relation_type = ? AND invalid_at IS NULL",
             (source_id, target_id, relation_type),
         )
         existing = cur.fetchone()
         if existing:
-            return existing["id"]
+            if not replace:
+                return existing["id"]
+            # Write conflict: invalidate the old edge, then insert a new one.
+            conn.execute(
+                "UPDATE edges SET invalid_at = ? WHERE id = ?",
+                (now, existing["id"]),
+            )
 
-        now = datetime.now(timezone.utc).isoformat()
         cur = conn.execute(
-            "INSERT INTO edges (source_id, target_id, relation_type, weight, created_at, metadata) VALUES (?,?,?,?,?,?)",
-            (source_id, target_id, relation_type, weight, now, metadata),
+            "INSERT INTO edges (source_id, target_id, relation_type, weight, created_at, metadata, valid_from, invalid_at) "
+            "VALUES (?,?,?,?,?,?,?,NULL)",
+            (source_id, target_id, relation_type, weight, now, metadata, now),
         )
         eid = cur.lastrowid
         conn.commit()
         return eid
 
 
-def traverse(node_id: int, depth: int = 1, relation_filter: Optional[str] = None,
-             thread_aware: bool = False) -> dict:
+def traverse(
+    node_id: int,
+    depth: int = 1,
+    relation_filter: Optional[str] = None,
+    thread_aware: bool = False,
+    as_of: Optional[str] = None,
+) -> dict:
+    """BFS graph traversal from ``node_id``.
+
+    Bitemporal (P0-3): by default only edges whose validity window covers
+    ``as_of`` (defaults to now) are traversed; invalidated edges are
+    excluded. Pass ``as_of`` to reproduce the graph at a past moment
+    (both valid_from and invalid_at are compared against it).
+    """
     with _pool_conn() as conn:
         seen = {node_id}
         seen_edges = set()
         nodes = {}
         edges_out = []
         current = [node_id]
+        now = as_of if as_of is not None else datetime.now(timezone.utc).isoformat()
 
         # ── Thread-aware expansion: include thread-linked memories ──
         if thread_aware:
@@ -1013,19 +1499,27 @@ def traverse(node_id: int, depth: int = 1, relation_filter: Optional[str] = None
                 ).fetchall()
                 for nr in thread_node_rows:
                     nodes[nr["id"]] = {
-                        "id": nr["id"], "content": nr["content"],
-                        "subject": nr["subject"], "category": nr["category"],
-                        "level": nr["level"], "confidence": nr["confidence"],
+                        "id": nr["id"],
+                        "content": nr["content"],
+                        "subject": nr["subject"],
+                        "category": nr["category"],
+                        "level": nr["level"],
+                        "confidence": nr["confidence"],
                     }
                 # Add same_thread edges from root to all thread-related nodes
                 for rid in related:
                     ekey = (node_id, rid, "same_thread")
                     if ekey not in seen_edges:
                         seen_edges.add(ekey)
-                        edges_out.append({
-                            "id": None, "source_id": node_id, "target_id": rid,
-                            "relation_type": "same_thread", "weight": 0.5,
-                        })
+                        edges_out.append(
+                            {
+                                "id": None,
+                                "source_id": node_id,
+                                "target_id": rid,
+                                "relation_type": "same_thread",
+                                "weight": 0.5,
+                            }
+                        )
                 # Include thread-related nodes in BFS frontier
                 current = list(set(current) | related)
 
@@ -1037,8 +1531,10 @@ def traverse(node_id: int, depth: int = 1, relation_filter: Optional[str] = None
                 SELECT e.id, e.source_id, e.target_id, e.relation_type, e.weight, e.metadata
                 FROM edges e
                 WHERE (e.source_id IN ({placeholders}) OR e.target_id IN ({placeholders}))
+                  AND (e.valid_from IS NULL OR e.valid_from <= ?)
+                  AND (e.invalid_at IS NULL OR e.invalid_at > ?)
             """
-            edge_params = current + current
+            edge_params = current + current + [now, now]
             if relation_filter:
                 # Ontology expansion: include child types in the hierarchy
                 expanded_types = [relation_filter]
@@ -1056,10 +1552,15 @@ def traverse(node_id: int, depth: int = 1, relation_filter: Optional[str] = None
                 if ekey in seen_edges:
                     continue
                 seen_edges.add(ekey)
-                edges_out.append({
-                    "id": er["id"], "source_id": src, "target_id": tgt,
-                    "relation_type": er["relation_type"], "weight": er["weight"],
-                })
+                edges_out.append(
+                    {
+                        "id": er["id"],
+                        "source_id": src,
+                        "target_id": tgt,
+                        "relation_type": er["relation_type"],
+                        "weight": er["weight"],
+                    }
+                )
                 if src not in seen:
                     seen.add(src)
                     next_level.add(src)
@@ -1075,9 +1576,12 @@ def traverse(node_id: int, depth: int = 1, relation_filter: Optional[str] = None
                 ).fetchall()
                 for nr in node_rows:
                     nodes[nr["id"]] = {
-                        "id": nr["id"], "content": nr["content"],
-                        "subject": nr["subject"], "category": nr["category"],
-                        "level": nr["level"], "confidence": nr["confidence"],
+                        "id": nr["id"],
+                        "content": nr["content"],
+                        "subject": nr["subject"],
+                        "category": nr["category"],
+                        "level": nr["level"],
+                        "confidence": nr["confidence"],
                     }
             current = list(next_level)
 
@@ -1087,30 +1591,62 @@ def traverse(node_id: int, depth: int = 1, relation_filter: Optional[str] = None
         ).fetchone()
         if root:
             nodes[root["id"]] = {
-                "id": root["id"], "content": root["content"][:200],
-                "subject": root["subject"], "category": root["category"],
-                "level": root["level"], "confidence": root["confidence"],
+                "id": root["id"],
+                "content": root["content"][:200],
+                "subject": root["subject"],
+                "category": root["category"],
+                "level": root["level"],
+                "confidence": root["confidence"],
             }
 
         return {"root": node_id, "nodes": list(nodes.values()), "edges": edges_out}
 
 
-def smart_store(content: str, owner: str = "", agent_name: str = "",
-                subject: str = "", project: str = "", category: str = "general",
-                level: str = "P2", dedup_threshold: float = 0.85) -> dict:
+def _sanitize_level(level: str, default: str = "P2") -> str:
+    """Restrict free-form level input to known safe shapes."""
+    if not level or not isinstance(level, str):
+        return default
+    lvl = level.strip()
+    if re.match(r"^(L\d+|P\d+)$", lvl, re.IGNORECASE):
+        return lvl.upper()
+    if lvl.lower() in ("medium", "low", "high", "critical", "normal"):
+        return lvl.lower()
+    return default
+
+
+def smart_store(
+    content: str,
+    owner: str = "",
+    agent_name: str = "",
+    subject: str = "",
+    project: str = "",
+    category: str = "general",
+    level: str = "P2",
+    dedup_threshold: float = 0.85,
+) -> dict:
     """Store memory with content_hash dedup + optional semantic similarity check.
 
     Returns {"id": memory_id, "status": "new"|"duplicate"}."""
 
+    level = _sanitize_level(level)
+
     # Pre-store lifecycle hook
-    dispatch_lifecycle(HOOK_PRE_STORE, content=content, owner=owner, agent_name=agent_name)
+    dispatch_lifecycle(
+        HOOK_PRE_STORE, content=content, owner=owner, agent_name=agent_name
+    )
 
     # Check exact hash first
     h = content_hash(content)
     with _pool_conn() as conn:
-        existing = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (h,)).fetchone()
+        existing = conn.execute(
+            "SELECT id FROM memories WHERE content_hash = ?", (h,)
+        ).fetchone()
         if existing:
-            result = {"id": existing["id"], "status": "duplicate", "reason": "exact_hash"}
+            result = {
+                "id": existing["id"],
+                "status": "duplicate",
+                "reason": "exact_hash",
+            }
             dispatch_lifecycle(HOOK_POST_STORE, result=result)
             return result
 
@@ -1130,15 +1666,26 @@ def smart_store(content: str, owner: str = "", agent_name: str = "",
                         if sim_i > sim:
                             sim = sim_i
                 if sim >= dedup_threshold:
-                    result = {"id": recent[0]["id"], "status": "duplicate", "reason": f"semantic_similarity_{sim:.2f}"}
+                    result = {
+                        "id": recent[0]["id"],
+                        "status": "duplicate",
+                        "reason": f"semantic_similarity_{sim:.2f}",
+                    }
                     dispatch_lifecycle(HOOK_POST_STORE, result=result)
                     return result
 
         try:
-            mid = capture(MemoryInput(
-                content=content, owner=owner, agent_name=agent_name,
-                subject=subject, project=project, category=category, level=level,
-            ))
+            mid = capture(
+                MemoryInput(
+                    content=content,
+                    owner=owner,
+                    agent_name=agent_name,
+                    subject=subject,
+                    project=project,
+                    category=category,
+                    level=level,
+                )
+            )
         except ValueError as e:
             logger.warning("smart_store: %s", e)
             result = {"id": None, "status": "rejected", "reason": str(e)}
@@ -1158,15 +1705,17 @@ def store_batch(items: list) -> dict:
     errors = []
     for item in items:
         try:
-            mid = capture(MemoryInput(
-                content=item.get("content", ""),
-                owner=item.get("owner", ""),
-                agent_name=item.get("agent_name", ""),
-                subject=item.get("subject", ""),
-                project=item.get("project", ""),
-                category=item.get("category", "general"),
-                level=item.get("level", "P2"),
-            ))
+            mid = capture(
+                MemoryInput(
+                    content=item.get("content", ""),
+                    owner=item.get("owner", ""),
+                    agent_name=item.get("agent_name", ""),
+                    subject=item.get("subject", ""),
+                    project=item.get("project", ""),
+                    category=item.get("category", "general"),
+                    level=item.get("level", "P2"),
+                )
+            )
             ids.append(mid)
         except ValueError as e:
             logger.warning("store_batch: item skipped — %s", e)
@@ -1176,13 +1725,13 @@ def store_batch(items: list) -> dict:
 
 # ── Cross-encoder reranker (Phase 2) ──
 
-_reranker = None          # cached CrossEncoder instance
+_reranker = None  # cached CrossEncoder instance
 _reranker_model_name = None  # track which model is loaded
 
 
 # ── ONNX cross-encoder reranker (local, SSE4.2, zero-dep) ──
-_reranker_onnx = None          # cached onnxruntime.InferenceSession
-_reranker_onnx_tok = None      # cached tokenizers.Tokenizer
+_reranker_onnx = None  # cached onnxruntime.InferenceSession
+_reranker_onnx_tok = None  # cached tokenizers.Tokenizer
 
 
 def _load_reranker_onnx():
@@ -1198,8 +1747,10 @@ def _load_reranker_onnx():
     try:
         import os
         from memall.config import get_config
+
         base = os.path.expanduser(
-            get_config("search.reranker_onnx_dir", "~/.memall/.rerank_model"))
+            get_config("search.reranker_onnx_dir", "~/.memall/.rerank_model")
+        )
         model_path = os.path.join(base, "onnx", "model_quantized.onnx")
         tok_path = os.path.join(base, "tokenizer.json")
         if not (os.path.exists(model_path) and os.path.exists(tok_path)):
@@ -1207,6 +1758,7 @@ def _load_reranker_onnx():
             return None, None
         import onnxruntime as ort
         from tokenizers import Tokenizer
+
         sess = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
         tok = Tokenizer.from_file(tok_path)
         _reranker_onnx = sess
@@ -1260,7 +1812,9 @@ def _onnx_rerank(results: list[dict], query: str, top_k: int) -> list[dict] | No
         candidates.sort(key=lambda x: -x.get("rerank_score", 0))
         return candidates[:top_k]
     except Exception:
-        logger.warning("ONNX reranker inference failed; will try cross-encoder", exc_info=True)
+        logger.warning(
+            "ONNX reranker inference failed; will try cross-encoder", exc_info=True
+        )
         return None
 
 
@@ -1299,14 +1853,21 @@ def _rerank(results: list[dict], query: str, top_k: int) -> list[dict]:
         _reranker_model_name = None
         try:
             from sentence_transformers import CrossEncoder
+
             _reranker = CrossEncoder(model_name, device="cpu")
             _reranker_model_name = model_name
             logger.info("reranker loaded: %s", model_name)
         except ImportError:
-            logger.warning("sentence-transformers not installed; cross-encoder reranking disabled")
+            logger.warning(
+                "sentence-transformers not installed; cross-encoder reranking disabled"
+            )
             return results[:top_k]
         except Exception:
-            logger.warning("failed to load reranker %s; using RRF results", model_name, exc_info=True)
+            logger.warning(
+                "failed to load reranker %s; using RRF results",
+                model_name,
+                exc_info=True,
+            )
             _reranker = None
             return results[:top_k]
 
@@ -1324,8 +1885,9 @@ def _rerank(results: list[dict], query: str, top_k: int) -> list[dict]:
         return results[:top_k]
 
 
-def _context_rerank(results: list[dict], query: str, top_k: int,
-                     viewer: str | None = None) -> list[dict]:
+def _context_rerank(
+    results: list[dict], query: str, top_k: int, viewer: str | None = None
+) -> list[dict]:
     """Context-aware re-ranking: micro-adjust cross-encoder scores based on
     the caller's recent interaction patterns.
 
@@ -1386,6 +1948,7 @@ def _context_rerank(results: list[dict], query: str, top_k: int,
 
     # 2. Apply per-result boost
     from datetime import timedelta as _td
+
     _freshness_cutoff = (datetime.now(timezone.utc) - _td(days=7)).date().isoformat()
     for r in results:
         boost = 1.0
@@ -1403,9 +1966,11 @@ def _context_rerank(results: list[dict], query: str, top_k: int,
         # Freshness boost: recent memories (~7 day window)
         created = r.get("created_at") or r.get("occurred_at") or ""
         if created and created[:10] > _freshness_cutoff:
-            boost += (freshness_boost - 1.0)
+            boost += freshness_boost - 1.0
 
-        r["context_score"] = (r.get("rerank_score", 0) or 0) * (1 + weight * (boost - 1.0))
+        r["context_score"] = (r.get("rerank_score", 0) or 0) * (
+            1 + weight * (boost - 1.0)
+        )
         r["context_boost"] = round(boost - 1.0, 3)
 
     # Sort by adjusted context_score
@@ -1413,9 +1978,10 @@ def _context_rerank(results: list[dict], query: str, top_k: int,
 
     # Enforce: top 3 from cross-encoder stay in top 3 (freshness can't jump the queue)
     # Re-sort: first, pin the top 3 by rerank_score at positions 0-2
-    top3_ids = {r["memory_id"] for r in sorted(
-        results, key=lambda x: -(x.get("rerank_score", 0) or 0)
-    )[:3]}
+    top3_ids = {
+        r["memory_id"]
+        for r in sorted(results, key=lambda x: -(x.get("rerank_score", 0) or 0))[:3]
+    }
 
     pinned = [r for r in results if r["memory_id"] in top3_ids]
     unpinned = [r for r in results if r["memory_id"] not in top3_ids]
@@ -1433,19 +1999,28 @@ def vector_search(query: str, top_k: int = 10, provider: Optional[str] = None) -
     Set ``provider="faiss"`` to use FAISS, ``provider="vec0"`` for explicit vec0.
     """
     from memall.config import get_config
+
     active = provider or get_config("search.provider", "faiss")
     from memall.search import get_provider
+
     p = get_provider(active)
     if p is not None:
         return p.search(query, top_k=top_k)
     from memall.graph.retrieve import retrieve as graph_retrieve
+
     return graph_retrieve(query, mode="vector", top_k=top_k)
 
 
-def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
-                  category: Optional[str] = None, level: Optional[str] = None,
-                  owner: Optional[str] = None, rerank: Optional[bool] = None,
-                  viewer: Optional[str] = None) -> dict:
+def hybrid_search(
+    query: str,
+    top_k: int = 10,
+    rrf_k: Optional[int] = None,
+    category: Optional[str] = None,
+    level: Optional[str] = None,
+    owner: Optional[str] = None,
+    rerank: Optional[bool] = None,
+    viewer: Optional[str] = None,
+) -> dict:
     """RRF (Reciprocal Rank Fusion) hybrid search combining FTS5 + vec0.
 
     1. FTS5 keyword search → ranked results
@@ -1474,8 +2049,15 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
     if rrf_k is None:
         rrf_k = get_config("search.rrf_k", 60)
 
-    dispatch_lifecycle(HOOK_PRE_SEARCH, query=query, top_k=top_k, rrf_k=rrf_k,
-                       category=category, level=level, owner=owner)
+    dispatch_lifecycle(
+        HOOK_PRE_SEARCH,
+        query=query,
+        top_k=top_k,
+        rrf_k=rrf_k,
+        category=category,
+        level=level,
+        owner=owner,
+    )
 
     def _apply_meta_filters(rows: list) -> list:
         filtered = rows
@@ -1522,7 +2104,8 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
 
         if not fts_rows and not vec_rows:
             return {
-                "query": query, "mode": "hybrid_rrf",
+                "query": query,
+                "mode": "hybrid_rrf",
                 "results": [],
                 "total": 0,
             }
@@ -1567,22 +2150,33 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
         # Visibility filter: apply before returning results
         if viewer and sorted_results:
             visibility_scores = _filter_by_trust_dict(sorted_results, viewer)
-            sorted_results = [r for r in sorted_results if visibility_scores.get(r["memory_id"], True)]
+            sorted_results = [
+                r for r in sorted_results if visibility_scores.get(r["memory_id"], True)
+            ]
 
         # Rerank stage (P0-2): ONNX cross-encoder → CrossEncoder → RRF fallback.
         # rerank=None means "decide from config" so enabling is one-line config.
         if rerank is None:
             from memall.config import get_config
+
             rerank = get_config("search.rerank_enabled", True)
         if rerank:
             sorted_results = _rerank(sorted_results, query, top_k)
             # Context-aware re-ranking (micro-adjustment after cross-encoder)
-            sorted_results = _context_rerank(sorted_results, query, top_k, viewer=viewer)
+            sorted_results = _context_rerank(
+                sorted_results, query, top_k, viewer=viewer
+            )
         else:
             sorted_results = sorted_results[:top_k]
 
-        dispatch_lifecycle(HOOK_POST_SEARCH, query=query, results=sorted_results,
-                           total=len(scores), fts_hits=len(fts_rows), vec_hits=len(vec_rows))
+        dispatch_lifecycle(
+            HOOK_POST_SEARCH,
+            query=query,
+            results=sorted_results,
+            total=len(scores),
+            fts_hits=len(fts_rows),
+            vec_hits=len(vec_rows),
+        )
         return {
             "query": query,
             "mode": "hybrid_rerank" if rerank else "hybrid_rrf",
@@ -1593,10 +2187,16 @@ def hybrid_search(query: str, top_k: int = 10, rrf_k: Optional[int] = None,
         }
 
 
-def timeline(query: Optional[str] = None, hours: int = 24, category: Optional[str] = None,
-             project: Optional[str] = None, limit: int = 50,
-             start: Optional[str] = None, end: Optional[str] = None,
-             days: Optional[int] = None) -> list:
+def timeline(
+    query: Optional[str] = None,
+    hours: int = 24,
+    category: Optional[str] = None,
+    project: Optional[str] = None,
+    limit: int = 50,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    days: Optional[int] = None,
+) -> list:
     with _pool_conn() as conn:
         from datetime import timedelta
 
@@ -1615,7 +2215,9 @@ def timeline(query: Optional[str] = None, hours: int = 24, category: Optional[st
             if days:
                 cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
             else:
-                cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+                cutoff = (
+                    datetime.now(timezone.utc) - timedelta(hours=hours)
+                ).isoformat()
             where.append("occurred_at >= ?")
             params.append(cutoff)
 
@@ -1628,7 +2230,9 @@ def timeline(query: Optional[str] = None, hours: int = 24, category: Optional[st
         if query:
             q = fts_query(query)
             if q:
-                where.append("id IN (SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?)")
+                where.append(
+                    "id IN (SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?)"
+                )
                 params.append(q)
 
         params.append(limit)

@@ -30,41 +30,43 @@ def _record_plugin_event(hook_point: str, description: str, status: str = "ok") 
 def _get_agent_memories(agent_name: str) -> List[Dict[str, Any]]:
     """Fetch all memories + edges for a given agent, ordered by time descending."""
     conn = get_conn()
-
-    memories = conn.execute(
-        """SELECT id, agent_name, content, category, level, created_at,
-                  subject, project, confidence, visibility, tags
-           FROM memories WHERE agent_name = ? ORDER BY created_at DESC LIMIT 1000""",
-        (agent_name,),
-    ).fetchall()
-
-    result: List[Dict[str, Any]] = []
-    for row in memories:
-        mem_id = row[0]
-        edges = conn.execute(
-            "SELECT source_id, target_id, relation_type, weight FROM edges WHERE source_id = ? OR target_id = ?",
-            (mem_id, mem_id),
+    try:
+        memories = conn.execute(
+            """SELECT id, agent_name, content, category, level, created_at,
+                      subject, project, confidence, visibility, tags
+               FROM memories WHERE agent_name = ? ORDER BY created_at DESC LIMIT 1000""",
+            (agent_name,),
         ).fetchall()
 
-        result.append({
-            "id": mem_id,
-            "agent_name": row[1],
-            "content": row[2],
-            "category": row[3],
-            "level": row[4],
-            "created_at": row[5],
-            "subject": row[6] or "",
-            "project": row[7] or "",
-            "confidence": row[8],
-            "visibility": row[9] or "public",
-            "tags": row[10] or "[]",
-            "edges": [
-                {"source": e[0], "target": e[1], "relation": e[2], "weight": e[3]}
-                for e in edges
-            ],
-        })
+        result: List[Dict[str, Any]] = []
+        for row in memories:
+            mem_id = row[0]
+            edges = conn.execute(
+                "SELECT source_id, target_id, relation_type, weight FROM edges WHERE source_id = ? OR target_id = ?",
+                (mem_id, mem_id),
+            ).fetchall()
 
-    return result
+            result.append({
+                "id": mem_id,
+                "agent_name": row[1],
+                "content": row[2],
+                "category": row[3],
+                "level": row[4],
+                "created_at": row[5],
+                "subject": row[6] or "",
+                "project": row[7] or "",
+                "confidence": row[8],
+                "visibility": row[9] or "public",
+                "tags": row[10] or "[]",
+                "edges": [
+                    {"source": e[0], "target": e[1], "relation": e[2], "weight": e[3]}
+                    for e in edges
+                ],
+            })
+
+        return result
+    finally:
+        conn.close()
 
 
 def export_markdown(agent_name: str, output_path: Optional[str] = None) -> str:

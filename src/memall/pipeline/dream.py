@@ -31,13 +31,16 @@ logger = logging.getLogger(__name__)
 
 # Reuse contradiction detection from link.py
 _CONTRADICT_PAIRS = [
-    (r'用\s+\S+|采用\s+\S+|选择\s+\S+|替代\s+\S+|迁移到\s+\S+', r'不用|废弃|放弃|拒绝|回退|不推荐|反对'),
-    (r'推荐|可靠|好方案|最优|首选', r'不推荐|不可靠|差方案|有问题|不好'),
-    (r'应该|需要|必须|一定要', r'不应该|不需要|不必|不该|没必要'),
-    (r'同意|支持|认可|赞同', r'反对|不同意|不认可|不赞同|质疑'),
-    (r'简单|容易|方便|快速', r'复杂|困难|麻烦|缓慢'),
-    (r'保留|继续用|维持', r'迁移|替换|改用|替代'),
-    (r'好|优|有利|优势|优点', r'差|劣|不利|劣势|缺点|不足'),
+    (
+        r"用\s+\S+|采用\s+\S+|选择\s+\S+|替代\s+\S+|迁移到\s+\S+",
+        r"不用|废弃|放弃|拒绝|回退|不推荐|反对",
+    ),
+    (r"推荐|可靠|好方案|最优|首选", r"不推荐|不可靠|差方案|有问题|不好"),
+    (r"应该|需要|必须|一定要", r"不应该|不需要|不必|不该|没必要"),
+    (r"同意|支持|认可|赞同", r"反对|不同意|不认可|不赞同|质疑"),
+    (r"简单|容易|方便|快速", r"复杂|困难|麻烦|缓慢"),
+    (r"保留|继续用|维持", r"迁移|替换|改用|替代"),
+    (r"好|优|有利|优势|优点", r"差|劣|不利|劣势|缺点|不足"),
 ]
 
 # Pre-compiled patterns for hot-path performance
@@ -71,9 +74,15 @@ def _check_contradiction(text_a: str, text_b: str) -> bool:
     return False
 
 
-def dream_scan(conn, new_mem_id: int, agent_name: str, content: str,
-               category: str = "", scan_window: int = _DEFAULT_SCAN_WINDOW,
-               threshold: float = _JACCARD_THRESHOLD) -> list[dict]:
+def dream_scan(
+    conn,
+    new_mem_id: int,
+    agent_name: str,
+    content: str,
+    category: str = "",
+    scan_window: int = _DEFAULT_SCAN_WINDOW,
+    threshold: float = _JACCARD_THRESHOLD,
+) -> list[dict]:
     """Scan recent memories for contradictions with the newly stored memory.
 
     Args:
@@ -146,15 +155,18 @@ def dream_scan(conn, new_mem_id: int, agent_name: str, content: str,
         # 4. Create or update contradiction edge
         # Always create: new_mem_id → existing_id  with contradicts
         now = datetime.now(timezone.utc).isoformat()
-        meta = json.dumps({
-            "resolved_by": "timestamp",
-            "winner_id": new_mem_id if verdict == "newer_wins" else row["id"],
-            "verdict": verdict,
-            "detected_at": now,
-        }, ensure_ascii=False)
+        meta = json.dumps(
+            {
+                "resolved_by": "timestamp",
+                "winner_id": new_mem_id if verdict == "newer_wins" else row["id"],
+                "verdict": verdict,
+                "detected_at": now,
+            },
+            ensure_ascii=False,
+        )
 
         existing_edge = conn.execute(
-            "SELECT id FROM edges WHERE source_id = ? AND target_id = ? AND relation_type = 'contradicts'",
+            "SELECT id FROM edges WHERE source_id = ? AND target_id = ? AND relation_type = 'contradicts' AND invalid_at IS NULL",
             (new_mem_id, row["id"]),
         ).fetchone()
 
@@ -166,9 +178,9 @@ def dream_scan(conn, new_mem_id: int, agent_name: str, content: str,
             )
         else:
             conn.execute(
-                "INSERT INTO edges (source_id, target_id, relation_type, weight, created_at, metadata) "
-                "VALUES (?, ?, 'contradicts', ?, ?, ?)",
-                (new_mem_id, row["id"], round(sim, 2), now, meta),
+                "INSERT INTO edges (source_id, target_id, relation_type, weight, created_at, metadata, valid_from) "
+                "VALUES (?, ?, 'contradicts', ?, ?, ?, ?)",
+                (new_mem_id, row["id"], round(sim, 2), now, meta, now),
             )
             edge_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -181,14 +193,18 @@ def dream_scan(conn, new_mem_id: int, agent_name: str, content: str,
                 (now, row["id"], new_mem_id),
             )
 
-        conflicts.append({
-            "conflict_with": row["id"],
-            "content": existing_text[:200],
-            "stance": "oppose",
-            "resolved": verdict,
-            "edge_id": edge_id,
-        })
-        logger.info("dream: memory #%d contradicts #%d (%s)", new_mem_id, row["id"], verdict)
+        conflicts.append(
+            {
+                "conflict_with": row["id"],
+                "content": existing_text[:200],
+                "stance": "oppose",
+                "resolved": verdict,
+                "edge_id": edge_id,
+            }
+        )
+        logger.info(
+            "dream: memory #%d contradicts #%d (%s)", new_mem_id, row["id"], verdict
+        )
 
         # Mark both memories with conflict status for agent visibility
         conn.execute(

@@ -114,6 +114,7 @@ def _tokenize_mixed(text: str) -> list:
 
 _TFIDF_MODEL = None
 _TFIDF_MODEL_PATH = None
+_TFIDF_MIGRATED = False
 
 
 def _tfidf_model_path() -> str:
@@ -126,25 +127,55 @@ def _tfidf_model_path() -> str:
 
 
 def _load_tfidf_model():
-    global _TFIDF_MODEL
+    """Load the TF-IDF+SVD model from JSON+.npy (no pickle / no RCE).
+
+    One-time migration: if a legacy pickle exists but no JSON model yet,
+    load it once and immediately re-save in the safe format, then delete it.
+    """
+    global _TFIDF_MODEL, _TFIDF_MIGRATED
     if _TFIDF_MODEL is not None:
         return _TFIDF_MODEL
-    p = _tfidf_model_path()
-    if os.path.exists(p):
-        try:
-            with open(p, "rb") as f:
-                _TFIDF_MODEL = _pickle.load(f)
-                return _TFIDF_MODEL
-        except Exception:
-            _TFIDF_MODEL = None
+    from memall.graph.vector_model import load_model as _safe_load
+    try:
+        state = _safe_load()
+        if state:
+            _TFIDF_MODEL = (state["vectorizer"], state["svd"])
+            return _TFIDF_MODEL
+    except Exception:
+        logger.warning("tfidf safe-model load failed", exc_info=True)
+
+    # Legacy pickle migration (keeps continuity; removed after re-save)
+    if not _TFIDF_MIGRATED:
+        _TFIDF_MIGRATED = True
+        p = _tfidf_model_path()
+        if os.path.exists(p):
+            try:
+                with open(p, "rb") as f:
+                    legacy = _pickle.load(f)
+                if isinstance(legacy, tuple) and len(legacy) == 2:
+                    _save_tfidf_model(legacy)   # re-save as JSON+.npy
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+                    _TFIDF_MODEL = legacy
+                    return legacy
+            except Exception:
+                logger.warning("legacy tfidf pickle migration failed", exc_info=True)
     return None
 
 
 def _save_tfidf_model(model):
-    p = _tfidf_model_path()
+    from memall.graph.vector_model import save_model as _safe_save
     try:
-        with open(p, "wb") as f:
-            _pickle.dump(model, f, protocol=_pickle.HIGHEST_PROTOCOL)
+        vec, svd = model
+        _safe_save(vec, svd)
+        # Remove legacy pickle if it still exists
+        try:
+            if os.path.exists(_tfidf_model_path()):
+                os.remove(_tfidf_model_path())
+        except OSError:
+            pass
     except Exception:
         logger.warning("failed to persist tfidf vecsearch model", exc_info=True)
 

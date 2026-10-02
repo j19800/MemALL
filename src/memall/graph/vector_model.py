@@ -21,7 +21,7 @@ from typing import Optional
 from sklearn.feature_extraction.text import TfidfVectorizer, TfidfTransformer
 from sklearn.decomposition import TruncatedSVD
 
-_MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".vector_model")
+_MODEL_DIR = os.path.join(os.path.expanduser("~/.memall"), ".vector_model")
 
 # File paths
 _VOCAB_PATH = os.path.join(_MODEL_DIR, "tfidf_vocab.json")

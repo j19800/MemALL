@@ -102,7 +102,13 @@ def adaptive_clean(
                 if content and all(c in ".,!?;:()[]{}《》【】\"'、，。！？；：（）" for c in content):
                     punct_ids.append(row["id"])
             if punct_ids:
+                from memall.pipeline.forget import _backup_before_delete
+                _backup_before_delete()
                 placeholders = ",".join("?" for _ in punct_ids)
+                conn.execute(
+                    f"DELETE FROM edges WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})",
+                    punct_ids + punct_ids,
+                )
                 conn.execute(f"DELETE FROM memories WHERE id IN ({placeholders})", punct_ids)
                 cleaned_count = len(punct_ids)
             else:
@@ -151,12 +157,18 @@ def adaptive_clean(
                         else:
                             to_delete.append(rows[i]["id"])
             if to_delete:
+                from memall.pipeline.forget import _backup_before_delete
+                _backup_before_delete()
                 to_delete = list(set(to_delete))
                 # Batch delete in chunks to avoid huge placeholders
                 chunk = 50
                 for k in range(0, len(to_delete), chunk):
                     batch = to_delete[k:k + chunk]
                     ph = ",".join("?" * len(batch))
+                    conn.execute(
+                        f"DELETE FROM edges WHERE source_id IN ({ph}) OR target_id IN ({ph})",
+                        batch + batch,
+                    )
                     cur = conn.execute(
                         f"DELETE FROM memories WHERE id IN ({ph})", batch
                     )
@@ -169,32 +181,17 @@ def adaptive_clean(
                 f"Growth rate {growth_rate:.2%} < {low_threshold:.0%}, "
                 f"standard cleaning sufficient"
             )
-            try:
-                from memall.pipeline.clean import clean_step  # type: ignore[import-untyped]
-                result = clean_step()
-                cleaned_count = (
-                    result.get("cleaned", 0)
-                    if isinstance(result, dict)
-                    else 0
-                )
-            except ImportError:
-                cur = conn.execute(
-                    "DELETE FROM memories WHERE content IS NULL OR LENGTH(TRIM(content)) = 0"
-                )
-                cleaned_count = cur.rowcount
+            cur = conn.execute(
+                "DELETE FROM memories WHERE content IS NULL OR LENGTH(TRIM(content)) = 0"
+            )
+            cleaned_count = cur.rowcount
         else:
             mode = "standard"
             trigger_reason = f"Growth rate {growth_rate:.2%} within normal range"
-            try:
-                from memall.pipeline.clean import clean_step  # type: ignore[import-untyped]
-                result = clean_step()
-                cleaned_count = (
-                    result.get("cleaned", 0)
-                    if isinstance(result, dict)
-                    else 0
-                )
-            except ImportError:
-                logger.warning("adaptive.py: silent error", exc_info=True)
+            cur = conn.execute(
+                "DELETE FROM memories WHERE content IS NULL OR LENGTH(TRIM(content)) = 0"
+            )
+            cleaned_count = cur.rowcount
 
         conn.commit()
         return {

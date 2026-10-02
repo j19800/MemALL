@@ -134,7 +134,7 @@ class TaskScheduler:
 
             with self._lock:
                 for name, task in list(self._tasks.items()):
-                    if task["next_run"] <= now:
+                    if task["next_run"] <= now and not task.get("running"):
                         # Run in separate daemon thread so one slow task
                         # doesn't block the others
                         t = threading.Thread(
@@ -151,8 +151,14 @@ class TaskScheduler:
         with self._lock:
             if name not in self._tasks:
                 return
-            task_func = self._tasks[name]["func"]
-            interval = self._tasks[name]["interval"]
+            task = self._tasks[name]
+            task_func = task["func"]
+            interval = task["interval"]
+            # Advance next_run BEFORE executing so a slow task is never
+            # re-spawned by the poll loop while still running.
+            now = datetime.now(timezone.utc)
+            task["running"] = True
+            task["next_run"] = now + timedelta(seconds=interval)
 
         try:
             task_func()
@@ -165,7 +171,7 @@ class TaskScheduler:
             with self._lock:
                 if name in self._tasks:
                     self._tasks[name]["last_run"] = now
-                    self._tasks[name]["next_run"] = now + timedelta(seconds=interval)
+                    self._tasks[name]["running"] = False
                     if run_count_ok:
                         self._tasks[name]["run_count"] += 1
                     else:

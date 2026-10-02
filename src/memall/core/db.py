@@ -4,6 +4,7 @@ import os
 import threading
 import queue
 import logging
+from typing import Dict
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -12,8 +13,10 @@ logger = logging.getLogger(__name__)
 
 import sqlite_vec
 
+
 def _resolve_db_path() -> Path:
     from memall.config import get_config
+
     configured = get_config("db.path", "")
     if configured:
         return Path(configured)
@@ -31,12 +34,15 @@ def _resolve_db_path() -> Path:
                 break
             candidate = Path(f"{drive}:") / ".memall" / "data.db"
             try:
-                if candidate.parent.exists() or candidate.parent.mkdir(parents=True, exist_ok=True):
+                if candidate.parent.exists() or candidate.parent.mkdir(
+                    parents=True, exist_ok=True
+                ):
                     return candidate
             except (OSError, PermissionError):
                 _try_count += 1
                 continue
     return _default
+
 
 DB_PATH = _resolve_db_path()
 
@@ -45,9 +51,11 @@ CREATE TABLE IF NOT EXISTS memories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     content TEXT NOT NULL,
     content_hash TEXT NOT NULL UNIQUE,
-    level TEXT NOT NULL DEFAULT 'P2',
+    level TEXT NOT NULL DEFAULT 'P2'
+        CHECK (level IN ('P0','P1','P2','L1','L2','L3','L4','L5','L6','L7','L8','L9','L10','L11')),
     owner TEXT NOT NULL DEFAULT '',
     agent_name TEXT NOT NULL DEFAULT '',
+    creator TEXT NOT NULL DEFAULT '',
     subject TEXT NOT NULL DEFAULT '',
     project TEXT NOT NULL DEFAULT '',
     category TEXT NOT NULL DEFAULT 'general',
@@ -62,11 +70,14 @@ CREATE TABLE IF NOT EXISTS memories (
     confidence REAL NOT NULL DEFAULT 0.5,
     weight INTEGER NOT NULL DEFAULT 1,
     metadata TEXT NOT NULL DEFAULT '{}',
-    arc_status TEXT,
+arc_status TEXT,
     thread_id INTEGER DEFAULT NULL,
     agent_name_locked BOOLEAN NOT NULL DEFAULT 0,
     memory_status TEXT DEFAULT NULL,
-    accumulate_key TEXT DEFAULT NULL
+    accumulate_key TEXT DEFAULT NULL,
+    stream TEXT NOT NULL DEFAULT 'knowledge',
+    valid_from TEXT,
+    invalid_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS edges (
@@ -76,7 +87,9 @@ CREATE TABLE IF NOT EXISTS edges (
     relation_type TEXT NOT NULL DEFAULT 'refines',
     weight REAL NOT NULL DEFAULT 1.0,
     created_at TEXT NOT NULL,
-    metadata TEXT NOT NULL DEFAULT '{}'
+    metadata TEXT NOT NULL DEFAULT '{}',
+    valid_from TEXT,
+    invalid_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS identities (
@@ -116,7 +129,6 @@ CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(relation_type);
 CREATE INDEX IF NOT EXISTS idx_memories_memory_status ON memories(memory_status);
 CREATE INDEX IF NOT EXISTS idx_memories_thread ON memories(thread_id);
-CREATE INDEX IF NOT EXISTS idx_identities_agent_lower ON identities(LOWER(agent_name));
 
 CREATE TABLE IF NOT EXISTS clusters (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -412,9 +424,17 @@ def _ensure_missing_columns(conn):
         "echo_score": "REAL NOT NULL DEFAULT 0.0",
         "memory_status": "TEXT DEFAULT NULL",
         "accumulate_key": "TEXT DEFAULT NULL",
+        "creator": "TEXT NOT NULL DEFAULT ''",
+        "stream": "TEXT NOT NULL DEFAULT 'knowledge'",
     }
     for col, typedef in additions.items():
         if col not in existing:
+            # SQLite cannot parameterize identifiers, so the interpolated column
+            # name / type must be validated before it reaches the DDL string.
+            if not col.isidentifier() or ";" in typedef:
+                raise ValueError(
+                    f"unsafe column definition in _ensure_missing_columns: {col!r} {typedef!r}"
+                )
             conn.execute(f"ALTER TABLE memories ADD COLUMN {col} {typedef}")
 
 
@@ -438,19 +458,24 @@ def init_db(conn=None, migrate=True, db_path_for_backup: str = ""):
         if migrate:
             # Formal migration system (GAP-7: auto-migration on pip upgrade)
             try:
-                from memall.migrations import run_migrations as run_formal_migrations, \
-                    get_pending_migrations as get_pending
+                from memall.migrations import (
+                    run_migrations as run_formal_migrations,
+                    get_pending_migrations as get_pending,
+                )
 
                 # Auto-backup before applying formal migrations
                 _db_path = db_path_for_backup or str(DB_PATH)
                 pending = get_pending(conn)
                 if pending:
                     import logging
+
                     log = logging.getLogger("memall.db")
                     log.info(f"Applying {len(pending)} pending migration(s): {pending}")
                     result = run_formal_migrations(conn, db_path=_db_path)
                     if result.get("errors", 0) > 0:
-                        log.warning(f"Migrations completed with {result['errors']} error(s)")
+                        log.warning(
+                            f"Migrations completed with {result['errors']} error(s)"
+                        )
                     conn.commit()
             except ImportError:
                 logger.warning("db.py: migration import failed", exc_info=True)
@@ -478,6 +503,7 @@ def rebuild_fts(conn):
 # ══════════════════════════════════════════════════════════════════
 # Connection Pool
 # ══════════════════════════════════════════════════════════════════
+
 
 class ConnectionPool:
     """Thread-safe SQLite connection pool backed by ``queue.Queue``.
@@ -642,6 +668,7 @@ def pool_conn(db_path: "str | None" = None):
     exception to respect the caller's rollback intent.
     """
     import sys as _sys
+
     pool = get_pool(db_path)
     conn = pool.get()
     try:
@@ -661,8 +688,7 @@ def pool_conn(db_path: "str | None" = None):
         pool.put(conn)
 
 
-def get_pool(db_path: "str | None" = None,
-             max_connections: int = 5) -> ConnectionPool:
+def get_pool(db_path: "str | None" = None, max_connections: int = 5) -> ConnectionPool:
     """Return the global singleton ``ConnectionPool`` (lazy init).
 
     Args:
@@ -685,6 +711,7 @@ def get_pool(db_path: "str | None" = None,
 # ══════════════════════════════════════════════════════════════════
 # Maintenance — VACUUM / ANALYZE / OPTIMIZE / Stats
 # ══════════════════════════════════════════════════════════════════
+
 
 def _db_file_size_mb(path: str) -> float:
     """Return the size of the database file in MB (0 if missing)."""
@@ -778,7 +805,9 @@ def db_stats(db_path: "str | None" = None) -> dict:
 
     # WAL file size
     wal_path = Path(path + "-wal")
-    wal_mb = round(wal_path.stat().st_size / (1024 * 1024), 2) if wal_path.exists() else 0.0
+    wal_mb = (
+        round(wal_path.stat().st_size / (1024 * 1024), 2) if wal_path.exists() else 0.0
+    )
 
     tables: dict = {}
     conn = get_conn(path)
@@ -787,9 +816,7 @@ def db_stats(db_path: "str | None" = None) -> dict:
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
         for (name,) in rows:
-            cnt = conn.execute(
-                f"SELECT COUNT(*) FROM [{name}]"
-            ).fetchone()[0]
+            cnt = conn.execute(f"SELECT COUNT(*) FROM [{name}]").fetchone()[0]
             tables[name] = cnt
 
         # Memory status distribution
@@ -884,7 +911,13 @@ def archive_db_stats() -> dict:
     """Return stats for archive.db."""
     path = str(ARCHIVE_DB_PATH)
     if not Path(path).exists():
-        return {"db_path": path, "exists": False, "file_size_mb": 0, "memories": 0, "edges": 0}
+        return {
+            "db_path": path,
+            "exists": False,
+            "file_size_mb": 0,
+            "memories": 0,
+            "edges": 0,
+        }
     file_mb = _db_file_size_mb(path)
     conn = sqlite3.connect(path, timeout=5)
     conn.row_factory = sqlite3.Row
@@ -912,7 +945,12 @@ def vacuum_archive_db() -> dict:
     """Run VACUUM on archive.db. Returns before/after sizes."""
     path = str(ARCHIVE_DB_PATH)
     if not Path(path).exists():
-        return {"before_mb": 0, "after_mb": 0, "reclaimed_mb": 0, "note": "archive.db does not exist"}
+        return {
+            "before_mb": 0,
+            "after_mb": 0,
+            "reclaimed_mb": 0,
+            "note": "archive.db does not exist",
+        }
     before = _db_file_size_mb(path)
     conn = sqlite3.connect(path, timeout=10)
     try:

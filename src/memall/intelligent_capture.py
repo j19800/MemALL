@@ -210,8 +210,9 @@ def intelligent_capture(content: str, agent_name: str = "system", **overrides) -
     # 3. 重要性评分
     importance = score_importance(content, intent, entities)
 
-    # 4. 自动分类 (允许覆盖)
-    level = overrides.pop("level", None) or _INTENT_LEVEL.get(intent, "P2")
+    # 4. 自动分类 (允许覆盖, level 经白名单消毒)
+    from memall.core.thin_waist import _sanitize_level
+    level = _sanitize_level(overrides.pop("level", None) or _INTENT_LEVEL.get(intent, "P2"))
     category = overrides.pop("category", None) or _INTENT_CATEGORY.get(intent, "general")
     subject = overrides.pop("subject", None) or _generate_subject(content, intent)
 

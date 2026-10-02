@@ -196,10 +196,11 @@ def forget_low_value(agent_name: Optional[str] = None) -> Dict[str, Any]:
         placeholders = ",".join("?" * candidate_count)
 
         # Safety: delete any stray edges (should be none by definition)
-        conn.execute(
+        del_edges = conn.execute(
             f"DELETE FROM edges WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})",
             candidate_ids + candidate_ids,
         )
+        deleted_edges = del_edges.rowcount
 
         cur = conn.execute(
             f"DELETE FROM memories WHERE id IN ({placeholders})",
@@ -208,7 +209,7 @@ def forget_low_value(agent_name: Optional[str] = None) -> Dict[str, Any]:
         deleted_memories = cur.rowcount
 
         conn.execute("COMMIT")
-        return {"deleted_memories": deleted_memories, "candidate_count": candidate_count}
+        return {"deleted_memories": deleted_memories, "deleted_edges": deleted_edges, "candidate_count": candidate_count}
     except sqlite3.Error:
         conn.execute("ROLLBACK")
         raise
