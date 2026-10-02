@@ -136,8 +136,13 @@ def extract_entities(text: str, agent_name: str = "") -> list[dict]:
             })
 
     # 5. Programming languages
+    # NOTE: _LANG_PATTERN has two capture groups — the C++/C# alternative is
+    # captured by group(2), so group(1) can be None for those matches. Always
+    # fall back to group(2) (and skip if both are empty).
     for m in _LANG_PATTERN.finditer(text):
-        name = m.group(1)
+        name = m.group(1) or m.group(2)
+        if not name:
+            continue
         key = (name.lower(), "language")
         if key not in seen:
             seen.add(key)
@@ -231,7 +236,6 @@ def resolve_entity(name: str, entity_type: str, conn) -> int:
         return row["id"]
     # Both attempts failed — log and return 0 (caller should handle)
     logger.warning("resolve_entity failed for %s (%s)", name, entity_type)
-    return 0
     return 0
 
 

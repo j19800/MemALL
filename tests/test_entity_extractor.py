@@ -61,6 +61,21 @@ def test_extract_empty_text():
     print("  PASS test_extract_empty_text")
 
 
+def test_extract_cpp_csharp_no_crash():
+    """Regression: C++/C# are captured by group(2) of _LANG_PATTERN, so a naive
+    group(1) read raised ``'NoneType' object has no attribute 'lower'``. The
+    extractor must return the language names instead of crashing."""
+    from memall.core.entity_extractor import extract_entities
+    text = "The system is written in C++ and the tooling in C#. Legacy parts use C."
+    ents = extract_entities(text)
+    names = [e["name"] for e in ents]
+    assert "C++" in names, f"Expected C++ in {names}"
+    assert "C#" in names, f"Expected C# in {names}"
+    # Ensure no None slipped into the result
+    assert all(e["name"] for e in ents), f"Null entity name in {ents}"
+    print("  PASS test_extract_cpp_csharp_no_crash")
+
+
 def test_extract_triples_simple():
     from memall.core.entity_extractor import extract_triples
     text = "Python is a programming language. FastAPI is built on top of Starlette."

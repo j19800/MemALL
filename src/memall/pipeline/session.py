@@ -21,6 +21,23 @@ from memall.core.db import get_conn
 from memall.pipeline.util import _smart_subject
 
 
+# Distillation artifacts, e.g. "[L9 蒸馏] claude 在 decision 领域共 8 条".
+# These must never feed back into session summaries: they are *derived* from
+# memories, so letting them become the "key decisions" of a new session closes
+# an L4 -> L9 -> L4 recursion loop, where every turn attenuates the signal a
+# little more.  Production evidence: five L4 session memories (#11217, #11244,
+# #11248, #11252, #11264) carried byte-identical "关键决策：[L9 聚合] …" text,
+# differing only in the memory counter.
+_DISTILL_ARTIFACT_RE = re.compile(r"^\s*\[L(\d+)\s*(蒸馏|聚合|整合|会话|反思)?\]")
+# Levels produced *by* the pipeline rather than observed from the world.
+_DERIVED_LEVELS = ("L7", "L8", "L9", "L10", "L11")
+
+
+def _is_derived_artifact(content: str) -> bool:
+    """True if ``content`` is a pipeline distillation artifact, not an observation."""
+    return bool(_DISTILL_ARTIFACT_RE.match(content or ""))
+
+
 def _ensure_sessions_table(conn):
     conn.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
@@ -114,16 +131,27 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
         ).fetchone()
 
         # Shared extraction for L4 and L6
+        # Exclude pipeline-derived levels: a distillation artifact must never be
+        # re-consumed as an observed decision (see _DISTILL_ARTIFACT_RE).
+        _derived_ph = ",".join("?" * len(_DERIVED_LEVELS))
         decision_rows = conn.execute(
-            f"SELECT content FROM memories WHERE {' AND '.join(where)} AND category = 'decision' ORDER BY created_at DESC LIMIT 3",
-            params,
+            f"SELECT content FROM memories WHERE {' AND '.join(where)} "
+            f"AND category = 'decision' AND level NOT IN ({_derived_ph}) "
+            f"ORDER BY created_at DESC LIMIT 3",
+            [*params, *_DERIVED_LEVELS],
         ).fetchall()
-        key_decisions = [r["content"][:100] for r in decision_rows]
+        key_decisions = [
+            r["content"][:100] for r in decision_rows
+            if not _is_derived_artifact(r["content"])
+        ]
         last_row = conn.execute(
-            f"SELECT content FROM memories WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT 1",
-            params,
+            f"SELECT content FROM memories WHERE {' AND '.join(where)} "
+            f"AND level NOT IN ({_derived_ph}) ORDER BY created_at DESC LIMIT 1",
+            [*params, *_DERIVED_LEVELS],
         ).fetchone()
         continuation_note = ""
+        if last_row and _is_derived_artifact(last_row["content"]):
+            last_row = None
         if last_row:
             for pat in [r'下一步[：:\s]*(.{5,80})', r'继续[：:\s]*(.{5,80})', r'next[：:\s]*(.{5,80})']:
                 m = re.search(pat, last_row["content"], re.I)
@@ -153,8 +181,8 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
             participants = [r["agent_name"] for r in participant_rows]
 
             conn.execute(
-                "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, project, subject, summary, occurred_at, created_at, updated_at, confidence, visibility, metadata) "
-                "VALUES (?, ?, 'L4', 'system', ?, 'session', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, project, subject, summary, occurred_at, created_at, updated_at, confidence, visibility, metadata, stream) "
+                "VALUES (?, ?, 'L4', 'system', ?, 'session', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ledger')",
                 (l4_content[:2000], ch, agent_name, session_project,
                  _smart_subject(l4_content), _smart_subject(l4_content), now, now, now, 0.5, "shared",
                  json.dumps({"session_id": session_id, "key_decisions": key_decisions,
@@ -208,8 +236,8 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
             conn.execute(
                 "INSERT OR IGNORE INTO memories "
                 "(content, content_hash, level, owner, agent_name, category, project, subject, summary, "
-                "occurred_at, created_at, updated_at, confidence, visibility, metadata, thread_id) "
-                "VALUES (?, ?, 'L6', 'system', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "occurred_at, created_at, updated_at, confidence, visibility, metadata, thread_id, stream) "
+                "VALUES (?, ?, 'L6', 'system', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ledger')",
                 (l6_content[:2000], hashlib.sha256(l6_content.encode()).hexdigest(), agent_name, session_project,
                  l6_subject, "", now, now, now, 0.6, "private",
                  json.dumps({"session_id": session_id, "source": "pipeline_harvest"}),
@@ -656,6 +684,7 @@ def session_end(session_id: str, auto_extract: bool = False) -> dict:
                 if harvest.get("l4_id") or harvest.get("memories"):
                     result["l4_id"] = harvest.get("l4_id")
                     result["l6_id"] = harvest.get("l6_id")
+            conn.commit()  # persist L4/L6 harvest writes before conn.close()
         except Exception:
             logger.warning("session_end harvest failed", exc_info=True)
 

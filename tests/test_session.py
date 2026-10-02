@@ -262,6 +262,64 @@ def test_session_start_auto_close_l4_created():
         cleanup_temp_db(db_path, patcher)
 
 
+def test_session_harvest_excludes_derived_l9_decisions():
+    """C2 regression: an L9 derivation tagged category='decision' must NOT be
+    re-consumed as a 'key decision' of a freshly harvested L4.
+
+    The L9 content deliberately does NOT start with the ``[L9 蒸馏]`` artifact
+    marker, so the post-filter in ``_harvest_session`` would *not* catch it —
+    only the SQL ``level NOT IN (_DERIVED_LEVELS)`` guard added by C2 protects
+    against the L4 -> L9 -> L4 recursion loop. If that guard is removed, this
+    test fails.
+    """
+    from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
+    from memall.pipeline.session import session_start, _ensure_sessions_table
+    from memall.core.db import get_conn
+    from datetime import datetime, timedelta, timezone
+
+    db_path, patcher = init_temp_db()
+    try:
+        conn = get_conn()
+        _ensure_sessions_table(conn)
+        old_stamp = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
+        conn.execute(
+            "INSERT INTO sessions (session_id, agent_name, started_at, status) VALUES (?, ?, ?, ?)",
+            ("c2_sid", "test_agent", old_stamp, "active"),
+        )
+        # 3 general memories to push the session count above the L4 threshold (>3)
+        for i in range(3):
+            insert_memory(conn, f"General working note number {i} for the project backlog",
+                          agent_name="test_agent", category="general",
+                          created_at=(datetime.now(timezone.utc) - timedelta(hours=3 - i)).isoformat())
+        # Real observed decision (level L4) — must appear in the new L4
+        insert_memory(conn, "Decided to ship the release on Friday",
+                      agent_name="test_agent", category="decision", level="L4",
+                      created_at=(datetime.now(timezone.utc) - timedelta(hours=2.5)).isoformat())
+        # Derived L9 decision whose content does NOT match the artifact regex —
+        # only the SQL level filter protects it from being re-consumed.
+        insert_memory(conn, "Decided to refactor the ingestion pipeline",
+                      agent_name="test_agent", category="decision", level="L9",
+                      created_at=(datetime.now(timezone.utc) - timedelta(hours=2)).isoformat())
+        conn.close()
+
+        session_start(agent_name="test_agent", auto_inject=False)
+
+        conn2 = get_conn()
+        l4_rows = conn2.execute(
+            "SELECT content FROM memories WHERE level = 'L4' AND agent_name = 'test_agent'"
+        ).fetchall()
+        conn2.close()
+        assert l4_rows, f"Expected an L4 memory to be harvested, got none"
+        l4_content = l4_rows[0]["content"]
+        assert "ship the release on Friday" in l4_content, \
+            f"Real decision should be cited in L4: {l4_content!r}"
+        assert "refactor the ingestion pipeline" not in l4_content, \
+            f"L9 derived decision must NOT leak into L4 key_decisions: {l4_content!r}"
+        print("  PASS test_session_harvest_excludes_derived_l9_decisions")
+    finally:
+        cleanup_temp_db(db_path, patcher)
+
+
 # ── Runner ──────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -282,6 +340,7 @@ if __name__ == "__main__":
         ("test_session_start_auto_close_fresh_kept", test_session_start_auto_close_fresh_kept),
         ("test_session_start_auto_close_diff_agent", test_session_start_auto_close_diff_agent),
         ("test_session_start_auto_close_l4_created", test_session_start_auto_close_l4_created),
+        ("test_session_harvest_excludes_derived_l9_decisions", test_session_harvest_excludes_derived_l9_decisions),
     ]
 
     for name, func in tests:

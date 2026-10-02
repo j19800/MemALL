@@ -20,14 +20,13 @@ from memall.core.nlp import compute_tfidf, cosine_sim
 # Internal helpers
 # ══════════════════════════════════════════════════════════════════
 
+
 def _ensure_tags_column(conn) -> None:
     """Ensure memories table has a `tags` TEXT column (JSON array format)."""
     cur = conn.execute("PRAGMA table_info(memories)")
     cols = [r["name"] for r in cur.fetchall()]
     if "tags" not in cols:
-        conn.execute(
-            "ALTER TABLE memories ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'"
-        )
+        conn.execute("ALTER TABLE memories ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
         conn.commit()
 
 
@@ -46,7 +45,9 @@ def _parse_tags(raw: Optional[str]) -> List[str]:
 
 def _tags_to_json(tags: List[str]) -> str:
     """Serialize tags list to JSON string, ensuring uniqueness."""
-    return json.dumps(sorted(set(t.strip() for t in tags if t.strip())), ensure_ascii=False)
+    return json.dumps(
+        sorted(set(t.strip() for t in tags if t.strip())), ensure_ascii=False
+    )
 
 
 def _ensure_ops_log(conn) -> None:
@@ -63,20 +64,23 @@ def _ensure_ops_log(conn) -> None:
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ops_log_type ON ops_log(op_type)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ops_log_rolled ON ops_log(rolled_back_at)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ops_log_rolled ON ops_log(rolled_back_at)"
+    )
     conn.commit()
 
 
 def _snapshot_memories(conn, ids: Sequence[int]) -> Dict[int, dict]:
     """Dump essential columns for a list of memory IDs (for ops_log undo).
 
-    Returns {mem_id: {level, content, metadata, tags}}.
+    Returns {mem_id: {level, content, metadata, tags, memory_status}}.
     """
     if not ids:
         return {}
     placeholders = ",".join("?" * len(ids))
     rows = conn.execute(
-        f"SELECT id, level, content, metadata, tags FROM memories WHERE id IN ({placeholders})",
+        f"SELECT id, level, content, metadata, tags, memory_status FROM memories "
+        f"WHERE id IN ({placeholders})",
         list(ids),
     ).fetchall()
     return {
@@ -85,6 +89,7 @@ def _snapshot_memories(conn, ids: Sequence[int]) -> Dict[int, dict]:
             "content": r["content"],
             "metadata": r["metadata"],
             "tags": r["tags"],
+            "memory_status": r["memory_status"],
         }
         for r in rows
     }
@@ -169,7 +174,8 @@ def _merge_memories_conn(
     if src_subj and (not tgt_subj or len(src_subj) > len(tgt_subj)):
         merged_subject = src_subj
         tgt_meta[f"merge_src_{source_id}_original_subject"] = {
-            "value": tgt_subj, "_meta": {"version": 1, "written_at": now_iso}
+            "value": tgt_subj,
+            "_meta": {"version": 1, "written_at": now_iso},
         }
     else:
         merged_subject = tgt_subj
@@ -204,12 +210,16 @@ def _merge_memories_conn(
         "SELECT COUNT(*) AS c FROM edges WHERE source_id = ?", (source_id,)
     ).fetchone()["c"]
 
-    conn.execute("UPDATE edges SET target_id = ? WHERE target_id = ?",
-                 (target_id, source_id))
-    conn.execute("UPDATE edges SET source_id = ? WHERE source_id = ?",
-                 (target_id, source_id))
-    conn.execute("DELETE FROM edges WHERE source_id = ? AND target_id = ?",
-                 (target_id, target_id))
+    conn.execute(
+        "UPDATE edges SET target_id = ? WHERE target_id = ?", (target_id, source_id)
+    )
+    conn.execute(
+        "UPDATE edges SET source_id = ? WHERE source_id = ?", (target_id, source_id)
+    )
+    conn.execute(
+        "DELETE FROM edges WHERE source_id = ? AND target_id = ?",
+        (target_id, target_id),
+    )
 
     edges_redirected = before_in + before_out
 
@@ -228,6 +238,7 @@ def _merge_memories_conn(
 # ══════════════════════════════════════════════════════════════════
 # 1. Memory Merge
 # ══════════════════════════════════════════════════════════════════
+
 
 def merge_memories(
     source_id: int,
@@ -269,13 +280,14 @@ def merge_memories(
 # 2. Memory Split
 # ══════════════════════════════════════════════════════════════════
 
+
 def split_memory(memory_id: int, delimiter: str = "\n\n") -> Dict[str, Any]:
     """Split a memory into multiple memories by the given delimiter.
 
     - Each non-empty segment becomes a new independent memory.
     - New memories inherit agent_name, category, and level.
     - All edges (inbound and outbound) are replicated for each new memory.
-    - Original memory is archived (level='archived'), NOT deleted.
+    - Original memory is archived (memory_status='archived'), NOT deleted.
 
     Args:
         memory_id: ID of the memory to split.
@@ -356,25 +368,39 @@ def split_memory(memory_id: int, delimiter: str = "\n\n") -> Dict[str, Any]:
             for ie in in_edges:
                 if ie["source_id"] != new_id:  # skip self
                     conn.execute(
-                        "INSERT INTO edges (source_id, target_id, relation_type, weight, created_at, metadata) "
-                        "VALUES (?,?,?,?,?,?)",
-                        (ie["source_id"], new_id, ie["relation_type"],
-                         ie["weight"], now, ie["metadata"]),
+                        "INSERT INTO edges (source_id, target_id, relation_type, weight, created_at, metadata, valid_from) "
+                        "VALUES (?,?,?,?,?,?,?)",
+                        (
+                            ie["source_id"],
+                            new_id,
+                            ie["relation_type"],
+                            ie["weight"],
+                            now,
+                            ie["metadata"],
+                            now,
+                        ),
                     )
 
             # Replicate out-edges: new_id → other
             for oe in out_edges:
                 if oe["target_id"] != new_id:
                     conn.execute(
-                        "INSERT INTO edges (source_id, target_id, relation_type, weight, created_at, metadata) "
-                        "VALUES (?,?,?,?,?,?)",
-                        (new_id, oe["target_id"], oe["relation_type"],
-                         oe["weight"], now, oe["metadata"]),
+                        "INSERT INTO edges (source_id, target_id, relation_type, weight, created_at, metadata, valid_from) "
+                        "VALUES (?,?,?,?,?,?,?)",
+                        (
+                            new_id,
+                            oe["target_id"],
+                            oe["relation_type"],
+                            oe["weight"],
+                            now,
+                            oe["metadata"],
+                            now,
+                        ),
                     )
 
         # ── Archive original ──
         conn.execute(
-            "UPDATE memories SET level = 'archived', updated_at = ? WHERE id = ?",
+            "UPDATE memories SET memory_status = 'archived', updated_at = ? WHERE id = ?",
             (now, memory_id),
         )
 
@@ -394,6 +420,7 @@ def split_memory(memory_id: int, delimiter: str = "\n\n") -> Dict[str, Any]:
 # ══════════════════════════════════════════════════════════════════
 # 3. Memory Tagging
 # ══════════════════════════════════════════════════════════════════
+
 
 def tag_memory(
     memory_id: int,
@@ -456,6 +483,7 @@ def tag_memory(
 # 4. Batch Operations
 # ══════════════════════════════════════════════════════════════════
 
+
 def batch_tag(
     agent_name: Optional[str] = None,
     category: Optional[str] = None,
@@ -477,7 +505,7 @@ def batch_tag(
         category: Optional category filter.
         tags: Tags to apply (default ``[]``).
         mode: ``"add"`` (default), ``"set"``, or ``"remove"``.
-        level: Optional level filter (P0/P1/P2/L1-L10/archived).
+        level: Optional level filter (P0/P1/P2/L1-L11).
         tags_include: Optional list — match memories containing ALL of these tags.
         before: Optional ISO date — match memories with ``occurred_at < before``.
         after: Optional ISO date — match memories with ``occurred_at > after``.
@@ -521,10 +549,7 @@ def batch_tag(
         # tags_include filter (all of these must be in the row's tags)
         if tags_include:
             inc_set = {t.strip() for t in tags_include if t.strip()}
-            rows = [
-                r for r in rows
-                if inc_set.issubset(set(_parse_tags(r["tags"])))
-            ]
+            rows = [r for r in rows if inc_set.issubset(set(_parse_tags(r["tags"])))]
 
         matched = len(rows)
         preview = [r["id"] for r in rows[:10]]
@@ -559,15 +584,20 @@ def batch_tag(
             if new_tags != current:
                 conn.execute(
                     "UPDATE memories SET tags = ?, updated_at = ? WHERE id = ?",
-                    (json.dumps(new_tags, ensure_ascii=False),
-                     datetime.now(timezone.utc).isoformat(),
-                     row["id"]),
+                    (
+                        json.dumps(new_tags, ensure_ascii=False),
+                        datetime.now(timezone.utc).isoformat(),
+                        row["id"],
+                    ),
                 )
                 updated += 1
 
         if updated:
             _record_ops_entry(
-                conn, "batch_tag", all_ids, snapshot,
+                conn,
+                "batch_tag",
+                all_ids,
+                snapshot,
                 {"mode": mode, "tags": tags, "dry_run": False},
             )
 
@@ -612,13 +642,14 @@ def batch_archive(
         if agent_name is not None:
             rows = conn.execute(
                 "SELECT id, level, metadata FROM memories "
-                "WHERE agent_name = ? AND occurred_at < ? AND level != 'archived'",
+                "WHERE agent_name = ? AND occurred_at < ? "
+                "AND COALESCE(memory_status, '') != 'archived'",
                 (agent_name, cutoff),
             ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT id, level, metadata FROM memories "
-                "WHERE occurred_at < ? AND level != 'archived'",
+                "WHERE occurred_at < ? AND COALESCE(memory_status, '') != 'archived'",
                 (cutoff,),
             ).fetchall()
 
@@ -650,14 +681,17 @@ def batch_archive(
                 "_meta": {"version": 1, "written_at": now_iso},
             }
             conn.execute(
-                "UPDATE memories SET level = 'archived', metadata = ?, updated_at = ? "
-                "WHERE id = ?",
+                "UPDATE memories SET memory_status = 'archived', metadata = ?, "
+                "updated_at = ? WHERE id = ?",
                 (json.dumps(meta, ensure_ascii=False), now_iso, row["id"]),
             )
             archived += 1
 
         _record_ops_entry(
-            conn, "batch_archive", all_ids, snapshot,
+            conn,
+            "batch_archive",
+            all_ids,
+            snapshot,
             {"days": days, "cutoff": cutoff},
         )
         conn.commit()
@@ -697,13 +731,13 @@ def batch_restore(
     try:
         if agent_name is not None:
             rows = conn.execute(
-                "SELECT id, metadata FROM memories "
-                "WHERE agent_name = ? AND level = 'archived'",
+                "SELECT id, level, metadata FROM memories "
+                "WHERE agent_name = ? AND memory_status = 'archived'",
                 (agent_name,),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, metadata FROM memories WHERE level = 'archived'",
+                "SELECT id, level, metadata FROM memories WHERE memory_status = 'archived'",
             ).fetchall()
 
         matched = len(rows)
@@ -733,15 +767,16 @@ def batch_restore(
                 meta = {}
 
             orig = meta.pop("original_level", None)
-            if isinstance(orig, dict):
-                target_level = orig.get("value", "P2")
+            if isinstance(orig, dict) and orig.get("value"):
+                target_level = orig["value"]
             else:
-                target_level = "P2"
+                # level is no longer clobbered on archive — keep the canonical value
+                target_level = row["level"] or "P2"
                 fallback_p2 += 1
 
             conn.execute(
-                "UPDATE memories SET level = ?, metadata = ?, updated_at = ? "
-                "WHERE id = ?",
+                "UPDATE memories SET level = ?, memory_status = NULL, metadata = ?, "
+                "updated_at = ? WHERE id = ?",
                 (
                     target_level,
                     json.dumps(meta, ensure_ascii=False),
@@ -752,7 +787,10 @@ def batch_restore(
             restored += 1
 
         _record_ops_entry(
-            conn, "batch_restore", all_ids, snapshot,
+            conn,
+            "batch_restore",
+            all_ids,
+            snapshot,
             {"fallback_p2": fallback_p2},
         )
         conn.commit()
@@ -774,6 +812,7 @@ def batch_restore(
 # ══════════════════════════════════════════════════════════════════
 # 5. Memory Deduplication
 # ══════════════════════════════════════════════════════════════════
+
 
 def deduplicate(
     agent_name: Optional[str] = None,
@@ -822,7 +861,7 @@ def deduplicate(
         if agent_name:
             rows = conn.execute(
                 "SELECT id, content FROM memories "
-                "WHERE agent_name = ? AND level != 'archived'"
+                "WHERE agent_name = ? AND COALESCE(memory_status, '') != 'archived'"
                 " AND LENGTH(TRIM(content)) > 10 "
                 "ORDER BY id LIMIT ?",
                 (agent_name, max_memories),
@@ -830,7 +869,8 @@ def deduplicate(
         else:
             rows = conn.execute(
                 "SELECT id, content FROM memories "
-                "WHERE level != 'archived' AND LENGTH(TRIM(content)) > 10 "
+                "WHERE COALESCE(memory_status, '') != 'archived' "
+                "AND LENGTH(TRIM(content)) > 10 "
                 "ORDER BY id LIMIT ?",
                 (max_memories,),
             ).fetchall()
@@ -840,8 +880,12 @@ def deduplicate(
     scanned = len(rows)
     if scanned < 2:
         return {
-            "duplicates_found": 0, "merged": 0, "pairs": [],
-            "dry_run": dry_run, "scanned": scanned, "truncated": False,
+            "duplicates_found": 0,
+            "merged": 0,
+            "pairs": [],
+            "dry_run": dry_run,
+            "scanned": scanned,
+            "truncated": False,
         }
 
     # ── TF-IDF for all documents ──
@@ -880,11 +924,13 @@ def deduplicate(
                 else:
                     kept, removed_id = ids[j], ids[i]
                 removed.add(removed_id)
-                pairs.append({
-                    "kept": kept,
-                    "removed": removed_id,
-                    "similarity": round(sim, 4),
-                })
+                pairs.append(
+                    {
+                        "kept": kept,
+                        "removed": removed_id,
+                        "similarity": round(sim, 4),
+                    }
+                )
         if truncated:
             break
 
@@ -909,15 +955,19 @@ def deduplicate(
         for pair in pairs:
             try:
                 _merge_memories_conn(
-                    merge_conn, pair["removed"], pair["kept"],
+                    merge_conn,
+                    pair["removed"],
+                    pair["kept"],
                 )
                 merged += 1
             except Exception as e:
-                errors.append({
-                    "kept": pair["kept"],
-                    "removed": pair["removed"],
-                    "error": str(e)[:200],
-                })
+                errors.append(
+                    {
+                        "kept": pair["kept"],
+                        "removed": pair["removed"],
+                        "error": str(e)[:200],
+                    }
+                )
         if errors:
             logging.getLogger("memall.ops").warning(
                 "deduplicate: %d / %d merges failed", len(errors), len(pairs)
@@ -945,6 +995,7 @@ def deduplicate(
 # 6. Undo
 # ══════════════════════════════════════════════════════════════════
 
+
 def undo(op_id: int) -> Dict[str, Any]:
     """Undo a previously logged batch operation.
 
@@ -960,9 +1011,7 @@ def undo(op_id: int) -> Dict[str, Any]:
     """
     conn = get_conn()
     try:
-        row = conn.execute(
-            "SELECT * FROM ops_log WHERE id = ?", (op_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM ops_log WHERE id = ?", (op_id,)).fetchone()
         if not row:
             raise ValueError(f"op {op_id} not found in ops_log")
         if row["rolled_back_at"]:
@@ -978,12 +1027,13 @@ def undo(op_id: int) -> Dict[str, Any]:
             mem_id = int(mem_id_str)
             conn.execute(
                 "UPDATE memories SET level=?, content=?, metadata=?, tags=?, "
-                "updated_at=? WHERE id=?",
+                "memory_status=?, updated_at=? WHERE id=?",
                 (
                     cols["level"],
                     cols["content"],
                     cols["metadata"],
                     cols["tags"],
+                    cols.get("memory_status"),
                     now_iso,
                     mem_id,
                 ),
