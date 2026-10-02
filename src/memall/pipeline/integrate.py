@@ -18,6 +18,7 @@ import json
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
+from memall.config import get_config
 from memall.core.db import get_conn
 from memall.core.thin_waist import normalize_agent_name
 from memall.pipeline.util import _smart_subject
@@ -78,6 +79,92 @@ def _recent_l10_similar(conn, merged_content: str, agent: str,
         if sim >= threshold:
             return r["id"]
     return None
+
+
+def dedupe_l10(dry_run: bool = False) -> dict:
+    """Archive redundant L10 整合 rows: keep exactly one per agent.
+
+    Historical damage (see ADR-0003): the old guard only matched rows whose
+    level was exactly 'L10', so once the classifier re-levelled an integration
+    to 'L6'/'L8' it stopped being seen and each cycle appended another copy.
+    Production showed 104 rows across 10 agents (92 redundant).
+
+    Matching is by content prefix (level-agnostic). The surviving row per agent
+    is the newest, and its level is restored to the canonical 'L10'.
+
+    Archiving sets ``memory_status='archived'`` — reversible, nothing is deleted.
+
+    NOTE: this intentionally does NOT touch L11. L11 rows are long-form real
+    content (719 of them share agents legitimately); de-duplicating them per
+    agent would destroy real memories.
+
+    Returns:
+        ``{"archived": int, "agents_redundant": int, "restored": int, "dry_run": bool}``
+    """
+    conn = get_conn()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        rows = conn.execute(
+            "SELECT id, agent_name FROM memories "
+            "WHERE content LIKE '[L10 整合]%' "
+            "AND COALESCE(memory_status, '') != 'archived' "
+            "ORDER BY id ASC"
+        ).fetchall()
+
+        by_agent: dict = defaultdict(list)
+        for r in rows:
+            by_agent[r["agent_name"]].append(r["id"])
+
+        redundant: list = []
+        keep: list = []
+        for ids in by_agent.values():
+            if len(ids) > 1:
+                redundant.extend(ids[:-1])
+            if ids:
+                keep.append(ids[-1])
+
+        agents_redundant = sum(1 for ids in by_agent.values() if len(ids) > 1)
+        if dry_run:
+            return {
+                "archived": len(redundant),
+                "agents_redundant": agents_redundant,
+                "restored": 0,
+                "dry_run": True,
+            }
+
+        archived = 0
+        for i in range(0, len(redundant), 200):
+            batch = redundant[i:i + 200]
+            ph = ",".join("?" * len(batch))
+            cur = conn.execute(
+                f"UPDATE memories SET memory_status = 'archived', updated_at = ? "
+                f"WHERE id IN ({ph})",
+                [now] + batch,
+            )
+            archived += cur.rowcount
+
+        # Restore canonical level on the surviving rows.
+        restored = 0
+        for i in range(0, len(keep), 200):
+            batch = keep[i:i + 200]
+            ph = ",".join("?" * len(batch))
+            cur = conn.execute(
+                f"UPDATE memories SET level = 'L10', updated_at = ? "
+                f"WHERE id IN ({ph}) AND level != 'L10' "
+                f"AND COALESCE(memory_status, '') != 'archived'",
+                [now] + batch,
+            )
+            restored += cur.rowcount
+
+        conn.commit()
+        return {
+            "archived": archived,
+            "agents_redundant": agents_redundant,
+            "restored": restored,
+            "dry_run": False,
+        }
+    finally:
+        conn.close()
 
 
 def integrate_step(min_categories: int = 2) -> dict:
@@ -179,22 +266,51 @@ def integrate_step(min_categories: int = 2) -> dict:
             l10_subject = _smart_subject(merged)
 
             ch = hashlib.sha256(merged.encode()).hexdigest()
-
-            # ✅ Semantic dedup: check against recent L10s
-            dup_id = _recent_l10_similar(conn, merged, agent)
-            if dup_id is not None:
-                skipped_duplicate += 1
-                continue
-
-            existing = conn.execute(
-                "SELECT id FROM memories WHERE content_hash = ?",
-                (ch,),
-            ).fetchone()
-            if existing:
-                skipped_duplicate += 1
-                continue
-
             now = datetime.now(timezone.utc).isoformat()
+
+            # ── L10 upsert ───────────────────────────────────────────────
+            # Cardinality contract: ONE cross-domain L10 integration per agent.
+            # The legacy guard only compared against the newest 5 rows whose
+            # level is exactly 'L10'; in production the classifier had already
+            # re-levelled earlier integrations to 'L6', so the guard never saw
+            # them and every cycle appended another row (visible as
+            # "来源：2 条" → "4 条" → "6 条" → "8 条" near-identical copies).
+            # Detect by content prefix (level-agnostic) and update in place.
+            l10_id = None
+            if get_config("distill.upsert_enabled", True):
+                prev = conn.execute(
+                    "SELECT id, content_hash FROM memories "
+                    "WHERE agent_name = ? AND content LIKE '[L10 整合]%' "
+                    "ORDER BY id DESC LIMIT 1",
+                    (agent,),
+                ).fetchone()
+                if prev is not None:
+                    if prev["content_hash"] == ch:
+                        skipped_duplicate += 1
+                        continue
+                    conn.execute(
+                        "UPDATE memories SET content = ?, content_hash = ?, "
+                        "subject = ?, category = ?, level = 'L10', "
+                        "updated_at = ?, occurred_at = ? WHERE id = ?",
+                        (merged, ch, l10_subject, best_cat, now, now, prev["id"]),
+                    )
+                    l10_id = prev["id"]
+
+            if l10_id is None:
+                # ✅ Semantic dedup: check against recent L10s
+                dup_id = _recent_l10_similar(conn, merged, agent)
+                if dup_id is not None:
+                    skipped_duplicate += 1
+                    continue
+
+                existing = conn.execute(
+                    "SELECT id FROM memories WHERE content_hash = ?",
+                    (ch,),
+                ).fetchone()
+                if existing:
+                    skipped_duplicate += 1
+                    continue
+
             # Majority project from source L9 memories
             source_id_params = tuple(source_ids)
             ph = ",".join("?" * len(source_ids))
@@ -202,17 +318,18 @@ def integrate_step(min_categories: int = 2) -> dict:
             l10_project = proj_row["project"] if proj_row else ""
             # I2: L10 is pipeline-generated synthetic insight, no conversation thread
             l10_thread_id = None
-            conn.execute(
-                "INSERT INTO memories "
-                "(content, content_hash, level, category, agent_name, project, subject, metadata, occurred_at, created_at, updated_at, thread_id) "
-                "VALUES (?, ?, 'L10', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    merged, ch, best_cat, agent, l10_project, l10_subject,
-                    json.dumps({"layer_source": {"value": "integrate_auto_v2", "_meta": {"version": 1, "written_at": now}}}, ensure_ascii=False),
-                    now, now, now, l10_thread_id,
-                ),
-            )
-            l10_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            if l10_id is None:
+                conn.execute(
+                    "INSERT INTO memories "
+                    "(content, content_hash, level, category, agent_name, project, subject, metadata, occurred_at, created_at, updated_at, thread_id, stream) "
+                    "VALUES (?, ?, 'L10', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ledger')",
+                    (
+                        merged, ch, best_cat, agent, l10_project, l10_subject,
+                        json.dumps({"layer_source": {"value": "integrate_auto_v2", "_meta": {"version": 1, "written_at": now}}}, ensure_ascii=False),
+                        now, now, now, l10_thread_id,
+                    ),
+                )
+                l10_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
             for sid in source_ids:
                 row2 = conn.execute(

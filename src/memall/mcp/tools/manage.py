@@ -156,5 +156,16 @@ def handle_db(arguments: dict) -> str:
         from memall.pipeline._backfill_project import backfill_project_ids
         result = backfill_project_ids(dry_run=arguments.get("dry_run", False))
         return json.dumps(result, ensure_ascii=False, default=str)
+    elif action == "dedupe_l9":
+        from memall.pipeline.distill import dedupe_l9
+        result = dedupe_l9(
+            dry_run=arguments.get("dry_run", False),
+            archive_corrupt=arguments.get("archive_corrupt", True),
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
+    elif action == "dedupe_l10":
+        from memall.pipeline.integrate import dedupe_l10
+        result = dedupe_l10(dry_run=arguments.get("dry_run", False))
+        return json.dumps(result, ensure_ascii=False, default=str)
     else:
         return json.dumps({"error": f"unknown action: {action}"})

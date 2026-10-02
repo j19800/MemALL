@@ -99,6 +99,14 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         # those carry genuine knowledge and must stay distillable/retrievable.
         "ledger_categories": ["heartbeat", "testing"],
     },
+    "distill": {
+        # Upsert L9 distillations instead of appending a new row per cycle.
+        # Root-cause fix for unbounded near-identical L9 accumulation (the old
+        # INSERT-only path keyed de-dup on a content hash that embeds a
+        # changing source count, so every cycle produced a new row).
+        # Contract: exactly ONE L9 per (agent_name, category).
+        "upsert_enabled": True,
+    },
     "lifecycle": {
         "cluster_threshold": 0.85,
         "connected_component_threshold": 0.85,

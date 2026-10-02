@@ -5,8 +5,9 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from collections import Counter, defaultdict
+from memall.config import get_config
 from memall.core.db import get_conn
-from memall.core.thin_waist import normalize_agent_name
+from memall.core.thin_waist import normalize_agent_name, _category_validity
 from memall.pipeline.util import _smart_subject
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ def distill_step() -> dict:
     conn.execute("PRAGMA foreign_keys=OFF")
     try:
         rows = conn.execute(
-            "SELECT id, content, category, agent_name, summary FROM memories WHERE category != '' AND category IS NOT NULL AND LENGTH(TRIM(content)) > 20 AND level NOT IN ('P0', 'P1', 'P2', 'P3', 'P4', 'L6', 'L9', 'L10', 'L11') ORDER BY id DESC LIMIT 5000"
+            "SELECT id, content, category, agent_name, summary FROM memories WHERE category != '' AND category IS NOT NULL AND LENGTH(TRIM(content)) > 20 AND level NOT IN ('P0', 'P1', 'P2', 'P3', 'P4', 'L6', 'L9', 'L10', 'L11') AND stream = 'knowledge' ORDER BY id DESC LIMIT 5000"
         ).fetchall()
 
         groups = defaultdict(list)
@@ -65,13 +66,17 @@ def distill_step() -> dict:
                 first_sentence = text.split("。")[0].split("\n")[0][:150]
                 if first_sentence and len(first_sentence) > 15:
                     key_sentences.append(first_sentence)
-            # Dedup by first 40 chars
+            # Dedup by first 40 chars.
+            # NOTE: do NOT reuse the name ``key`` here — it is the outer
+            # (agent_name, category) group key. Shadowing it corrupted every
+            # L9 header ("[L9 蒸馏] S 在 y 领域") and mis-attributed every
+            # distilled memory to agent 'system' with a 1-character category.
             seen = set()
             unique_sentences = []
             for s in key_sentences:
-                key = s[:40]
-                if key not in seen:
-                    seen.add(key)
+                frag = s[:40]
+                if frag not in seen:
+                    seen.add(frag)
                     unique_sentences.append(s)
             if unique_sentences:
                 content_lines.append("要点：" + " | ".join(unique_sentences[:3]))
@@ -86,7 +91,20 @@ def distill_step() -> dict:
                     if line:
                         content_lines.append(f"• {line}")
 
-            header = f"[L9 蒸馏] {key[0]} 在 {key[1]} 领域共 {len(mems)} 条"
+            # Defense in depth: distill writes straight to SQL (bypassing
+            # capture()), so the entry-point category gate cannot protect it.
+            # A malformed group key would still land single-char garbage in the
+            # header AND in the category column — sanitize once, use below.
+            l9_category = key[1]
+            _ok, _why = _category_validity(l9_category, 2)
+            if not _ok:
+                logger.warning(
+                    "distill: malformed category %r (%s) for group %s -> 'general'",
+                    l9_category, _why, key,
+                )
+                l9_category = "general"
+
+            header = f"[L9 蒸馏] {key[0]} 在 {l9_category} 领域共 {len(mems)} 条"
             if distinctive_topics:
                 header += f"\n关键词：{distinctive_topics}"
             merged_content = header + "\n" + "\n".join(content_lines)
@@ -103,6 +121,50 @@ def distill_step() -> dict:
             ch = hashlib.sha256(merged_content.encode()).hexdigest()
             # Thread: L9 distillation inherits from first source memory
             l9_thread_id = source_ids[0] if source_ids else None
+            l9_agent = normalize_agent_name(key[0])
+
+            # ── L9 upsert ────────────────────────────────────────────────
+            # Cardinality contract: exactly ONE L9 distillation per
+            # (agent_name, category).  Previously every pipeline cycle ran
+            # `INSERT OR IGNORE` keyed only on the full content_hash; because
+            # the header embeds a changing source count ("…领域共 10 条" →
+            # "11 条" → "12 条"), the hash always differed and a brand-new L9
+            # row was appended each cycle — 688 redundant near-identical L9
+            # rows accumulated in production.  Update the canonical row
+            # instead of inserting a new one.
+            new_id = None
+            if get_config("distill.upsert_enabled", True):
+                existing = conn.execute(
+                    "SELECT id, content_hash FROM memories "
+                    "WHERE level = 'L9' AND agent_name = ? AND category = ? "
+                    "ORDER BY id DESC LIMIT 1",
+                    (l9_agent, l9_category),
+                ).fetchone()
+                if existing is not None:
+                    if existing["content_hash"] == ch:
+                        # Distillation unchanged → nothing to write.
+                        continue
+                    conn.execute(
+                    "UPDATE memories SET content = ?, content_hash = ?, "
+                    "summary = ?, subject = ?, updated_at = ?, occurred_at = ?, "
+                    "thread_id = ?, project = CASE "
+                    "  WHEN project IS NULL OR project = '' THEN ? "
+                    "  ELSE project END "
+                    "WHERE id = ?",
+                        (merged_content, ch, l9_subject, l9_subject, now, now,
+                         l9_thread_id, l9_project, existing["id"]),
+                    )
+                    new_id = existing["id"]
+
+            if new_id is None:
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO memories (content, content_hash, level, owner, agent_name, category, summary, created_at, updated_at, occurred_at, subject, project, trust_level, access_count, metadata, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (merged_content, ch, "L9", "", l9_agent, l9_category, l9_subject, now, now, now, l9_subject, l9_project, 0, 0, "{}", l9_thread_id),
+                )
+                if cur.rowcount == 0:
+                    # Duplicate hash → record already exists, skip
+                    continue
+                new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
             for mid in mem_ids:
                 # Append to supersedes as JSON array of IDs
@@ -141,6 +203,95 @@ def distill_step() -> dict:
         return {"distilled": distilled, "groups_processed": len(groups)}
     finally:
         conn.execute(f"PRAGMA foreign_keys={'ON' if fk_was_on else 'OFF'}")
+        conn.close()
+
+
+def dedupe_l9(dry_run: bool = False, archive_corrupt: bool = True) -> dict:
+    """Archive redundant / corrupted L9 distillations.
+
+    Two classes of historical damage, both caused by defects now fixed at the
+    source (see :func:`distill_step`):
+
+    1. **Redundant** — the old INSERT-only path appended a fresh L9 row on every
+       pipeline cycle, so the same ``(agent_name, category)`` accumulated dozens
+       of near-identical rows.  Keep the newest row per group; archive the rest.
+    2. **Corrupted** — the group key was shadowed by the inner de-dup loop, so
+       those rows were written with ``agent_name='system'`` and a one-character
+       category.  They are unattributable and are archived too (the next
+       pipeline cycle regenerates a correct L9 via the upsert path).
+
+    Archiving sets ``memory_status='archived'`` (reversible; rows stay on disk and
+    are excluded from active retrieval).
+
+    Args:
+        dry_run: Report only, write nothing.
+        archive_corrupt: Also archive rows with a corrupt (<=1 char) category.
+
+    Returns:
+        ``{"archived": int, "groups_redundant": int, "corrupt": int, "dry_run": bool}``
+    """
+    conn = get_conn()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        rows = conn.execute(
+            "SELECT id, agent_name, category FROM memories "
+            "WHERE level = 'L9' AND COALESCE(memory_status, '') != 'archived' "
+            "ORDER BY id ASC"
+        ).fetchall()
+
+        groups: dict = defaultdict(list)
+        for r in rows:
+            groups[(r["agent_name"], r["category"])].append(r["id"])
+
+        # Keep the newest row of each group; everything older is redundant.
+        redundant: list = []
+        for ids in groups.values():
+            if len(ids) > 1:
+                redundant.extend(ids[:-1])
+
+        corrupt: list = []
+        if archive_corrupt:
+            corrupt = [
+                r["id"] for r in rows
+                if not (r["category"] or "").strip()
+                or len((r["category"] or "").strip()) <= 1
+                or r["id"] in redundant
+            ]
+            # Re-exclude rows already counted as redundant to avoid double work
+            # while still archiving corrupt *surviving* rows.
+            corrupt_only = [i for i in corrupt if i not in set(redundant)]
+        else:
+            corrupt_only = []
+
+        targets = sorted(set(redundant) | set(corrupt_only))
+        groups_redundant = sum(1 for ids in groups.values() if len(ids) > 1)
+
+        if dry_run:
+            return {
+                "archived": len(targets),
+                "groups_redundant": groups_redundant,
+                "corrupt": len(corrupt_only),
+                "dry_run": True,
+            }
+
+        archived = 0
+        for i in range(0, len(targets), 200):
+            batch = targets[i:i + 200]
+            ph = ",".join("?" * len(batch))
+            cur = conn.execute(
+                f"UPDATE memories SET memory_status = 'archived', updated_at = ? "
+                f"WHERE id IN ({ph}) AND level = 'L9'",
+                [now] + batch,
+            )
+            archived += cur.rowcount
+        conn.commit()
+        return {
+            "archived": archived,
+            "groups_redundant": groups_redundant,
+            "corrupt": len(corrupt_only),
+            "dry_run": False,
+        }
+    finally:
         conn.close()
 
 

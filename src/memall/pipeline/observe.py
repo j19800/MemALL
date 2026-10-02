@@ -121,8 +121,9 @@ def observation_step() -> dict:
 
         conn.commit()
         return report
-    except sqlite3.Error as e:
-        return {"error": str(e), "captured_as_memory": None}
+    except sqlite3.Error:
+        logger.warning("observation_step: DB error", exc_info=True)
+        raise
     finally:
         conn.close()
 
@@ -239,8 +240,11 @@ def _update_weekly_monthly(conn) -> dict:
         for wk, wk_mems in weeks.items():
             if len(wk_mems) < 3:
                 continue
+            # Level-agnostic guard: the classifier can re-level aggregates
+            # (see ADR-0003 — an L10-only guard silently broke in production),
+            # so match on agent + period summary regardless of level.
             existing = conn.execute(
-                "SELECT id FROM memories WHERE level = 'L6' AND agent_name = ? AND summary = ?",
+                "SELECT id FROM memories WHERE agent_name = ? AND summary = ?",
                 (agent, f"📅 周反思 {wk}"),
             ).fetchone()
             if existing:
@@ -264,8 +268,9 @@ def _update_weekly_monthly(conn) -> dict:
         for mk, mo_mems in months.items():
             if len(mo_mems) < 5:
                 continue
+            # Level-agnostic guard (same rationale as the weekly one above).
             existing = conn.execute(
-                "SELECT id FROM memories WHERE level = 'L6' AND agent_name = ? AND summary = ?",
+                "SELECT id FROM memories WHERE agent_name = ? AND summary = ?",
                 (agent, f"📅 月反思 {mk}"),
             ).fetchone()
             if existing:
