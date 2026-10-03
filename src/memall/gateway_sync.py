@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from memall.core.db import get_conn
+from memall.core.levels import normalize_level
 from memall.core.thin_waist import normalize_agent_name
 
 _PROJECT_DIR = Path.home() / ".memall"
@@ -151,7 +152,7 @@ def _import_memories(conn, memories: list, agent_name: str) -> tuple:
         fields = {
             "content": m.get("content", ""),
             "content_hash": h,
-            "level": m.get("level", "P2"),
+            "level": normalize_level(m.get("level", "P2")),
             "owner": m.get("owner", ""),
             "agent_name": agent_name,
             "subject": m.get("subject", ""),

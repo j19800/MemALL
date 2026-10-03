@@ -8,6 +8,8 @@ from typing import Dict
 from contextlib import contextmanager
 from pathlib import Path
 
+from memall.core.levels import LEVEL_SQL_LIST
+
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +54,7 @@ CREATE TABLE IF NOT EXISTS memories (
     content TEXT NOT NULL,
     content_hash TEXT NOT NULL UNIQUE,
     level TEXT NOT NULL DEFAULT 'P2'
-        CHECK (level IN ('P0','P1','P2','L1','L2','L3','L4','L5','L6','L7','L8','L9','L10','L11')),
+        CHECK (level IN (__LEVEL_ENUM__)),
     owner TEXT NOT NULL DEFAULT '',
     agent_name TEXT NOT NULL DEFAULT '',
     creator TEXT NOT NULL DEFAULT '',
@@ -333,7 +335,7 @@ CREATE TABLE IF NOT EXISTS shared_records (
 );
 CREATE INDEX IF NOT EXISTS idx_shared_target ON shared_records(target_agent);
 CREATE INDEX IF NOT EXISTS idx_shared_source ON shared_records(source_agent);
-"""
+""".replace("__LEVEL_ENUM__", LEVEL_SQL_LIST)
 
 FTS5_TRIGGERS = """
 CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
@@ -479,6 +481,14 @@ def init_db(conn=None, migrate=True, db_path_for_backup: str = ""):
                     conn.commit()
             except ImportError:
                 logger.warning("db.py: migration import failed", exc_info=True)
+        # Safety net: migration 021 rebuilds ``memories`` from an explicit column
+        # list, dropping columns that later migrations re-add (025 ``creator`` /
+        # 026 ``stream``).  If one of those migrations is skipped — e.g. it hit a
+        # transient "database is locked" — the schema silently loses the column
+        # and every later write fails.  Re-assert the expected columns after
+        # migrating so a skipped migration cannot corrupt the schema.
+        _ensure_missing_columns(conn)
+        conn.commit()
         # Seed "system" identity — required by capture() identity check
         # (normalize_agent_name() falls back to "system" for empty/invalid names)
         conn.execute(

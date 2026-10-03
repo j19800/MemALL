@@ -23,7 +23,7 @@ def adaptive_ttl_step() -> dict:
     规则:
     - 最近 7 天被访问 > 5 次的记忆: TTL 延长 2 倍
     - 被其他记忆引用的记忆: TTL 延长 1.5 倍
-    - 30 天未访问且未被引用的 P2 记忆: 降级为 P3
+    - 30 天未访问且未被引用的 P2 记忆: 标记为 dormant
     """
     with pool_conn() as conn:
         now = datetime.now(timezone.utc)
@@ -57,23 +57,26 @@ def adaptive_ttl_step() -> dict:
                 (r["id"],),
             )
 
-        # 3. 长期未访问 -> 降级
+        # 3. 长期未访问 -> 降级为 dormant
+        #    canonical enum 只有 P0/P1/P2 + L1..L11，P2 已是最低优先级，没有可降的
+        #    level；因此“降级”用 memory_status='dormant' 表达，与
+        #    auto_dream._schedule_forgetting / lifecycle._mark_dormant 一致。
+        #    （旧代码写 level='P3'/'P4'，会被 memories.level 的 CHECK 拒绝并抛
+        #    IntegrityError —— review F-01。）
         degraded = 0
         stale = conn.execute(
-            "SELECT id, level FROM memories WHERE access_count = 0 "
-            "AND created_at < ? AND level IN ('P2','P3','P4') AND memory_status IS NULL",
+            "SELECT id FROM memories WHERE access_count = 0 "
+            "AND created_at < ? AND level = 'P2' AND memory_status IS NULL",
             ((now - timedelta(days=30)).isoformat(),),
         ).fetchall()
 
         for r in stale:
-            level_map = {"P2": "P3", "P3": "P4", "P4": "P4"}
-            new_level = level_map.get(r["level"], "P4")
-            if new_level != r["level"]:
-                conn.execute(
-                    "UPDATE memories SET level = ?, updated_at = ? WHERE id = ?",
-                    (new_level, now.isoformat(), r["id"]),
-                )
-                degraded += 1
+            conn.execute(
+                "UPDATE memories SET memory_status = 'dormant', updated_at = ? "
+                "WHERE id = ?",
+                (now.isoformat(), r["id"]),
+            )
+            degraded += 1
 
         conn.commit()
 

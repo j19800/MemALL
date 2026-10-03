@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from .db import get_pool, content_hash
+from .levels import normalize_level
 from .models import Memory, MemoryInput
 from .nlp import cosine_sim, compute_tfidf
 from .project_infer import infer_project
@@ -285,6 +286,9 @@ def _row_to_memory(row) -> Memory:
         level=row["level"],
         owner=row["owner"],
         agent_name=row["agent_name"],
+        # creator = the agent that triggered the write (v0.1.61 owner/creator
+        # semantics); guarded for pre-migration-025 databases.
+        creator=row["creator"] if "creator" in row.keys() else "",
         subject=row["subject"],
         project=row["project"],
         category=row["category"],
@@ -532,6 +536,11 @@ def _capture_normalize_and_validate(
 
     data.agent_name = normalize_agent_name(data.agent_name)
     _validate_category(data)
+    # level must land inside the canonical enum before it reaches the INSERT:
+    # the DB CHECK rejects anything else with IntegrityError, and this is the
+    # single write entry every path funnels through (MCP / smart_store /
+    # store_batch / agent_memory.add / raw calls).
+    data.level = normalize_level(data.level)
     # creator = the agent that triggered the write; default to the writing agent.
     if not data.creator:
         data.creator = data.agent_name
@@ -865,12 +874,17 @@ def _capture_post_insert(conn, mem_id: int, data: MemoryInput, h: str) -> None:
     _bg_content = data.content
     _bg_agent = data.agent_name
     _bg_category = data.category
+    # Bind the thread to the DB this capture wrote to. Reading the module-global
+    # DB_PATH *inside* the thread lets it target a different database if the path
+    # is repointed between spawn and run (test fixtures do exactly this), which
+    # surfaces as a "database is locked" race on the freshly created file.
+    from memall.core.db import DB_PATH as _bg_db_path
 
     def _background_post_process():
         """Run embedding and dream_scan in a daemon thread."""
         from memall.core.db import get_conn as _bg_get_conn
 
-        _bg_conn = _bg_get_conn()
+        _bg_conn = _bg_get_conn(_bg_db_path)
         try:
             try:
                 from memall.graph.embeddings import _auto_embed
@@ -1071,6 +1085,10 @@ def update(memory_id: int, **fields) -> bool:
                             normalized,
                         )
                     v = normalized
+                elif k == "level":
+                    # Keep updates inside the canonical enum too — the CHECK
+                    # constraint would otherwise raise IntegrityError.
+                    v = normalize_level(v)
                 sets.append(f"{k} = ?")  # safe: k is whitelisted
                 params.append(v)
         if not sets:
@@ -1603,15 +1621,12 @@ def traverse(
 
 
 def _sanitize_level(level: str, default: str = "P2") -> str:
-    """Restrict free-form level input to known safe shapes."""
-    if not level or not isinstance(level, str):
-        return default
-    lvl = level.strip()
-    if re.match(r"^(L\d+|P\d+)$", lvl, re.IGNORECASE):
-        return lvl.upper()
-    if lvl.lower() in ("medium", "low", "high", "critical", "normal"):
-        return lvl.lower()
-    return default
+    """Restrict free-form level input to the canonical enum.
+
+    Delegates to :func:`memall.core.levels.normalize_level` so the value can
+    never fall outside what the ``memories.level`` CHECK constraint accepts.
+    """
+    return normalize_level(level, default)
 
 
 def smart_store(

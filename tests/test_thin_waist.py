@@ -205,7 +205,17 @@ def test_sanitize_level_whitelist():
     assert _sanitize_level("P2") == "P2"
     assert _sanitize_level("l4") == "L4"       # case-normalized
     assert _sanitize_level("L11") == "L11"     # used in production DB
-    assert _sanitize_level("medium") == "medium"
+
+    # Word aliases collapse into the priority band (the DB CHECK only accepts
+    # P0/P1/P2 + L1..L11, so "medium" must never reach the INSERT as-is).
+    assert _sanitize_level("medium") == "P2"
+    assert _sanitize_level("high") == "P1"
+    assert _sanitize_level("critical") == "P0"
+
+    # Out-of-enum numeric shapes are clamped, not passed through
+    assert _sanitize_level("P3") == "P2"
+    assert _sanitize_level("P4") == "P2"
+    assert _sanitize_level("L12") == "P2"
 
     # Dangerous / unknown values fall back to the default
     assert _sanitize_level('"><script>alert(1)</script>') == "P2"

@@ -22,7 +22,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 logger = logging.getLogger("memall.import")
 
 LEVEL_MAP = {
-    "P0": "P0", "P1": "P1", "P2": "P2", "P3": "P3", "P4": "P4",
+    # canonical enum (memall.core.levels) has no P3/P4 — clamp low-importance
+    # external values to P2 so imports never hit the memories.level CHECK.
+    "P0": "P0", "P1": "P1", "P2": "P2", "P3": "P2", "P4": "P2",
     "L1": "L1", "L2": "L2", "L3": "L3", "L4": "L4", "L5": "L5",
     "L6": "L6", "L7": "L7", "L8": "L8", "L9": "L9", "L10": "L10", "L11": "L11",
     "observation": "P2", "human": "P2", "system": "P2",
@@ -32,17 +34,27 @@ LEVEL_MAP = {
     "summary": "L9", "distilled": "L9",
 }
 
+# Case-insensitive lookup built from LEVEL_MAP (numeric keys uppercase,
+# word aliases lowercase — see _normalize_level).
+_LEVEL_LOOKUP = {k.lower(): v for k, v in LEVEL_MAP.items()}
+
 
 def _normalize_level(level: Any) -> str:
-    """Map external level names to MemALL levels."""
+    """Map external level names to MemALL levels (case-insensitive).
+
+    Numeric keys in ``LEVEL_MAP`` are uppercase (``P0``..``L11``) while the word
+    aliases are lowercase (``session``, ``decision``, ...).  Compare
+    case-insensitively so both families resolve — previously the input was
+    upper-cased and the word aliases never matched, silently falling back to P2.
+    """
     if not level:
         return "P2"
-    level = str(level).strip().upper()
-    if level in LEVEL_MAP:
-        return LEVEL_MAP[level]
+    key = str(level).strip().lower()
+    if key in _LEVEL_LOOKUP:
+        return _LEVEL_LOOKUP[key]
     # Try partial match
-    for k, v in LEVEL_MAP.items():
-        if k in level or level in k:
+    for k, v in _LEVEL_LOOKUP.items():
+        if k in key or key in k:
             return v
     return "P2"
 

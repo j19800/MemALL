@@ -1,3 +1,25 @@
+## [v0.1.65] - 2026-10-03
+
+### Fixed（深度审查 F-01 / F-02：level 枚举与 owner 不变量）
+
+- **F-01 — level 枚举三处不一致导致未捕获 `IntegrityError`（P1）**：`db.py` / `agent_memory.py` / `thin_waist.py` 各自维护 level 白名单，应用层放行 `P3`/`P4`/`medium` 等，而 `memories.level` 的 CHECK 只接受 `P0/P1/P2` + `L1..L11`，写入直接抛 `sqlite3.IntegrityError` 并中断链路。修复：新建 **`core/levels.py` 作为唯一枚举来源**（`PRIORITY_LEVELS` + `LIFECYCLE_LEVELS` + `VALID_LEVELS` + `LEVEL_SQL_LIST` + `normalize_level()`），`db.py` 用 `LEVEL_SQL_LIST` 动态生成 CHECK 约束，所有写入路径统一收敛到 `normalize_level`：`thin_waist._capture_normalize_and_validate`（所有 capture 入口的唯一收口）、`thin_waist.update` 的 `level` 分支、`thin_waist._sanitize_level`（改为委托）、`agent_memory.add`、`gateway_sync._import_memories`（bundle 导入）。
+- **F-01 同类变体（三处绕过 capture 的写入路径）**：① `pipeline/adaptive_memory.adaptive_ttl_step` 原把 30 天未访问的 P2 直接 `UPDATE level='P3'/'P4'` → 触发 CHECK；改为标记 `memory_status='dormant'`（与 `auto_dream` / `lifecycle` 语义一致，P2 已是最低优先级、无可降 level）；② `pipeline/ops.batch_restore` 从 `metadata.original_level` 恢复遗留 `P4`/`medium` → 改用 `normalize_level` 收敛；③ `cli/import_data.LEVEL_MAP` 存在 `'P3':'P3','P4':'P4'` 自相矛盾映射 → 收敛到 `P2`，并新增大小写不敏感 `_LEVEL_LOOKUP`（修复 `Decision`/`session` 等词别名因大写化永不匹配、导入语义静默丢失为 P2 的问题）。
+- **F-02 — `agent_memory.add()` 把人类归属静默改写为 agent（P1）**：`owner=owner or agent` 绕过 `capture()` 的「owner 必须为人」兜底（设计不变量 #1，见 v0.1.61/A1）。改为 `owner=owner or get_config("identity.human_owner", "老陈")`，与 `capture()` 行为对齐。
+
+### Fixed（健壮性与测试基建）
+
+- **备份文件名碰撞**：`pipeline/backup.backup_step()` 时间戳为秒级 `%Y%m%d_%H%M%S`，快速连续备份产生同名文件抛 `FileExistsError`（`test_backup_step_creates_backup` 因此 flaky）→ 改为微秒级 `%Y%m%d_%H%M%S_%f`；`rotation()` 的定宽字符串倒序仍保持时间顺序。
+- **迁移后 schema 兜底**：迁移 021 会按显式列清单重建 `memories`，若 025(`creator`)/026(`stream`) 因瞬时锁被跳过，schema 会静默丢列、后续所有写入失败 → `init_db` 迁移后调用 `_ensure_missing_columns` 重新断言期望列。
+- **后台线程绑定 DB 路径**：`thin_waist._capture_post_insert` 的守护线程原先在运行期读取模块全局 `DB_PATH`，fixture 重定向路径后会打到新库并产生 `database is locked` 竞争 → 改为在 spawn 时绑定写入时的 `DB_PATH`。
+- **测试 fixture 加固**：`tests/conftest.py` 每例先关闭上一例的连接池，并对瞬时 `database is locked` 的迁移做最多 5 次退避重试。
+
+### Added（回归测试）
+
+- **`src/memall/core/levels.py`**：唯一 level 枚举来源与 `normalize_level()` 收敛器。
+- **`tests/test_level_and_owner_invariants.py`**：覆盖 `normalize_level` 收敛、`adaptive_ttl_step` 不再写非法 level、`batch_restore` 收敛遗留 `original_level`、`import_data` 词别名大小写不敏感、`agent_memory.add` owner 回退人类等。
+- **`tests/test_thin_waist.py`**：更新 `_sanitize_level` 断言——`medium/high/critical` 折叠到优先级带、`P3/P4/L12` 收敛为 `P2`。
+- 全量回归：**466 passed / 2 skipped**。
+
 ## [v0.1.64] - 2026-10-02
 
 ### Changed（工程化与卫生）

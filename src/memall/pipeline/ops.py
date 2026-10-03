@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any, Sequence
 
 from memall.core.db import get_conn
+from memall.core.levels import normalize_level
 from memall.core.nlp import compute_tfidf, cosine_sim
 
 
@@ -768,10 +769,13 @@ def batch_restore(
 
             orig = meta.pop("original_level", None)
             if isinstance(orig, dict) and orig.get("value"):
-                target_level = orig["value"]
+                # original_level metadata may predate the canonical enum (legacy
+                # "P3"/"P4"/"medium"); normalize so the restore cannot violate
+                # the memories.level CHECK.
+                target_level = normalize_level(orig["value"])
             else:
                 # level is no longer clobbered on archive — keep the canonical value
-                target_level = row["level"] or "P2"
+                target_level = normalize_level(row["level"] or "P2")
                 fallback_p2 += 1
 
             conn.execute(

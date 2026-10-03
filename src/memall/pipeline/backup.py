@@ -9,7 +9,7 @@ def backup_step() -> dict:
 
     backup_dir = DB_PATH.parent / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     backup_path = backup_dir / f"data_{stamp}.db"
     tmp_path = backup_dir / f"data_{stamp}.tmp"
 

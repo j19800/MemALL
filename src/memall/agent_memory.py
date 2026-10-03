@@ -15,6 +15,8 @@ import json
 import logging
 from typing import Optional
 
+from memall.config import get_config
+from memall.core.levels import normalize_level
 from memall.core.models import MemoryInput
 from memall.core.thin_waist import capture as _capture, retrieve
 
@@ -43,10 +45,10 @@ def add(content: str, agent: str = "", owner: str = "",
     Args:
         content: Memory text content (required).
         agent: Agent name (required for project inference).
-        owner: Display name (defaults to agent).
+        owner: Human owner display name (defaults to ``identity.human_owner``).
         subject: Short title (auto-generated if empty).
         category: Memory category (default "general").
-        level: Memory level (P0-P4, L1-L10).
+        level: Memory level (P0/P1/P2, L1-L11); normalized to the canonical enum.
         project: **Project name.** If empty, inferred from
                  ``agent`` / ``content`` via ``infer_project()``.
                  This ensures the ``project`` field is never left
@@ -81,16 +83,16 @@ def add(content: str, agent: str = "", owner: str = "",
     if not project:
         project = infer_project(agent_name=agent, category=category, content=content)
 
-    # Ensure level is safe
-    if level not in ("P0", "P1", "P2", "P3", "P4",
-                     "L1", "L2", "L3", "L4", "L5",
-                     "L6", "L7", "L8", "L9", "L10"):
-        level = "P2"
+    # Normalize level into the canonical enum (P0/P1/P2 + L1..L11) so the DB
+    # CHECK constraint can never reject the write.
+    level = normalize_level(level)
 
     inp = MemoryInput(
         content=content,
         level=level,
-        owner=owner or agent,
+        # owner is ALWAYS a human (design invariant #1): fall back to the
+        # configured human owner, never to the writing agent.
+        owner=owner or get_config("identity.human_owner", "老陈"),
         agent_name=agent,
         subject=subject,
         project=project,
