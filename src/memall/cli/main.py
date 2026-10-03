@@ -432,6 +432,7 @@ def app():
     p_gw_disc.add_argument("--timeout", type=int, default=5, help="Scan timeout (default 5s)")
     p_gw_pair = p_gw_sub.add_parser("pair", help="Pair with a remote peer")
     p_gw_pair.add_argument("--address", required=True, help="Peer IP:PORT")
+    p_gw_pair.add_argument("--code", default="", help="Peer's one-time pairing code (from its log/UI)")
     p_gw_peers = p_gw_sub.add_parser("peers", help="List paired peers")
     p_gw_fed = p_gw_sub.add_parser("federated", help="Federated query across peers")
     p_gw_fed.add_argument("--query", required=True, help="Search query")

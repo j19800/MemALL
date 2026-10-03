@@ -2,11 +2,13 @@ import importlib
 import inspect
 import json
 import logging
+import os
 import queue
+import socket
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from .metrics import collect_metrics, append_metrics
 from memall.core.db import get_conn
@@ -29,6 +31,81 @@ QUALITY_GATES = {
     "enrich": {"min_input": 1},
     "link": {"min_input": 3},
 }
+
+
+# ── Step idempotency / reentrancy contract (F-05) ──────────────────────
+#
+# The pipeline commits after EVERY step (see ``_run_step``): a step is the
+# smallest unit of work, and releasing the write lock at step boundaries is
+# what keeps a long run from blocking every other writer for its whole
+# duration.  The trade-off is that a crash mid-run leaves the database
+# partially advanced — earlier steps applied, later ones not.
+#
+# Crash-safety therefore rests on an explicit contract: **every step must be
+# reentrant** — running it again on an already-partially-processed database
+# must converge to the same state instead of duplicating rows or corrupting
+# derived data.  Re-running the whole pipeline after an interruption is
+# therefore safe by construction.
+#
+# Each step declares how it satisfies the contract:
+#   dedup      derived rows are keyed by ``content_hash`` / a unique key, or
+#              guarded by an explicit existence check — re-running cannot
+#              create duplicates.
+#   cursor     advances a persisted cursor/state row; a re-run resumes from
+#              where the previous attempt stopped.
+#   recompute  idempotently overwrites / recomputes derived state (UPDATE,
+#              INSERT OR REPLACE, ON CONFLICT).
+#   external   writes outside the memories/edges graph (backup / archive),
+#              guarded by its own naming or uniqueness rules.
+#
+# ``validate_step_contracts()`` asserts every registered step declares a
+# class, so adding a step without stating its idempotency fails loudly.
+PIPELINE_CONTRACT_VERSION = 1
+
+STEP_IDEMPOTENCY: dict[str, str] = {
+    "event_processor":   "cursor",     # marks pipeline_events.processed_at
+    "enrich":            "recompute",
+    "cleanup":           "recompute",
+    "classify":          "cursor",     # pipeline_cursors
+    "procedure":         "dedup",      # skips rows already annotated
+    "time_slice":        "cursor",     # pipeline_state
+    "arc_status":        "recompute",
+    "echo":              "recompute",  # UPDATE echo_score
+    "epoch":             "recompute",  # ON CONFLICT DO UPDATE/NOTHING
+    "convergence":       "dedup",
+    "link":              "recompute",  # INSERT OR IGNORE edges
+    "decay":             "recompute",
+    "backup":            "external",
+    "session":           "dedup",
+    "extract":           "cursor",     # pipeline_cursors
+    "entity_extraction": "dedup",      # entities UNIQUE(name, entity_type)
+    "embed_index":       "recompute",  # INSERT OR REPLACE idx_meta
+    "reflect":           "dedup",
+    "distill_l7":        "dedup",
+    "distill":           "dedup",
+    "integrate":         "dedup",
+    "improve":           "dedup",      # guarded by (agent_name, pattern_id)
+    "observation":       "dedup",
+    "identity":          "recompute",
+    "reasoning":         "recompute",
+    "auto_summarize":    "dedup",
+    "discover_assoc":    "dedup",
+    "cross_agent":       "dedup",
+    "adaptive_ttl":      "recompute",
+    "archive":           "external",
+}
+
+_IDEMPOTENCY_CLASSES = {"dedup", "cursor", "recompute", "external"}
+
+
+def validate_step_contracts() -> list[str]:
+    """Return registered steps that lack a declared idempotency contract."""
+    registered = {name for name, _, _, _ in _PIPELINE_STEPS}
+    return sorted(registered - set(STEP_IDEMPOTENCY))
+
+
+def _step_contract(step_name: str) -> str:
+    return STEP_IDEMPOTENCY.get(step_name, "recompute")
 
 
 # ── Step runner ────────────────────────────────────────────────────────
@@ -164,6 +241,7 @@ def _run_step(step_name: str, step_fn, step_results: dict,
             "records_out": records_after,
             "result": _coerce_int(result),
             "error": None,
+            "contract": _step_contract(step_name),
         }
 
         if quality_gate:
@@ -193,6 +271,7 @@ def _run_step(step_name: str, step_fn, step_results: dict,
             "elapsed_ms": elapsed_ms,
             "records_in": records_before,
             "error": str(e)[:300],
+            "contract": _step_contract(step_name),
         }
 
 
@@ -200,13 +279,19 @@ def _run_step(step_name: str, step_fn, step_results: dict,
 
 
 def _create_pipeline_run() -> int:
-    """Insert a new pipeline_runs row and return its id."""
+    """Insert a new pipeline_runs row and return its id.
+
+    Records the owning process (pid/host) and the idempotency contract
+    version so an orphaned run left by a dead process is identifiable.
+    """
     conn = get_conn()
     try:
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
-            "INSERT INTO pipeline_runs (started_at, status) VALUES (?, 'running')",
-            (now,),
+            "INSERT INTO pipeline_runs "
+            "(started_at, status, contract_version, pid, host) "
+            "VALUES (?, 'running', ?, ?, ?)",
+            (now, PIPELINE_CONTRACT_VERSION, os.getpid(), socket.gethostname()),
         )
         conn.commit()
         return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -247,6 +332,46 @@ def _finalize_pipeline_run(run_id: int, entries: list[dict],
 
 # Module-level holder for pipeline start time (used in _finalize_pipeline_run)
 _pipeline_start_time: float = 0.0
+
+
+# A run still "running" after this long is treated as abandoned by a crashed
+# process (default 2h — comfortably above any observed run duration).
+STALE_RUN_SECONDS = 7200
+
+
+def recover_stale_pipeline_runs(max_age_seconds: int = STALE_RUN_SECONDS) -> int:
+    """Reclassify ``running`` rows left behind by a crashed pipeline.
+
+    A run that never reached :func:`_finalize_pipeline_run` (process killed,
+    machine rebooted) stays ``running`` forever, which silently drags down the
+    health success rate and hides the crash.  Any run still ``running`` after
+    *max_age_seconds* is marked ``interrupted`` with the reason recorded, so it
+    becomes visible and can be safely re-run — every step is reentrant per
+    ``STEP_IDEMPOTENCY``.
+
+    Returns the number of rows reclassified.
+    """
+    conn = get_conn()
+    try:
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(seconds=max_age_seconds)).isoformat()
+        now_iso = now.isoformat()
+        cur = conn.execute(
+            "UPDATE pipeline_runs SET status = 'interrupted', ended_at = ?, "
+            "interrupted_at = ?, "
+            "error = CASE WHEN error IS NULL OR error = '' "
+            "  THEN 'interrupted: run did not finish within the stale window' "
+            "  ELSE error END "
+            "WHERE status = 'running' AND started_at < ?",
+            (now_iso, now_iso, cutoff),
+        )
+        conn.commit()
+        n = cur.rowcount or 0
+        if n:
+            logger.warning("Recovered %d stale pipeline run(s) → interrupted", n)
+        return n
+    finally:
+        conn.close()
 
 
 # ── Level discipline ───────────────────────────────────────────────────
@@ -397,6 +522,14 @@ def run_pipeline(
         return {"status": "dry_run", "results": results, "elapsed": 0}
 
     dispatch_lifecycle(HOOK_PRE_PIPELINE, dry_run=dry_run)
+
+    # F-05: a previous run may have been interrupted by a crash.  Mark stale
+    # "running" rows as interrupted before starting a new one, so health stats
+    # reflect reality and the new run is not confused with the dead one.
+    try:
+        recover_stale_pipeline_runs()
+    except sqlite3.Error as e:
+        logger.warning("stale pipeline run recovery failed (non-fatal): %s", e)
 
     run_id = _create_pipeline_run()
     pipeline_conn = get_conn()

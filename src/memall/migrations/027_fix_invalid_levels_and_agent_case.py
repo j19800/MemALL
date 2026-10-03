@@ -19,6 +19,10 @@ value that is not part of the canonical enum (P0,P1,P2,L1..L11, per ADR-0001):
 Idempotent and safe to re-run.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 MIGRATION_ID = "027_fix_invalid_levels_and_agent_case"
 DESCRIPTION = "Repair invalid level values (archived/medium/P4) and normalize agent_name casing"
 
@@ -67,13 +71,13 @@ def apply(conn) -> None:
                         f"DELETE FROM {table} WHERE memory_id IN ({marks})", junk_ids
                     )
                 except Exception:
-                    pass  # table may not exist / use a different key on older DBs
+                    logger.debug("027: cleanup of %s skipped (table/key absent)", table, exc_info=True)
             try:
                 conn.execute(
                     f"DELETE FROM mem_vec WHERE rowid IN ({marks})", junk_ids
                 )
             except Exception:
-                pass  # vec0 unavailable on plain connections
+                logger.debug("027: mem_vec cleanup skipped (vec0 unavailable)", exc_info=True)
             conn.execute(f"DELETE FROM memories WHERE id IN ({marks})", junk_ids)
 
         # 4. agent_name casing normalization

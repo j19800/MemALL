@@ -133,7 +133,7 @@ class SummaryStrategy(MemoryStrategy):
                         (mid, sid, now),
                     )
                 except Exception:
-                    pass
+                    logger.debug("SummaryStrategy: refines edge insert failed (non-fatal)", exc_info=True)
             conn.commit()
 
             logger.info(
@@ -149,7 +149,7 @@ class SummaryStrategy(MemoryStrategy):
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.debug("SummaryStrategy: connection close failed", exc_info=True)
 
     def _generate_summary_from_ids(self, memory_ids: list[int]) -> Optional[str]:
         """Generate summary text from specific memory IDs without storing."""

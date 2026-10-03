@@ -1,3 +1,23 @@
+## [v0.1.66] - 2026-10-03
+
+### Fixed（深度审查 F-03 ~ F-09 全面修复）
+
+- **F-03 — `FaissProvider` 每次编码重建模型（P1，性能/内存）**：`_encode()` 每次调用都 `SentenceTransformer("all-MiniLM-L6-v2")`，单次数百 MB、数秒延迟。改为模块级线程安全单例 `_get_st_model()`（双重检查锁），与仓库内其它编码器（`graph/embeddings._get_model`、`core/nlp`、reranker）一致复用。
+- **F-04 — 两套调度器任务重叠（P2）**：插件 `plugins/scheduler.py` 曾注册 `daily_forget` / `daily_security` / `daily_lifecycle` / `daily_dream`，与 `scheduler/scheduler.py` 守护进程的 forget/security 任务重叠，两套同时启用时会重复执行破坏性维护。修复：插件只保留 capture/pipeline 生命周期钩子，**所有周期任务唯一归属守护进程**；`lifecycle` / `dream` 两个破坏性 pass 集中到守护进程并改为 **opt-in（默认关闭）**，新增配置 `scheduler.lifecycle_enabled|dream_enabled|lifecycle_interval|dream_interval`。
+- **F-05 — 管道逐步提交弱化原子性（P2）**：管道每步提交（避免长事务占写锁），崩溃会留下半推进状态。修复：为全部 30 个注册步骤声明**显式幂等契约**（`STEP_IDEMPOTENCY`：`dedup` / `cursor` / `recompute` / `external`），`validate_step_contracts()` 断言新增步骤必须声明契约；`pipeline_runs` 扩展 `contract_version` / `pid` / `host` / `interrupted_at` 与 `status` 索引（迁移 032）；新增 `recover_stale_pipeline_runs()`，把崩溃遗留的 `running` 行收敛为 `interrupted` 并记录原因；`health.collect()` 暴露 `pipeline_interrupted_recent` 并在有中断时给出重跑提示。
+- **F-06 — 回环写/管理端点未鉴权 + 限流后置（P2，安全）**：`/pipeline/run`、`/migrations/run` 对回环来源免鉴权，任何本机脚本/被投毒的页面即可重跑迁移或管道；限流又排在鉴权之后，未鉴权端点反而绕过限流。修复：① 新增**每实例 CSRF token**（`GET /ui/session` 仅向回环+可信 Origin 下发，前端 `X-MemAll-CSRF` 回显），状态变更端点要求 Bearer 或 CSRF；② `/pair` 改为**一次性配对码 challenge-response**（常量时间比较、成功后立即轮换、失败关闭），`pair_with_peer` 增加 `code` 参数、CLI 增加 `--code`，启动时打印配对码；③ **限流前置**到所有 allow-list 之前，`/`、`/health`、`/favicon.ico`、`/static` 豁免；④ 补齐此前从未注册的 `POST /pair` 路由。
+- **F-07 — L10 去重依赖正文前缀（P2）**：`integrate_step` / `dedupe_l10` 靠 `content LIKE '[L10 整合]%'` 识别每 agent 唯一的跨域整合行，把业务语义耦合到展示字符串，格式变更/手工编辑/历史迁移都可能误匹配并破坏 upsert。修复：改用结构化 `metadata.kind='l10_integration'`（`json_extract` + `json_valid` 兜底），迁移 030 为遗留行回填该标记（幂等、可回滚）。
+- **F-08 — 静默吞错（P3，可观测性）**：清理 `src/memall` 下全部 `except Exception: pass`（约 13 处：`gateway_sync`、`context_assembler`×3、`gateway_html`、`strategy/summary`×2、`pipeline/entity_pipeline`、迁移 021/027/029 等），改为 `logger.debug(..., exc_info=True)` 保留堆栈，故障可诊断而不改变控制流。
+- **F-09 — `thin_waist.py` 巨型模块（P3，结构）**：2256 行单文件按关注点拆分，检索/重排（`vector_search` / `hybrid_search` / `timeline` 及 `_rerank*` / `_load_reranker_onnx`）迁至新模块 **`core/thin_waist_search.py`**（隔离 onnxruntime / tokenizers / sentence-transformers 重依赖），`thin_waist.py` 缩减至约 1738 行并经再导出保持对外导入面不变（`from memall.core.thin_waist import hybrid_search, vector_search, timeline` 继续可用）。
+
+### Added（回归测试）
+
+- **`tests/test_pipeline_contract.py`**：断言每个注册步骤都声明幂等契约、陈旧 `running` 运行被收敛为 `interrupted` 且打上 `interrupted_at`。
+- **`tests/test_gateway_security_f06.py`**：覆盖 CSRF 缺失拒绝、Bearer/CSRF 放行、`/ui/session` 仅回环下发、`/pair` 一次性码校验与轮换、限流前置。
+- **`tests/test_scheduler.py`**：改为断言插件不再持有周期任务、守护进程 `lifecycle`/`dream` 默认关闭。
+- **`src/memall/migrations/030_backfill_l10_kind.py`** / **`032_add_pipeline_run_contract.py`**：分别回填 L10 结构化标记、扩展 `pipeline_runs` 契约字段。
+- 全量回归：**486 passed / 2 skipped**。
+
 ## [v0.1.65] - 2026-10-03
 
 ### Fixed（深度审查 F-01 / F-02：level 枚举与 owner 不变量）

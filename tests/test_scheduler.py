@@ -110,17 +110,28 @@ def test_scheduler_run_task_tracks_error():
     print("  PASS test_scheduler_run_task_tracks_error")
 
 
-def test_create_default_scheduler():
-    """create_default_scheduler should register built-in tasks."""
-    from memall.plugins.scheduler import create_default_scheduler
+def test_plugin_no_longer_owns_periodic_tasks():
+    """F-04: 周期任务集中在 scheduler/，插件不得再注册每日任务。
 
-    sched = create_default_scheduler()
-    tasks = sched.list_tasks()
-    names = [t["name"] for t in tasks]
-    assert "daily_forget" in names, f"Expected daily_forget in {names}"
-    assert "daily_security" in names
-    assert "daily_lifecycle" in names
-    print("  PASS test_create_default_scheduler")
+    插件此前会注册 daily_forget / daily_security（与 daemon 重叠），
+    现应彻底移除，避免两套调度器重复执行。
+    """
+    import memall.plugins.scheduler as plugin_sched
+
+    for name in ("create_default_scheduler", "_daily_forget",
+                 "_daily_security_audit", "_daily_lifecycle", "_daily_dream"):
+        assert not hasattr(plugin_sched, name), \
+            f"plugin scheduler must not define {name} (owned by memall.scheduler)"
+
+
+def test_daemon_gates_lifecycle_and_dream_by_config():
+    """F-04: daemon 是唯一周期任务所有者；破坏性任务默认关闭。"""
+    from memall.scheduler import scheduler as daemon
+
+    assert daemon.ENABLE_LIFECYCLE is False
+    assert daemon.ENABLE_DREAM is False
+    assert daemon.INTERVAL_LIFECYCLE > 0
+    assert daemon.INTERVAL_DREAM > 0
 
 
 if __name__ == "__main__":

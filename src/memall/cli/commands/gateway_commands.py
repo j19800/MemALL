@@ -19,6 +19,7 @@ def cmd_gateway(args):
         gw = MemAllGateway(port=port)
         gw.start()
         print(f"Gateway started on http://127.0.0.1:{port}")
+        print(f"Pairing code (one-time): {gw._pairing_code}")
 
     elif action == "stop":
         gw = MemAllGateway()
@@ -61,7 +62,12 @@ def cmd_gateway(args):
         if not addr:
             print("error: --address IP:PORT is required", file=sys.stderr)
             sys.exit(1)
-        result = pair_with_peer(addr)
+        code = getattr(args, "code", "") or ""
+        if not code:
+            print("error: --code is required (the peer's one-time pairing code, "
+                  "printed in its gateway log / shown in its local UI)", file=sys.stderr)
+            sys.exit(1)
+        result = pair_with_peer(addr, code=code)
         if result["paired"]:
             print(f"Paired with {result['peer_name']}")
         else:

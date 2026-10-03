@@ -879,6 +879,9 @@ pre{font-family:inherit;white-space:pre-wrap;word-break:break-word}
 //  State
 // ============================================================
 var API = (new URLSearchParams(window.location.search).get('api_url') || 'http://127.0.0.1:9920').replace(/\/+$/,'');
+// Per-instance CSRF token for state-changing endpoints (pipeline/migrations).
+// Issued by GET /ui/session to loopback callers only.
+var CSRF = '';
 // Initialize input field to match API variable
 var chatHistory = [];
 var sending = false;
@@ -937,9 +940,11 @@ function toggleSidebar(){
 // ============================================================
 function api(method, path, data){
   var url = API + path;
+  var headers = {'Content-Type':'application/json'};
+  if(CSRF) headers['X-MemAll-CSRF'] = CSRF;
   var opts = {
     method: method,
-    headers: {'Content-Type':'application/json'}
+    headers: headers
   };
   if(data !== undefined && data !== null) opts.body = JSON.stringify(data);
   return fetch(url, opts).then(function(r){
@@ -954,6 +959,14 @@ function api(method, path, data){
     if(ct.indexOf('application/json')!==-1) return r.json();
     return r.text();
   });
+}
+
+// Fetch the per-instance CSRF token for state-changing endpoints.
+function loadCsrf(){
+  return fetch(API + '/ui/session', {headers:{'Content-Type':'application/json'}})
+    .then(function(r){ return r.ok ? r.json() : null })
+    .then(function(d){ if(d && d.csrf_token) CSRF = d.csrf_token; })
+    .catch(function(){ /* gateway may be unavailable; retried on next load */ });
 }
 
 // ============================================================
@@ -2357,9 +2370,11 @@ function saveApiUrl(){
   var url = document.getElementById('apiUrlInput').value.replace(/\/+$/,'');
   if(!url){ toast('请输入有效的API地址','error'); return; }
   API = url;
+  CSRF = '';
   localStorage.setItem('memall_api_url', url);
   toast('API地址已保存: '+url, 'success');
   setStatus(false, '未连接');
+  loadCsrf();
   loadDbStats();
 }
 
@@ -2564,6 +2579,8 @@ document.addEventListener('DOMContentLoaded', function(){
   }
   var apiInput = document.getElementById('apiUrlInput');
   if(apiInput) apiInput.value = API;
+  // Fetch CSRF token (for pipeline/migrations) before loading data.
+  loadCsrf();
   // Load dashboard
   loadDashboard();
   document.getElementById('chatInput').focus();

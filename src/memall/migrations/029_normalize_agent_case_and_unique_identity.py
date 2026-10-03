@@ -21,6 +21,10 @@ This migration:
 Idempotent and safe to re-run.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 MIGRATION_ID = "029_normalize_agent_case_and_unique_identity"
 DESCRIPTION = "Backfill agent_name casing everywhere; merge duplicate identities; add unique lower() index"
 
@@ -56,7 +60,7 @@ def apply(conn) -> None:
                     f"WHERE agent_name <> lower(agent_name)"
                 )
             except Exception:
-                pass  # table absent on older DBs
+                logger.debug("029: agent_name lower-case skipped for %s (table absent)", table, exc_info=True)
 
         # 2. Merge case-duplicate identities.
         id_cols = [r[1] for r in conn.execute("PRAGMA table_info(identities)")]

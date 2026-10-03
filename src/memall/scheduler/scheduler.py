@@ -26,6 +26,13 @@ INTERVAL_SECURITY = get_config("scheduler.security_interval", 86400)
 INTERVAL_PROXY_SESSION = get_config("scheduler.proxy_session_interval", 300)
 PROXY_AGENTS = get_config("scheduler.proxy_agents", ["claude", "opencode", "zcode"])
 MISSED_HEARTBEAT_LIMIT = get_config("scheduler.missed_heartbeat_limit", 7)
+# Lifecycle / dream are destructive maintenance passes (cluster+distill+supersede,
+# defrag+forget).  They are centralised here (single periodic owner, F-04) but
+# opt-in: disabled unless explicitly enabled in config.
+INTERVAL_LIFECYCLE = get_config("scheduler.lifecycle_interval", 86400)
+INTERVAL_DREAM = get_config("scheduler.dream_interval", 86400)
+ENABLE_LIFECYCLE = get_config("scheduler.lifecycle_enabled", False)
+ENABLE_DREAM = get_config("scheduler.dream_enabled", False)
 
 
 class Scheduler:
@@ -37,6 +44,8 @@ class Scheduler:
         self._last_forget = 0
         self._last_security = 0
         self._last_agent_round = 0
+        self._last_lifecycle = 0
+        self._last_dream = 0
 
     def start(self):
         if self._running:
@@ -105,6 +114,34 @@ class Scheduler:
             except Exception as e:
                 logger.warning(f"agent round error: {e}")
             self._last_agent_round = now
+
+        if ENABLE_LIFECYCLE and now - self._last_lifecycle >= INTERVAL_LIFECYCLE:
+            try:
+                from memall.pipeline.lifecycle import lifecycle_step
+                result = lifecycle_step()
+                logger.info(
+                    "lifecycle: clusters=%d distilled=%d superseded=%d dormant=%d",
+                    result.get("clusters", 0), result.get("distilled", 0),
+                    result.get("superseded", 0), result.get("dormant", 0),
+                )
+            except Exception as e:
+                logger.warning(f"lifecycle error: {e}")
+            self._last_lifecycle = now
+
+        if ENABLE_DREAM and now - self._last_dream >= INTERVAL_DREAM:
+            try:
+                from memall.pipeline.auto_dream import dream_consolidation_step
+                result = dream_consolidation_step()
+                logger.info(
+                    "dream: defrag=%d patterns=%d distilled=%d forgotten=%d",
+                    result.get("defrag", {}).get("merged", 0),
+                    result.get("patterns", {}).get("found", 0),
+                    result.get("distilled", {}).get("created", 0),
+                    result.get("forgetting", {}).get("scheduled", 0),
+                )
+            except Exception as e:
+                logger.warning(f"dream error: {e}")
+            self._last_dream = now
 
     def _heartbeat(self):
         with pool_conn() as conn:

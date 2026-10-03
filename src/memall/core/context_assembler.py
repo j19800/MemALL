@@ -141,7 +141,7 @@ def _build_tier2(agent_name: str, query: str, conn) -> list[str]:
                 c["score"] = cosine_sim(query_vec, tfidf_docs[i + 1])
             candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
         except Exception:
-            pass  # fall through to recency order
+            logger.debug("context_assembler: TF-IDF scoring failed, falling back to recency", exc_info=True)
 
         # Hybrid: fuse vec0 semantic scores via RRF when available
         try:
@@ -166,7 +166,7 @@ def _build_tier2(agent_name: str, query: str, conn) -> list[str]:
                             c["score"] = c.get("rrf_tfidf", 0) + c.get("rrf_vec", 0)
                         candidates.sort(key=lambda x: -x.get("score", 0))
         except Exception:
-            pass  # graceful degradation → keep existing TF-IDF order
+            logger.debug("context_assembler: vec0 RRF fusion failed, keeping TF-IDF order", exc_info=True)
 
     for c in candidates:
         prefix = "[Session]" if c["level"] == "L4" else "[Reflection]"
@@ -395,7 +395,7 @@ def get_persona(agent_name: str, limit: int = 20) -> dict:
             for r in rows:
                 active_topics.append({"topic": r["category"], "count": r["cnt"]})
     except Exception:
-        pass
+        logger.debug("context_assembler: active-topic aggregation failed", exc_info=True)
 
     # Estimate sample_size from context lines
     items = [l for l in context.split("\n") if l.startswith("[") and ("[Lesson" in l or "[Reflection" in l or "[Session" in l)]

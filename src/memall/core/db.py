@@ -258,8 +258,13 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     status TEXT NOT NULL DEFAULT 'running',
     total_elapsed_ms INTEGER,
     error TEXT,
-    steps TEXT NOT NULL DEFAULT '[]'
+    steps TEXT NOT NULL DEFAULT '[]',
+    contract_version INTEGER NOT NULL DEFAULT 1,
+    pid INTEGER,
+    host TEXT NOT NULL DEFAULT '',
+    interrupted_at TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status ON pipeline_runs(status);
 
 CREATE TABLE IF NOT EXISTS tracing_spans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

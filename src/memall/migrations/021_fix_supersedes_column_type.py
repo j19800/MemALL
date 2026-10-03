@@ -15,6 +15,10 @@ Risk: low.  Operation runs with FK enforcement off and re-creates the table
 within a single transaction.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 MIGRATION_ID = "021_fix_supersedes_column_type"
 DESCRIPTION = "Fix supersedes column type INTEGER→TEXT for FK compatibility"
 
@@ -102,7 +106,7 @@ def apply(conn):
             try:
                 conn.execute(sql)
             except Exception:
-                pass  # skip UNIQUE indexes that already exist via CREATE TABLE
+                logger.debug("021: index recreate skipped (already exists via CREATE TABLE)", exc_info=True)
 
         # 4. Swap tables
         conn.execute("DROP TABLE memories")

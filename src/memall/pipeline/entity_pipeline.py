@@ -166,4 +166,4 @@ def entity_extraction_step(conn=None) -> dict:
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.debug("entity_extraction: connection close failed", exc_info=True)

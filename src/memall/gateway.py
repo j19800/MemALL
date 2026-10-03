@@ -11,9 +11,11 @@ in ``gateway_sync`` and ``gateway_peers`` and are re-exported here.
 
 
 import asyncio
+import hmac
 import logging
 import os
 import secrets
+import socket
 import threading
 import time
 from pathlib import Path
@@ -23,7 +25,10 @@ from typing import Optional, Dict, Any
 from aiohttp import web
 
 
-from memall.gateway_utils import _require_auth, origin_allowed, _CORS_HEADERS, _CORS_ALLOWED_ORIGINS, is_loopback_request
+from memall.gateway_utils import (
+    _require_auth, _require_csrf, _auth_ok, origin_allowed,
+    _CORS_HEADERS, _CORS_ALLOWED_ORIGINS, is_loopback_request,
+)
 from memall.gateway_html_handlers import HtmlHandlersMixin
 from memall.gateway_rest_handlers import RestHandlersMixin
 from memall.gateway_mcp_handlers import McpHandlersMixin, _MCP_TOOL_EXECUTOR, _MCP_TOOL_HEAVY
@@ -47,13 +52,27 @@ _ALWAYS_PUBLIC_PATHS = frozenset({
 })
 
 
+# Paths that must never be rate-limited: liveness probes, the SPA document
+# itself and static assets (a single page load fetches many of them).
+_RATE_LIMIT_EXEMPT_PATHS = frozenset({"/", "/health", "/favicon.ico"})
+_STATIC_PATH_PREFIXES = ("/static",)
+
+
+# State-changing endpoints that the SPA reaches from loopback without a Bearer
+# token.  They must echo the per-instance CSRF token (``X-MemAll-CSRF``) issued
+# by ``GET /ui/session``, otherwise a poisoned local script / drive-by page
+# could re-run migrations or the pipeline.
+_CSRF_REQUIRED_PATHS = frozenset({"/pipeline/run", "/migrations/run"})
+
+
 # Web-UI page/data routes that skip the token check — but only for loopback
 # peers (see ``security.open_api_loopback_only``) and only from trusted origins.
+# NOTE: state-changing routes are intentionally absent here; they are gated by
+# ``_CSRF_REQUIRED_PATHS`` above.
 _SPA_PAGE_PATHS = frozenset({
     "/dashboard", "/graph", "/artifact", "/features", "/recent", "/todos",
     "/v30", "/timeline", "/timeline/api", "/db/stats", "/agents",
-    "/debt/stats", "/reflection/dashboard", "/ask", "/pipeline/run",
-    "/migrations/run", "/migrations/status",
+    "/debt/stats", "/reflection/dashboard", "/ask", "/migrations/status",
 })
 
 
@@ -101,8 +120,16 @@ class MemAllGateway(HtmlHandlersMixin, RestHandlersMixin,
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         # Auth token: use provided key or auto-generate one
         self._auth_token: str = secret_key or secrets.token_hex(32)
+        # Per-instance CSRF token for state-changing SPA endpoints.  Handed to
+        # the local UI by ``GET /ui/session`` (loopback + trusted origin only).
+        self._csrf_token: str = secrets.token_urlsafe(32)
+        # One-time pairing code (out-of-band trust anchor).  Rotated after every
+        # successful pair; a fresh one is generated per gateway instance.
+        self._pairing_code: str = secrets.token_hex(4)
         logger.info("Gateway auth token: %s ...%s",
                      self._auth_token[:8], self._auth_token[-4:])
+        logger.info("Gateway pairing code: %s (one-time, rotate after pairing)",
+                     self._pairing_code)
 
     @staticmethod
     def _open_api_loopback_only() -> bool:
@@ -180,35 +207,78 @@ class MemAllGateway(HtmlHandlersMixin, RestHandlersMixin,
 
     # ── Auth middleware ──
 
+    def _check_rate_limit(self, request: web.Request) -> Optional[web.Response]:
+        """Return a 429 Response if *request* exceeds its per-IP budget, else None.
+
+        POST gets 30/min (``/mcp`` 60/min), everything else 100/min.  Runs
+        before the SPA carve-out so unauthenticated endpoints are covered too.
+        """
+        client_ip = request.remote or "unknown"
+        rl = get_rate_limiter()
+        if request.method == "POST":
+            limit = (getattr(self, "_rate_limit_mcp", 60)
+                     if request.path == "/mcp"
+                     else getattr(self, "_rate_limit_post", 30))
+        else:
+            limit = getattr(self, "_rate_limit_get", 100)
+        if not rl.allow(client_ip, limit=limit):
+            return web.json_response(
+                {"error": "rate limit exceeded"}, status=429,
+                headers={"Retry-After": "60"},
+            )
+        return None
+
     @web.middleware
     async def _auth_middleware(self, request: web.Request,
                                handler: Any) -> web.Response:
         """Require a valid Bearer token, with a loopback-only carve-out for the SPA.
 
-        Three layers:
-          1. Always public: ``/``, ``/health``, ``/pair``, ``/favicon.ico``, OPTIONS.
-          2. Any request carrying an ``Origin`` that is not an explicitly trusted
-             loopback origin is rejected — this covers GETs too (previously only
-             state-changing methods were checked), which closes the
+        Layers, in order:
+          0. OPTIONS short-circuits (CORS preflight).
+          1. Rate limit **first** — covers the unauthenticated public and SPA
+             endpoints that previously slipped past it.
+          2. Always public: ``/``, ``/health``, ``/pair``, ``/favicon.ico``,
+             ``/static``.
+          3. Any request carrying an ``Origin`` that is not an explicitly trusted
+             loopback origin is rejected — this covers GETs too, closing the
              DNS-rebinding / drive-by read hole against a browser on the host.
-          3. The remaining SPA endpoints are unauthenticated **only** for loopback
-             peers (the local web UI).  Any other peer must present a valid
-             token.  Controlled by ``security.open_api_loopback_only``.
+          4. State-changing SPA endpoints (``_CSRF_REQUIRED_PATHS``) require a
+             full Bearer token **or** the per-instance CSRF token.
+          5. Non-loopback peers must present a valid token for everything else.
+          6. The remaining SPA endpoints are unauthenticated **only** for
+             loopback peers.  Controlled by ``security.open_api_loopback_only``.
         """
         path = request.path
-        if request.method == "OPTIONS" or path in _ALWAYS_PUBLIC_PATHS:
+        if request.method == "OPTIONS":
             return await handler(request)
-        # CSRF / DNS-rebinding defense: untrusted Origin is rejected outright.
+        # 1. Rate limit before any allow-list short-circuit.
+        if path not in _RATE_LIMIT_EXEMPT_PATHS and not path.startswith(_STATIC_PATH_PREFIXES):
+            rl_err = self._check_rate_limit(request)
+            if rl_err is not None:
+                return rl_err
+        # 2. Always-public endpoints.
+        if path in _ALWAYS_PUBLIC_PATHS:
+            return await handler(request)
+        # 3. CSRF / DNS-rebinding defense: untrusted Origin is rejected outright.
         if not origin_allowed(request):
             return web.json_response(
                 {"error": "forbidden", "message": "cross-origin request blocked"}, status=403
             )
-        # SPA carve-out applies to loopback peers only (unless disabled).
+        # 4. State-changing SPA endpoints need a token (Bearer) or CSRF proof.
+        if path in _CSRF_REQUIRED_PATHS and request.method in ("POST", "PUT", "DELETE"):
+            if _auth_ok(request, self._auth_token):
+                return await handler(request)
+            csrf_err = _require_csrf(request, self._csrf_token)
+            if csrf_err is not None:
+                return csrf_err
+            return await handler(request)
+        # 5. Non-loopback peers must authenticate.
         if self._open_api_loopback_only() and not is_loopback_request(request):
             err = _require_auth(request, self._auth_token)
             if err is not None:
                 return err
             return await handler(request)
+        # 6. Loopback SPA carve-out (read-only + benign writes only).
         if path in _SPA_PAGE_PATHS:
             return await handler(request)
         # SPA read-only endpoints: GET /memories and GET /api/* and GET /persona/* and GET /graph/*
@@ -222,30 +292,20 @@ class MemAllGateway(HtmlHandlersMixin, RestHandlersMixin,
         err = _require_auth(request, self._auth_token)
         if err is not None:
             return err
-
-        # Rate limit: 30/min for POST, 100/min for GET
-        client_ip = request.remote or "unknown"
-        rl = get_rate_limiter()
-        if request.method == "POST":
-            # MCP JSON-RPC endpoint gets a higher limit (60/min)
-            if request.path == "/mcp":
-                limit = getattr(self, "_rate_limit_mcp", 60)
-            else:
-                limit = getattr(self, "_rate_limit_post", 30)
-            if not rl.allow(client_ip, limit=limit):
-                return web.json_response(
-                    {"error": "rate limit exceeded"}, status=429,
-                    headers={"Retry-After": "60"},
-                )
-        else:
-            limit = getattr(self, "_rate_limit_get", 100)
-            if not rl.allow(client_ip, limit=limit):
-                return web.json_response(
-                    {"error": "rate limit exceeded"}, status=429,
-                    headers={"Retry-After": "60"},
-                )
-
         return await handler(request)
+
+    async def _handle_ui_session(self, request: web.Request) -> web.Response:
+        """GET /ui/session — hand the CSRF token to the local web UI.
+
+        Restricted to loopback peers with a trusted (or absent) Origin: a remote
+        host or a cross-origin page must not learn the token.  Fails closed.
+        """
+        if not origin_allowed(request) or not is_loopback_request(request):
+            return web.json_response(
+                {"error": "forbidden", "message": "loopback origin required"},
+                status=403,
+            )
+        return web.json_response({"csrf_token": self._csrf_token})
 
     async def _handle_health(self, request: web.Request) -> web.Response:
         uptime_s = time.time() - self._start_time
@@ -271,23 +331,42 @@ class MemAllGateway(HtmlHandlersMixin, RestHandlersMixin,
             return None, str(e)
 
     async def _handle_pair(self, request: web.Request) -> web.Response:
+        """POST /pair — one-time-code challenge/response pairing handshake.
+
+        The caller must present the gateway's one-time *pairing code* (printed
+        in the gateway log / shown in the local UI).  The code is the
+        out-of-band trust anchor: without it, a LAN host that merely reaches the
+        port cannot "pair".  On success the code is rotated (single use) and the
+        gateway returns its auth token so the peer can authenticate subsequent
+        federated queries.
+        """
         data = await self._read_json(request)
         if data is None:
             return web.json_response({"error": "invalid JSON body"}, status=400,)
-        try:
-            device_name = data.get("device_name", "unknown")
-            remote_addr = request.remote
+        device_name = str(data.get("device_name", "unknown"))[:128]
+        provided_code = str(data.get("code", ""))
+        expected = self._pairing_code or ""
+        # Constant-time compare; an empty/absent code can never match.
+        if not expected or not provided_code or not hmac.compare_digest(provided_code, expected):
+            logger.warning("Pairing rejected for device=%r from %s (bad pairing code)",
+                           device_name, request.remote)
             return web.json_response(
-                {
-                    "paired": True,
-                    "peer_name": device_name,
-                    "remote_address": remote_addr,
-                },
-                            )
-        except Exception as exc:
-            return web.json_response(
-                {"error": str(exc)}, status=500,
+                {"paired": False, "error": "invalid pairing code"},
+                status=403,
             )
+        # One-time code: rotate immediately so a replay cannot pair again.
+        self._pairing_code = secrets.token_hex(4)
+        logger.info("Paired with device=%r from %s; new pairing code: %s",
+                    device_name, request.remote, self._pairing_code)
+        return web.json_response(
+            {
+                "paired": True,
+                "peer_name": socket.gethostname(),
+                "device_name": device_name,
+                "remote_address": request.remote,
+                "token": self._auth_token,
+            },
+        )
 
     async def _handle_serve_frontend(self, request: web.Request) -> web.Response:
         """GET / — serve frontend index.html if available."""

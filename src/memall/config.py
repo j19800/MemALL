@@ -145,6 +145,12 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "doctor_interval": 3600,
         "marvis_interval": 300,
         "missed_heartbeat_limit": 7,
+        # Destructive maintenance passes owned by the single scheduler daemon
+        # (see F-04).  Opt-in: OFF by default to avoid surprise data churn.
+        "lifecycle_interval": 86400,
+        "lifecycle_enabled": False,
+        "dream_interval": 86400,
+        "dream_enabled": False,
     },
     "strategy": {
         "default": "buffer",

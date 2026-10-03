@@ -73,6 +73,7 @@ def collect() -> dict:
         total_recent = len(recent_runs)
         completed_recent = sum(1 for r in recent_runs if r["status"] == "completed")
         failed_recent = sum(1 for r in recent_runs if r["status"] == "failed")
+        interrupted_recent = sum(1 for r in recent_runs if r["status"] == "interrupted")
         pipeline_success_rate = round(completed_recent / max(1, total_recent) * 100, 1)
 
         # Slowest step from last completed run
@@ -168,6 +169,9 @@ def collect() -> dict:
         if not fts_ok and total > 0:
             issues.append("FTS 索引不一致")
             tips.append("运行 memall doctor --fix 重建索引")
+        if interrupted_recent > 0:
+            issues.append(f"最近 {total_recent} 次 pipeline 有 {interrupted_recent} 次被中断")
+            tips.append("pipeline 步骤可重入，重新运行 memall pipeline 即可收敛")
 
         # Health score: simple heuristic, 0-100
         score = 100
@@ -194,6 +198,7 @@ def collect() -> dict:
             "pipeline_success_rate": pipeline_success_rate,
             "pipeline_last_run": (last_pipeline or "")[:19],
             "pipeline_slowest_step": slowest_step_label,
+            "pipeline_interrupted_recent": interrupted_recent,
             "pending_migrations": pending_migrations,
             "pending_embeddings": pending_embeddings,
             "orphan_edges": orphans,

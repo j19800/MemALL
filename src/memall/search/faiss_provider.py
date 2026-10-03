@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 import json
 import os
+import threading
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -40,6 +41,28 @@ EMBED_DIM = 768
 Admissible values depend on the embedding model used.  Change via config."""
 
 BATCH_SIZE = 64
+
+_ST_MODEL = None
+_ST_MODEL_LOCK = threading.Lock()
+_ST_MODEL_NAME = "all-MiniLM-L6-v2"
+
+
+def _get_st_model():
+    """Lazy-load and cache the SentenceTransformer model (thread-safe).
+
+    Loading the model on every ``_encode()`` call costs hundreds of MB and
+    seconds of latency.  Every other encoder in this repo caches a module-level
+    singleton (``graph/embeddings._get_model``, ``core/nlp``, the reranker);
+    this one now does too.
+    """
+    global _ST_MODEL
+    if _ST_MODEL is None:
+        from sentence_transformers import SentenceTransformer
+        with _ST_MODEL_LOCK:
+            if _ST_MODEL is None:
+                logger.info("Loading FAISS embedding model %s ...", _ST_MODEL_NAME)
+                _ST_MODEL = SentenceTransformer(_ST_MODEL_NAME, device="cpu")
+    return _ST_MODEL
 
 
 class FaissProvider(SearchProvider):
@@ -222,8 +245,7 @@ class FaissProvider(SearchProvider):
         environments where sentence-transformers is not installed.
         """
         try:
-            from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+            model = _get_st_model()
             return model.encode(texts, normalize_embeddings=True, show_progress_bar=False).astype(np.float32)
         except ImportError:
             logger.warning("faiss(%s) sentence-transformers not available, falling back to TF-IDF+SVD", self.__class__.__name__)

@@ -16,7 +16,7 @@ logger = logging.getLogger("memall.gateway.utils")
 # ── CORS constants ──────────────────────────────────────────────────────────
 _CORS_HEADERS = {
     "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-MemAll-CSRF",
 }
 
 _CORS_ALLOWED_ORIGINS = {"http://127.0.0.1:9919", "http://localhost:9919", "http://127.0.0.1:9920", "http://localhost:9920", "http://127.0.0.1:8199"}
@@ -74,19 +74,48 @@ def _cors_headers(request: web.Request) -> Dict[str, str]:
     return _CORS_HEADERS
 
 
+def _extract_token(request: web.Request) -> str:
+    """Return the token from the ``Authorization: Bearer`` header or ``?token=``."""
+    provided = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if not provided:
+        provided = request.query.get("token", "")
+    return provided
+
+
+def _auth_ok(request: web.Request, auth_token: str) -> bool:
+    """True if the request carries a valid Bearer/query token (constant-time)."""
+    provided = _extract_token(request)
+    return bool(provided) and hmac.compare_digest(provided, auth_token)
+
+
 def _require_auth(request: web.Request, auth_token: str) -> Optional[web.Response]:
     """Return a 401 Response if the request does not carry a valid token, else None.
 
     The token can be provided via the ``Authorization: Bearer <token>``
     header or the ``token`` query parameter.
     """
-    provided = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    if not provided:
-        provided = request.query.get("token", "")
-    if not hmac.compare_digest(provided, auth_token):
+    if not _auth_ok(request, auth_token):
         return web.json_response(
             {"error": "unauthorized", "message": "valid Bearer token required"},
             status=401,
+        )
+    return None
+
+
+def _require_csrf(request: web.Request, csrf_token: str) -> Optional[web.Response]:
+    """Return a 403 Response unless the request echoes the per-instance CSRF token.
+
+    State-changing loopback endpoints that the SPA reaches without a Bearer
+    token must carry the token issued by ``GET /ui/session`` in the
+    ``X-MemAll-CSRF`` header.  A cross-origin page can neither read that token
+    (CORS) nor set this custom header without a preflight, which the Origin
+    gate already rejects — so this blocks drive-by / DNS-rebinding writes.
+    """
+    provided = request.headers.get("X-MemAll-CSRF", "")
+    if not provided or not hmac.compare_digest(provided, csrf_token):
+        return web.json_response(
+            {"error": "forbidden", "message": "valid CSRF token required"},
+            status=403,
         )
     return None
 

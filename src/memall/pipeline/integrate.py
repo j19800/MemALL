@@ -31,6 +31,29 @@ _L10_PREFIX_RE = re.compile(r'^\[(L10|L10\s.*?)\]', re.DOTALL)
 # Semantic dedup: skip if Jaccard similarity ≥ this threshold vs any recent L10
 _SIMILARITY_THRESHOLD = 0.85
 
+# Structured identity of the single per-agent cross-domain integration row.
+# Replaces the fragile ``content LIKE '[L10 整合]%'`` prefix match: the prefix is
+# a display string, so any format change, manual edit, or historical migration
+# could mis-match and corrupt the upsert.  ``json_valid`` guards malformed rows.
+L10_KIND = "l10_integration"
+_KIND_EXPR = (
+    "json_extract(CASE WHEN json_valid(metadata) THEN metadata ELSE '{}' END, '$.kind')"
+)
+
+
+def _l10_metadata(now: str) -> str:
+    """Metadata payload marking a row as the canonical L10 integration."""
+    return json.dumps(
+        {
+            "kind": L10_KIND,
+            "layer_source": {
+                "value": "integrate_auto_v2",
+                "_meta": {"version": 1, "written_at": now},
+            },
+        },
+        ensure_ascii=False,
+    )
+
 
 def _is_explicit_l10(content: str) -> bool:
     return bool(_L10_PREFIX_RE.match(content.strip()))
@@ -89,8 +112,9 @@ def dedupe_l10(dry_run: bool = False) -> dict:
     to 'L6'/'L8' it stopped being seen and each cycle appended another copy.
     Production showed 104 rows across 10 agents (92 redundant).
 
-    Matching is by content prefix (level-agnostic). The surviving row per agent
-    is the newest, and its level is restored to the canonical 'L10'.
+    Matching is by the structured ``metadata.kind='l10_integration'`` marker
+    (level- and content-agnostic). The surviving row per agent is the newest,
+    and its level is restored to the canonical 'L10'.
 
     Archiving sets ``memory_status='archived'`` — reversible, nothing is deleted.
 
@@ -106,7 +130,7 @@ def dedupe_l10(dry_run: bool = False) -> dict:
         now = datetime.now(timezone.utc).isoformat()
         rows = conn.execute(
             "SELECT id, agent_name FROM memories "
-            "WHERE content LIKE '[L10 整合]%' "
+            f"WHERE {_KIND_EXPR} = '{L10_KIND}' "
             "AND COALESCE(memory_status, '') != 'archived' "
             "ORDER BY id ASC"
         ).fetchall()
@@ -275,12 +299,13 @@ def integrate_step(min_categories: int = 2) -> dict:
             # re-levelled earlier integrations to 'L6', so the guard never saw
             # them and every cycle appended another row (visible as
             # "来源：2 条" → "4 条" → "6 条" → "8 条" near-identical copies).
-            # Detect by content prefix (level-agnostic) and update in place.
+            # Detect by the structured metadata.kind marker (level- and
+            # content-agnostic) and update in place.
             l10_id = None
             if get_config("distill.upsert_enabled", True):
                 prev = conn.execute(
                     "SELECT id, content_hash FROM memories "
-                    "WHERE agent_name = ? AND content LIKE '[L10 整合]%' "
+                    f"WHERE agent_name = ? AND {_KIND_EXPR} = '{L10_KIND}' "
                     "ORDER BY id DESC LIMIT 1",
                     (agent,),
                 ).fetchone()
@@ -290,9 +315,9 @@ def integrate_step(min_categories: int = 2) -> dict:
                         continue
                     conn.execute(
                         "UPDATE memories SET content = ?, content_hash = ?, "
-                        "subject = ?, category = ?, level = 'L10', "
+                        "subject = ?, category = ?, level = 'L10', metadata = ?, "
                         "updated_at = ?, occurred_at = ? WHERE id = ?",
-                        (merged, ch, l10_subject, best_cat, now, now, prev["id"]),
+                        (merged, ch, l10_subject, best_cat, _l10_metadata(now), now, now, prev["id"]),
                     )
                     l10_id = prev["id"]
 
@@ -325,7 +350,7 @@ def integrate_step(min_categories: int = 2) -> dict:
                     "VALUES (?, ?, 'L10', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ledger')",
                     (
                         merged, ch, best_cat, agent, l10_project, l10_subject,
-                        json.dumps({"layer_source": {"value": "integrate_auto_v2", "_meta": {"version": 1, "written_at": now}}}, ensure_ascii=False),
+                        _l10_metadata(now),
                         now, now, now, l10_thread_id,
                     ),
                 )

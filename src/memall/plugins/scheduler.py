@@ -1,5 +1,15 @@
 """
-Scheduler Plugin — Periodic task scheduler for automated forget, audit, etc.
+Scheduler Plugin — capture/pipeline lifecycle hooks.
+====================================================
+
+This plugin owns **only** the memory-lifecycle hooks (``on_capture``,
+``on_pipeline``, ``on_pre_retrieve``).  All *periodic* background work
+(pipeline, forget, security audit, lifecycle, dream) is owned by the single
+scheduler daemon in :mod:`memall.scheduler.scheduler` — see F-04.
+
+``TaskScheduler`` remains here as a generic interval utility, but this module
+no longer registers any built-in daily tasks, so it can never double-run the
+daemon's forget/security jobs.
 """
 
 import logging
@@ -11,8 +21,6 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
-
-from memall.config import get_config
 
 
 # ── Debounce state for on_capture → lightweight pipeline ──
@@ -29,7 +37,7 @@ class TaskScheduler:
 
     Usage:
         sched = TaskScheduler()
-        sched.add_task("daily_forget", run_daily_forget, 86400)
+        sched.add_task("my_task", run_my_task, 86400)
         sched.start()
         # ... later ...
         sched.stop()
@@ -178,88 +186,13 @@ class TaskScheduler:
                         self._tasks[name]["error_count"] += 1
 
 
-# ── Built-in default tasks ─────────────────────────────────────────────
-
-def _daily_forget() -> None:
-    """Run low-value memory cleanup (built-in daily task)."""
-    try:
-        from memall.pipeline.forget import forget_low_value
-
-        result = forget_low_value()
-        logger.info("Daily forget: %s removed", result.get("deleted_memories", 0))
-    except ImportError:
-        logger.warning("scheduler.py: silent error", exc_info=True)
-    except Exception as e:
-        logger.warning("Daily forget error: %s", e)
-
-
-def _daily_security_audit() -> None:
-    """Run security audit (built-in daily task)."""
-    try:
-        from memall.pipeline.security import audit_sensitive
-
-        result = audit_sensitive()
-        count = result.get("total_findings", 0)
-        if count > 0:
-            logger.info("Daily audit: %s sensitive findings (risk=%s)", count, result.get("risk_level", "?"))
-    except ImportError:
-        logger.warning("scheduler.py: silent error", exc_info=True)
-    except Exception as e:
-        logger.warning("Daily audit error: %s", e)
-
-
-def _daily_lifecycle() -> None:
-    """Run memory lifecycle pipeline (built-in daily task)."""
-    try:
-        from memall.pipeline.lifecycle import lifecycle_step
-
-        result = lifecycle_step()
-        logger.info(
-            "Daily lifecycle: clusters=%d, distilled=%d, superseded=%d, dormant=%d",
-            result.get("clusters", 0),
-            result.get("distilled", 0),
-            result.get("superseded", 0),
-            result.get("dormant", 0),
-        )
-    except Exception as e:
-        logger.warning("Daily lifecycle error: %s", e)
-
-
-def _daily_dream() -> None:
-    """Run autonomous memory consolidation (auto-dream)."""
-    try:
-        from memall.pipeline.auto_dream import dream_consolidation_step
-        result = dream_consolidation_step()
-        logger.info(
-            "Daily dream: defrag=%d patterns=%d distilled=%d forgotten=%d",
-            result.get("defrag", {}).get("merged", 0),
-            result.get("patterns", {}).get("found", 0),
-            result.get("distilled", {}).get("created", 0),
-            result.get("forgetting", {}).get("scheduled", 0),
-        )
-    except Exception as e:
-        logger.warning("Daily dream error: %s", e)
-
-
-def create_default_scheduler() -> TaskScheduler:
-    """Create a TaskScheduler pre-loaded with built-in daily tasks.
-
-    Intervals are read from config (``scheduler.forget_interval`` and
-    ``scheduler.audit_interval``) with a default of 86400 seconds (24h).
-
-    Returns:
-        Configured TaskScheduler (not yet started).
-    """
-    forget_interval = get_config("scheduler.forget_interval", 86400)
-    audit_interval = get_config("scheduler.audit_interval", 86400)
-    sched = TaskScheduler()
-    sched.add_task("daily_forget", _daily_forget, forget_interval, run_immediately=False)
-    sched.add_task("daily_security", _daily_security_audit, audit_interval, run_immediately=False)
-    lifecycle_interval = get_config("scheduler.lifecycle_interval", 86400)
-    sched.add_task("daily_lifecycle", _daily_lifecycle, lifecycle_interval, run_immediately=False)
-    dream_interval = get_config("scheduler.dream_interval", 86400)
-    sched.add_task("daily_dream", _daily_dream, dream_interval, run_immediately=False)
-    return sched
+# ── Built-in periodic tasks ────────────────────────────────────────────
+#
+# Removed in the F-04 fix.  The plugin previously registered ``daily_forget``,
+# ``daily_security``, ``daily_lifecycle`` and ``daily_dream`` here, which
+# duplicated the daemon's forget/security jobs and could double-run them when
+# both schedulers were enabled.  Those tasks now live exclusively in
+# :mod:`memall.scheduler.scheduler` (the single periodic owner).
 
 
 def on_pipeline(**kwargs) -> None:

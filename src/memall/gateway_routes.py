@@ -15,6 +15,8 @@ class RoutesMixin:
     def _setup_routes(self, app: web.Application) -> None:
         import memall.gateway_api as api
         app.router.add_get("/health", self._handle_health)
+        app.router.add_get("/ui/session", self._handle_ui_session)
+        app.router.add_post("/pair", self._handle_pair)
         app.router.add_get("/recent", self._handle_recent_html)
         app.router.add_get("/todos", self._handle_todos_html)
         app.router.add_get("/timeline", self._handle_timeline_html)

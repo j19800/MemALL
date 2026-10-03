@@ -156,17 +156,21 @@ def discover_peers(timeout: float = 5.0) -> List[Dict[str, Any]]:
     return peers
 
 
-def pair_with_peer(address: str, local_token: str = "") -> Dict[str, Any]:
+def pair_with_peer(address: str, local_token: str = "", code: str = "") -> Dict[str, Any]:
     """Send a pairing request to a remote MemALL gateway.
 
     The remote gateway must have its HTTP server running.  Sends
-    ``POST /pair`` with the local device name.  On success, records
-    the peer in ``peers.json`` along with its auth token.
+    ``POST /pair`` with the local device name and the remote's **one-time
+    pairing code** (the out-of-band trust anchor printed in the remote's log /
+    local UI).  On success, records the peer in ``peers.json`` along with the
+    token the remote returned.
 
     Args:
         address: ``"IP:PORT"`` string, e.g. ``"192.168.1.5:9919"``.
         local_token: This gateway's auth token (used to authenticate
                      the remote peer's return requests).
+        code: The remote gateway's one-time pairing code.  Pairing fails
+              closed when it is missing or wrong.
 
     Returns:
         dict: {paired: bool, peer_name: str}
@@ -175,6 +179,7 @@ def pair_with_peer(address: str, local_token: str = "") -> Dict[str, Any]:
     payload = json.dumps({
         "device_name": socket.gethostname(),
         "token": local_token,
+        "code": code,
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -186,8 +191,20 @@ def pair_with_peer(address: str, local_token: str = "") -> Dict[str, Any]:
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             result = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        # 403 => bad/absent pairing code; surface the remote's message.
+        try:
+            body = json.loads(exc.read().decode("utf-8"))
+            detail = body.get("error", exc.reason)
+        except Exception:
+            detail = exc.reason
+        return {"paired": False, "peer_name": address, "error": str(detail)}
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
         return {"paired": False, "peer_name": address, "error": str(exc)}
+
+    if not result.get("paired"):
+        return {"paired": False, "peer_name": address,
+                "error": result.get("error", "pairing rejected")}
 
     # ── Persist to peers.json ──
     peers = _load_peers()

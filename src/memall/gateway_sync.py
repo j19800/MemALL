@@ -5,6 +5,7 @@ re-exporting from ``memall.gateway``.
 """
 
 import json
+import logging
 import os
 import re
 from datetime import datetime, timezone
@@ -14,6 +15,8 @@ from typing import Any, Dict, List
 from memall.core.db import get_conn
 from memall.core.levels import normalize_level
 from memall.core.thin_waist import normalize_agent_name
+
+logger = logging.getLogger(__name__)
 
 _PROJECT_DIR = Path.home() / ".memall"
 
@@ -277,7 +280,7 @@ def import_bundle(bundle_or_path) -> Dict[str, Any]:
             for d in extra:
                 allowed_dirs.append(Path(d).expanduser().resolve())
         except Exception:
-            pass
+            logger.debug("gateway_sync: security.import_allowed_dirs unreadable, using default", exc_info=True)
         if not _path_within_any(resolved, allowed_dirs):
             raise PermissionError(
                 f"Import rejected: {resolved} is outside allowed directories "

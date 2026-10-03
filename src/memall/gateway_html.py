@@ -273,7 +273,7 @@ def render_features_html(gateway_version: str = "unknown") -> str:
             for m, p, d in routes
         )
     except Exception:
-        pass
+        logger.debug("gateway_html: route table introspection failed", exc_info=True)
     return f"""<!DOCTYPE html><html><head><meta charset='utf-8'>
 <title>MemALL · 功能</title>{HTML_STYLE}</head><body>
 <h1>📡 MemALL Gateway v{gateway_version}</h1>{NAV_HTML}
