@@ -353,6 +353,19 @@ def cmd_doctor(args):
         except Exception:
             _add("FTS Index", "WARN", "FTS index not accessible")
 
+    # ── Check 12: Pipeline step inventory (source of truth for docs) ──
+    try:
+        from memall.pipeline import list_pipeline_steps
+        inv = list_pipeline_steps()
+        _add(
+            "Pipeline Inventory",
+            "PASS",
+            f"{inv['core_count']} core steps + {inv['optional_count']} optional "
+            f"(run `memall pipeline steps` to list)",
+        )
+    except Exception as e:
+        _add("Pipeline Inventory", "WARN", f"Could not enumerate steps: {e}")
+
     if conn:
         conn.close()
 

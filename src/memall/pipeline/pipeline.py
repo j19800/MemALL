@@ -491,6 +491,26 @@ _OPTIONAL_STEPS = {
 }
 
 
+def list_pipeline_steps() -> dict:
+    """Return the canonical pipeline step inventory.
+
+    Single source of truth for documentation (README) and the ``memall doctor``
+    report. Avoids hand-maintained step counts drifting from ``_PIPELINE_STEPS``.
+
+    Returns:
+        ``{"core": [step_name, ...], "optional": [step_name, ...],
+          "core_count": int, "optional_count": int}``
+    """
+    core = [name for name, _, _, _ in _PIPELINE_STEPS]
+    optional = sorted(_OPTIONAL_STEPS.keys())
+    return {
+        "core": core,
+        "optional": optional,
+        "core_count": len(core),
+        "optional_count": len(optional),
+    }
+
+
 def _load_step_fn(module_path: str, func_name: str):
     mod = importlib.import_module(module_path)
     return getattr(mod, func_name)

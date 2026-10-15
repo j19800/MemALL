@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
-  <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python 3.9+">
+  <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/MCP-2025--03--26-purple" alt="MCP">
   <img src="https://img.shields.io/github/stars/j19800/MemALL?style=social" alt="GitHub stars">
 </p>
@@ -9,7 +9,7 @@
 <p align="center"><strong>Multi-agent Memory OS</strong> — 本地优先的 AI Agent 持久化记忆系统</p>
 
 <p align="center">
-  <i>7 MCP tools · 11-layer memory lifecycle · 30-step self-evolving pipeline · Knowledge graph · Multi-agent shared memory · <b>Hook-driven automation</b></i>
+  <i>7 MCP tools · 3 priority + 11-layer memory lifecycle · 30-step self-evolving pipeline · Knowledge graph · Multi-agent shared memory · <b>Hook-driven automation</b></i>
 </p>
 
 <p align="center">
@@ -57,13 +57,13 @@ Then in any MCP client:
 
 ## 🔥 Why MemALL?
 
-### 🧠 11-Layer Memory Lifecycle
+### 🧠 14-Level Memory Lifecycle (3 Priority + 11 Lifecycle Layers)
 
 Not just "store and retrieve". Every memory has a semantic level with exclusion-based priority classification, epoch detection, and echo scoring:
 
 | Level | Meaning | Example |
 |-------|---------|---------|
-| P0/P1/P2 | Planning | "Ship v0.1.0 by June 23" |
+| **P0/P1/P2** | **Planning** (priority layers) | "Ship v0.1.0 by June 23" |
 | L1 | Raw fact | "User reported login bug" |
 | L2 | Convention | "Use exclusion chain for classifier" |
 | L3 | Business idea | "MemPort — cross-platform memory migration" |
@@ -72,11 +72,13 @@ Not just "store and retrieve". Every memory has a semantic level with exclusion-
 | **L6** | **Self-reflection** | "What went well/badly this session" |
 | **L7** | **Preference** | "Prefers SMALL response, English-only" |
 | **L8** | **Edge-promoted** | Auto-promoted via knowledge graph connectivity |
-| **L9** | **Distillation** | "10k conversations → 200 knowledge nodes" |
-| **L10** | **System insight** | Cross-domain pattern detection |
-| **L11** | **Domain intelligence** | Cross-project domain patterns |
+| **L9** | **Distillation** | Same-agent, same-category knowledge compression ("10k conversations → 200 knowledge nodes") |
+| **L10** | **System insight** | **Cross-category** insight — same agent spanning ≥2 distinct categories |
+| **L11** | **Domain intelligence** | **Cross-project / cross-agent** domain patterns |
 
-**30 core steps + 5 optional** auto pipeline: enriches → classifies → detects epochs → reflects → distills → integrates → observes. No manual CRUD needed.
+> **Scope note:** "Cross-domain" at L10 means *cross-category within one agent* (produced by `integrate_step`). Truly *cross-agent* insight is produced separately by the `cross_agent` pipeline step, which can also emit L10 (cross-agent L9 aggregation) and L11 (domain patterns recurring across ≥5 agents). The two mechanisms are distinct.
+
+**30 core steps + 5 optional** auto pipeline (see `list_pipeline_steps()`): enriches → classifies → detects epochs → reflects → distills → integrates → observes. No manual CRUD needed.
 
 ### 🔗 Knowledge Graph
 
@@ -116,7 +118,9 @@ SQLite + FTS5 + vector search. Zero cloud dependency. Your data stays on your ma
 
 ---
 
-## 🛠️ 7 MCP Tools
+## 🛠️ MCP Tool Surface (7 server endpoints)
+
+> **Count clarification:** The gateway exposes **7 top-level MCP tools** (`memall_write`, `memall_read`, `memall_persona`, `memall_discussion`, `memall_federation`, `memall_system`, `memall_hooks_recent`). Each is a *consolidated* tool with many `action`s — the table below lists the individual actions, which may read like "30+ tools" but are dispatched through those 7 endpoints. This is why older docs said "6 consolidated tools": the count depends on whether `memall_hooks_recent` is counted. Source of truth: `src/memall/mcp/tools/__init__.py`.
 
 | Category | Tools |
 |----------|-------|
@@ -150,10 +154,6 @@ python install.py
 ```
 
 装完即用，自动完成：初始化数据库 → 启动服务 → 配置 MCP → 打开浏览器。
-
-## 🛠️ 7 MCP Tools
-#   }
-# }
 
 # 4. Start remembering
 /capture "Project X: decided to use FastAPI, reason: async support"
@@ -193,8 +193,8 @@ src/memall/
 ├── cli/          # CLI (40+ commands)
 ├── core/         # SQLite / NLP / vector search / event processor / echo scoring
 ├── api/          # FastAPI REST (35 routes)
-├── mcp/          # MCP adapter (6 consolidated tools)
-├── pipeline/     # 30-step auto pipeline + 5 optional
+├── mcp/          # MCP adapter (7 consolidated tool endpoints)
+├── pipeline/     # 30-step auto pipeline + 5 optional (see list_pipeline_steps())
 │   ├── observe/  # OODA observation step
 │   ├── distill/  # L9/L10/L11 distillation, L7 preference, epoch detection
 │   ├── classify/ # Exclusion-based priority classification
@@ -209,7 +209,7 @@ src/memall/
 
 ## 📝 Roadmap
 
-- [x] **v0.1.0** — Core MCP server, 6 consolidated tools, CLI, PyPI package
+- [x] **v0.1.0** — Core MCP server, 7 consolidated tool endpoints, CLI, PyPI package
 - [ ] **v0.2.0** — Web dashboard, user system, Pro tier gating
 - [ ] **v0.3.0** — Cloud sync, team collaboration, API gateway
 

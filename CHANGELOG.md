@@ -6,6 +6,15 @@
 - **`/api/graph/center` 空图崩溃（P3）**：空库（无 edges）时端点返回 `node_id=None`，前端退化到不存在的 `id=1`。改为优先取最高 degree 的 hub 节点；无边时回退到最新创建的记忆；仅当库完全为空才返回 `None`。端点始终返回真实存在的节点。
 - **Windows GBK 控制台编码崩溃（P3）**：`memall doctor` 等打印 ✓/✗/⚠ 图标在 GBK 终端抛 `UnicodeEncodeError`。在 CLI 入口 `cli/main.py` 用 `sys.stdout/stderr.reconfigure(encoding="utf-8")` 重新配置输出编码，兼容无 `reconfigure` 的环境。
 
+### Docs（消除营销/实现语义落差）
+
+- **README 修正三处不一致**：
+  1. 标题 "11-layer" → "3 priority + 11-layer memory lifecycle"（明确 14 级：P0/P1/P2 + L1–L11）。
+  2. "7 MCP tools" 增加澄清段：网关暴露 **7 个顶层 MCP 工具端点**（`memall_write`/`memall_read`/`memall_persona`/`memall_discussion`/`memall_federation`/`memall_system`/`memall_hooks_recent`），其余是各端点的 `action`，旧文档的 "6 consolidated tools" 源于是否计入 `memall_hooks_recent`。唯一真相源为 `src/memall/mcp/tools/__init__.py`。
+  3. 生命周期表补充 L9/L10/L11 的生成来源与"跨域"语义边界：L10 cross-domain = 同 agent 跨 category（`integrate_step`）；真正 cross-agent 洞察由 `cross_agent` 步骤产出（可产 L10/L11）。Python badge `3.9+` → `3.10+`（与 `pyproject.toml requires-python` 一致）。
+- **新增 `list_pipeline_steps()`**（`pipeline/pipeline.py` + 导出到 `pipeline/__init__.py`）：以代码为唯一真相源返回 30 核心 + 5 可选步骤，避免 README 步数手工维护漂移。
+- **`memall pipeline steps` 命令** + **`doctor` 新增 "Pipeline Inventory" 检查**（Check 12），显示步骤计数并指向 `memall pipeline steps`。全量回归 **486 passed / 2 skipped / 0 failed**。
+
 ### Added（回归测试）
 
 - **`tests/test_gateway.py::test_api_graph_center`**：改为自包含——先通过网关 `/capture` + `/edges` 写入两条相连记忆，再断言 `/api/graph/center` 返回的 `node_id` 真实存在且 `edge_count > 0`，不再依赖全局库状态。

@@ -10,6 +10,7 @@ from memall.cli.handle_call import mcp_call
 from memall.core.db import get_conn
 from memall.core.thin_waist import retrieve
 from memall.pipeline import run_pipeline
+from memall.pipeline import list_pipeline_steps
 from memall.pipeline.persona import generate_persona, persona_step, generate_profile_3layer
 
 logger = logging.getLogger(__name__)
@@ -278,6 +279,19 @@ def cmd_pipeline_status(args):
 
     finally:
         conn.close()
+
+
+def cmd_pipeline_steps(args):
+    """List the canonical pipeline step inventory (source of truth for docs)."""
+    inv = list_pipeline_steps()
+    print(f"Core pipeline steps ({inv['core_count']}):")
+    for i, name in enumerate(inv["core"], 1):
+        print(f"  {i:2d}. {name}")
+    print(f"\nOptional steps ({inv['optional_count']}, gated by run_pipeline kwargs):")
+    for i, name in enumerate(inv["optional"], 1):
+        print(f"  {i}. {name}")
+    print("\n(Counts are generated from memall.pipeline.list_pipeline_steps(), "
+          "not hand-maintained — keep README in sync by re-running this command.)")
 
 
 # ──────────────────────────────────────────────
