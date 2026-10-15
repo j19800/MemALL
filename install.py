@@ -38,7 +38,7 @@ except Exception as e:
 
 # 3. Start gateway in background
 step("3/5 启动服务")
-port = 9920
+port = 9919
 startup_script = f'''
 import sys, time
 sys.path.insert(0, r"{Path(__file__).parent / 'src'}")

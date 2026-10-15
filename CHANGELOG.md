@@ -1,3 +1,19 @@
+## [v0.1.67] - 2026-10-15
+
+### Fixed（二次开发基线：测试与编码修复）
+
+- **配置端口不统一（P3）**：`config.py` 默认 `gateway.port` / `discovery.port` 为 `9920`，但 `server.py`、`gateway_commands.py`、`mcp/tools/gateway.py`、CORS 白名单、`smoke_test.py` 与 `test_config.py` 均期望 `9919`，导致 `test_get_config_default` 失败。收敛为权威端口 `9919`（与 API/MCP/CORS 既有约定一致），并同步修正 `install.py` 启动脚本中的端口。
+- **`/api/graph/center` 空图崩溃（P3）**：空库（无 edges）时端点返回 `node_id=None`，前端退化到不存在的 `id=1`。改为优先取最高 degree 的 hub 节点；无边时回退到最新创建的记忆；仅当库完全为空才返回 `None`。端点始终返回真实存在的节点。
+- **Windows GBK 控制台编码崩溃（P3）**：`memall doctor` 等打印 ✓/✗/⚠ 图标在 GBK 终端抛 `UnicodeEncodeError`。在 CLI 入口 `cli/main.py` 用 `sys.stdout/stderr.reconfigure(encoding="utf-8")` 重新配置输出编码，兼容无 `reconfigure` 的环境。
+
+### Added（回归测试）
+
+- **`tests/test_gateway.py::test_api_graph_center`**：改为自包含——先通过网关 `/capture` + `/edges` 写入两条相连记忆，再断言 `/api/graph/center` 返回的 `node_id` 真实存在且 `edge_count > 0`，不再依赖全局库状态。
+
+### Changed
+
+- 全量回归：**486 passed / 2 skipped / 0 failed**（修复前为 2 failed）。
+
 ## [v0.1.66] - 2026-10-03
 
 ### Fixed（深度审查 F-03 ~ F-09 全面修复）

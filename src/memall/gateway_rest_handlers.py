@@ -99,16 +99,34 @@ class RestHandlersMixin:
                     )
 
     async def _handle_api_graph_center(self, request: web.Request) -> web.Response:
-        """GET /api/graph/center — recommend a central (highest-degree) node as graph-view default."""
+        """GET /api/graph/center — recommend a central (highest-degree) node as graph-view default.
+
+        Falls back to the most recently created memory when the graph has no
+        edges yet, so the endpoint always returns a real, existing node id
+        instead of ``None`` (frontend previously defaulted to a non-existent
+        id=1 on an empty graph).
+        """
         with pool_conn() as conn:
             row = conn.execute(
                 "SELECT node_id, COUNT(*) AS edge_count FROM ("
                 "SELECT source_id AS node_id FROM edges UNION ALL SELECT target_id AS node_id FROM edges"
                 ") GROUP BY node_id ORDER BY edge_count DESC LIMIT 1"
             ).fetchone()
-            if not row:
-                return web.json_response({"node_id": None, "subject": None, "edge_count": 0})
-            node_id = row["node_id"]
+            if row:
+                node_id = row["node_id"]
+                edge_count = row["edge_count"]
+            else:
+                # No edges yet: anchor on the newest memory so the graph view
+                # has a valid focal node on a fresh/empty database.
+                newest = conn.execute(
+                    "SELECT id FROM memories ORDER BY rowid DESC LIMIT 1"
+                ).fetchone()
+                if newest:
+                    node_id = newest["id"]
+                    edge_count = 0
+                else:
+                    # Truly empty DB — nothing to center on.
+                    return web.json_response({"node_id": None, "subject": None, "edge_count": 0})
             mem = conn.execute(
                 "SELECT subject, content FROM memories WHERE id = ?", (node_id,)
             ).fetchone()
@@ -118,7 +136,7 @@ class RestHandlersMixin:
                 subject = mem["content"][:40]
             else:
                 subject = f"#{node_id}"
-        return web.json_response({"node_id": node_id, "subject": subject, "edge_count": row["edge_count"]})
+        return web.json_response({"node_id": node_id, "subject": subject, "edge_count": edge_count})
 
     async def _handle_api_slices(self, request: web.Request) -> web.Response:
         agent_name = request.query.get("agent_name", "").strip() or "*"

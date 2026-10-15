@@ -163,7 +163,8 @@ def test_api_graph_center():
 
     Regression for the knowledge-graph "opens empty" bug: the endpoint must
     return a node_id that actually exists in the memories table (previously
-    the frontend defaulted to id=1 which never existed).
+    the frontend defaulted to id=1 which never existed). The test seeds two
+    connected memories so the graph has a real hub with edges to assert on.
     """
     gw = MemAllGateway(host="127.0.0.1", port=GW_PORT_CAPTURE)
     gw.start()
@@ -171,6 +172,30 @@ def test_api_graph_center():
 
     try:
         import urllib.request
+
+        def _post(path, payload):
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{GW_PORT_CAPTURE}{path}",
+                data=json.dumps(payload).encode(),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {gw._auth_token}",
+                },
+                method="POST",
+            )
+            return json.loads(urllib.request.urlopen(req, timeout=3).read().decode())
+
+        # Seed two memories and connect them so the graph has a hub node.
+        # Use the returned memory ids rather than assuming global DB state.
+        r1 = _post("/capture", {"agent_name": "graph_center_test",
+                                "content": "Graph center root memory", "category": "test"})
+        r2 = _post("/capture", {"agent_name": "graph_center_test",
+                                "content": "Graph center child memory", "category": "test"})
+        id1 = r1.get("id") or r1.get("memory_id")
+        id2 = r2.get("id") or r2.get("memory_id")
+        assert id1 and id2, f"capture did not return ids: {r1}, {r2}"
+        _post("/edges", {"source_id": id1, "target_id": id2, "relation_type": "refines"})
+
         req = urllib.request.Request(
             f"http://127.0.0.1:{GW_PORT_CAPTURE}/api/graph/center",
         )

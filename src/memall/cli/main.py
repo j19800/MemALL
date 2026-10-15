@@ -2,6 +2,20 @@ import argparse
 import sys
 import logging
 
+# Ensure UTF-8 output on platforms whose console defaults to a non-UTF-8 codec
+# (e.g. GBK on Windows ``cmd``/PowerShell). Without this, printing symbols like
+# the ✓/✗/⚠ health-check icons raises UnicodeEncodeError and aborts the CLI.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (ValueError, OSError):
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8")
+    except (ValueError, OSError):
+        pass
+
 from memall import __version__
 from memall.core.log_setup import configure as configure_logging
 
