@@ -1,6 +1,6 @@
 # MemALL — Multi-Agent Collaborative Memory OS
 
-**Version:** 0.1.66  
+**Version:** 0.1.68  
 **Language:** Python 3.11+  
 **Storage:** SQLite (single file, bitemporal) + optional vector backends (vec0 / FAISS)
 
@@ -18,7 +18,7 @@ and an automated processing pipeline.
 | **Edge** | Typed relation between two memories (`refines`, `contradicts`, `extends`, `cites`, `supersedes`, `related`) with bitemporal validity windows. |
 | **Pipeline** | Background processing steps (enrich, classify, distill, integrate, decay, forget, …) that are reentrant and commit per step. |
 | **Federation** | Cross-instance memory sharing, conflict detection, and automatic conflict resolution. |
-| **MCP** | Model Context Protocol server (STDIO + HTTP) exposing tools like `memall_write`, `memall_read`, `memall_persona`. |
+| **MCP** | Model Context Protocol server (STDIO + HTTP) exposing 7 aggregated tools (`memall_write`, `memall_read`, `memall_persona`, `memall_discussion`, `memall_federation`, `memall_system`, `memall_hooks_recent`), each dispatching on `action` (some also on `sub_action`). Every action is schema-validated; unknown actions are rejected with a list of valid ones. Discussion stances accept both `agree/disagree/pass` (MCP surface) and `confirm/reject/abstain` (convergence layer), normalized automatically. |
 
 ## Quick Start
 
@@ -101,7 +101,9 @@ memall/
 
 ## Contributing
 
-- All writes funnel through `core/thin_waist.capture()` — keep it the single write entry point.
+- All writes funnel through `core/thin_waist.capture()` (inserts) and `core/thin_waist.update()`
+  (updates) — keep them the single write entry points; MCP tool handlers must not issue raw
+  `UPDATE memories ...` statements.
 - Levels must be normalized via `core/levels.normalize_level()` before writing; never bypass the
   SQLite `CHECK` constraint.
 - Pipeline steps must declare an idempotency contract (`cursor` / `recompute` / `dedup` /

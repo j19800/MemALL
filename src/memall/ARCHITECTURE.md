@@ -106,14 +106,25 @@ An async queue (`enqueue_pipeline`) runs pipelines on a daemon thread without bl
 Model Context Protocol server exposing tools to AI agent hosts.
 
 - `mcp/server.py` — STDIO JSON-RPC server (initialize → tools/list → tools/call), supports
-  protocol versions 2024-11-05 through 2025-11-25.
+  protocol versions 2024-11-05 through 2025-11-25. Malformed/oversized request
+  lines get JSON-RPC `-32700` parse-error responses (never silently dropped);
+  only a closed stdin shuts the server down.
 - `mcp/adapter.py` — Tool dispatch with pre/post hooks, metrics, tracing, session-context
   injection, intercept-log injection.
 - `mcp/registry.py` — `ToolRegistry` of `ToolDef` entries (name, description, inputSchema,
   handler).
-- `mcp/models.py` — Pydantic input models with per-action validation (e.g. `CaptureInput`,
-  `RetrieveInput`, `ConnectInput`, `SmartStoreInput`).
-- `mcp/validator.py` — Maps `(tool_name, action)` → Pydantic model for strict input validation.
+- `mcp/models.py` — Pydantic input models. Every registered `action` (and
+  `sub_action` family) has a model — e.g. `CaptureInput`, `RetrieveInput`,
+  `SmartStoreInput`, plus the `sub_action`-driven families (`ForgetInput`,
+  `OpsInput`, `DBInput`, `GatewayInput`, `SecurityInput`, `AdaptiveInput`,
+  `OnboardingInput`, `DistillListInput`/`DistillSummarizeInput`).
+- `mcp/validator.py` — Maps `(tool_name, action)` → Pydantic model for strict
+  input validation. `sub_action`-driven actions constrain the vocabulary on
+  `sub_action` (handlers rewrite `action = sub_action` before dispatch).
+  Unknown `(tool, action)` pairs are rejected with a list of valid actions;
+  `DiscussionRespondInput.stance` accepts both `agree/disagree/pass` and the
+  canonical `confirm/reject/abstain`, normalizing to the latter (convergence
+  layer vocabulary).
 - `mcp/tools/` — Individual tool handlers: capture, retrieve, memory_write, discuss, distill,
   federation, gateway, graph, hub, index, manage, onboarding, persona, pipeline, reflect,
   search, security, session, smart_store, trace, trust, update.
