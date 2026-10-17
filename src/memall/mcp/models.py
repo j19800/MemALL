@@ -13,7 +13,7 @@ class CaptureInput(BaseModel):
     summary: str = ""
     project: str = Field("", max_length=500)
     category: str = Field("general", max_length=100)
-    level: str = Field("P2", pattern=r"^(P[0-2]|L[1-9]|L10)$")
+    level: str = Field("P2", pattern=r"^(P[0-2]|L(10|11|[1-9]))$")
     metadata: str = "{}"
 
 
@@ -86,7 +86,7 @@ class SmartStoreInput(BaseModel):
     subject: str = Field("", max_length=500)
     project: str = Field("", max_length=500)
     category: str = Field("general", max_length=100)
-    level: str = Field("P2", pattern=r"^(P[0-2]|L[1-9]|L10)$")
+    level: str = Field("P2", pattern=r"^(P[0-2]|L(10|11|[1-9]))$")
     dedup_threshold: float = Field(0.85, ge=0.0, le=1.0)
 
 
@@ -110,7 +110,7 @@ class UpdateInput(BaseModel):
     category: Optional[str] = Field(None, max_length=100)
     project: Optional[str] = Field(None, max_length=500)
     summary: Optional[str] = Field(None, max_length=2000)
-    level: Optional[str] = Field(None, pattern=r"^(P[0-4]|L[1-9]|L10)$")
+    level: Optional[str] = Field(None, pattern=r"^(P[0-2]|L(10|11|[1-9]))$")
     # Caller identity.  Required by the ownership gate — without it the
     # validator strips the caller and the gate silently never fires.
     # It is deliberately NOT written to the row: ownership changes must go
