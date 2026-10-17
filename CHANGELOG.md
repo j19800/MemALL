@@ -1,5 +1,14 @@
 ## [v0.1.68] - 2026-10-18
 
+### Fixed（pipeline 步骤修复 — 第 3 批）
+
+capture 触发的 pipeline 每轮有 4 步持续失败；全部实测修复（hook 日志显示的旧失败来自修复前启动的异步旧进程）：
+
+- **session 步骤（P1）**：`harvest_step` 生成 L6 反思的 INSERT 声明 17 列（含 `thread_id`+`stream`），VALUES 只有 14 个占位符且 `thread_id` 无占位 — `16 values for 17 columns`，每次会话收割必崩。补上 `thread_id` 占位符（内联字面量 `L6`/`reflection`/`ledger` 不占位），参数 13 个对齐 14 占位符。实测 15 个活跃会话全部成功产出 L4+L6。
+- **decay 步骤（P1）**：`confidence` 可能是 REAL affinity 迁移前的遗留 TEXT 值，`row["confidence"] - base_rate * multiplier` 抛 `str - float` TypeError。防御性 `float()` 强转，corrupt 行置 0.0 起步。实测处理 1123 条 decay + 1259 条 protected。
+- **cross_agent 步骤（P1）**：`float(m["confidence"])` 遇历史遗留 `'private'` 字符串崩溃。逐条 try/except 收集后求均值，corrupt 行计 0.0。实测产出 L10×1 + L11×1（semantic 聚类）。
+- **discover_assoc 步骤（P2）**：实体重叠路径的 SELECT 漏选 `m.content` 但回退分支访问 `r["content"][:60]` — sqlite3 Row `IndexError: No item with that key`。补选列。实测发现 398 条关联。
+
 ### Fixed（MCP 工具审计：验证层重构 + 错误信封 + 词汇表统一）
 
 #### 第 2 批 — server 协议层与执行器
