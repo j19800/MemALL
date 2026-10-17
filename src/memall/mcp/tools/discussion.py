@@ -3,6 +3,8 @@ from memall.pipeline.convergence import create_discussion, confirm_discussion, g
 
 
 def handle_create(arguments: dict) -> str:
+    if not arguments.get("title"):
+        return json.dumps({"error": "title is required"}, ensure_ascii=False)
     result = create_discussion(
         title=arguments["title"],
         background=arguments.get("background", ""),
@@ -18,11 +20,20 @@ def handle_create(arguments: dict) -> str:
 
 
 def handle_respond(arguments: dict) -> str:
+    missing = [k for k in ("discussion_id", "agent_name", "stance")
+               if not arguments.get(k)]
+    if missing:
+        return json.dumps({"error": f"missing required fields: {', '.join(missing)}"},
+                          ensure_ascii=False)
+    # The reasoning text used to be read from arguments["arguments"], whose key
+    # collides with the JSON-RPC "arguments" wrapper name.  Accept the canonical
+    # "arguments"/"note" spellings here.
+    note = arguments.get("arguments") or arguments.get("note") or ""
     result = confirm_discussion(
         discussion_id=arguments["discussion_id"],
         agent_name=arguments["agent_name"],
         stance=arguments["stance"],
-        note=arguments.get("arguments", ""),
+        note=note if isinstance(note, str) else str(note),
     )
     return json.dumps(result, ensure_ascii=False, default=str)
 

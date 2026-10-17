@@ -5,6 +5,8 @@ from memall.core.thin_waist import smart_store, store_batch, update, normalize_a
 
 
 def handle_smart_store(arguments: dict) -> str:
+    if not arguments.get("content"):
+        return json.dumps({"error": "content is required"}, ensure_ascii=False)
     # Project inference is centralized in capture(); smart_store → capture() will
     # populate it automatically. Pass the caller's project through unchanged.
     project = arguments.get("project", "")
@@ -22,7 +24,10 @@ def handle_smart_store(arguments: dict) -> str:
 
 
 def handle_store_batch(arguments: dict) -> str:
-    result = store_batch(arguments.get("items", []))
+    items = arguments.get("items") or []
+    if not items:
+        return json.dumps({"error": "items is required (non-empty array)"}, ensure_ascii=False)
+    result = store_batch(items)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -36,7 +41,14 @@ def _is_supervisor(agent: str) -> bool:
 
 
 def handle_update(arguments: dict) -> str:
-    mem_id = arguments["memory_id"]
+    mem_id = arguments.get("memory_id")
+    if not mem_id:
+        return json.dumps({"error": "memory_id is required"}, ensure_ascii=False)
+    fields = {k: v for k, v in arguments.items()
+              if k not in ("action", "memory_id", "agent_name", "confirm", "dry_run", "sub_action")
+              and v is not None}
+    if not fields:
+        return json.dumps({"error": "no updatable fields provided"}, ensure_ascii=False)
 
     # ── Cross-agent ownership enforcement (on by default) ───────────────
     # Without this gate any agent can overwrite another agent's memory *and*

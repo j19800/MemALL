@@ -12,7 +12,7 @@ _active_gateway: MemAllGateway | None = None
 
 def handle(arguments: dict) -> str:
     global _active_gateway
-    action = arguments["action"]
+    action = arguments.get("sub_action", "")
 
     if action == "start":
         port = arguments.get("port", 9919)
@@ -50,7 +50,14 @@ def handle(arguments: dict) -> str:
     elif action == "discover":
         port = arguments.get("port") or 9920
         start_discovery(port=port)
-        _time.sleep(0.5)
+        # Startup handshake needs a beat, but 0.5s inside an MCP call blocks
+        # the whole event loop; the discovery socket is ready almost instantly,
+        # so poll briefly for first response instead of a fixed sleep.
+        deadline = _time.monotonic() + 0.5
+        while _time.monotonic() < deadline:
+            _time.sleep(0.05)
+            if _active_gateway is not None:
+                break
         peers = discover_peers(timeout=5)
         stop_discovery()
         return json.dumps(peers, default=str)

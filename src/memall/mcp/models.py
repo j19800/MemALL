@@ -1,6 +1,6 @@
 # mcp/models.py - Pydantic models for MCP tool input validation
-from pydantic import BaseModel, Field
-from typing import Optional, List
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional, List, Literal
 
 
 # ── Core tools ──
@@ -15,6 +15,22 @@ class CaptureInput(BaseModel):
     category: str = Field("general", max_length=100)
     level: str = Field("P2", pattern=r"^(P[0-2]|L(10|11|[1-9]))$")
     metadata: str = "{}"
+    # Thread linking: MemoryInput supports thread_id but the validator used to
+    # drop it silently, breaking reply-threading through the MCP surface.
+    thread_id: Optional[int] = Field(None, ge=1)
+
+
+class QuickCaptureInput(BaseModel):
+    """memall_write action=quick/记一下 — auto-filled capture, needs content."""
+    content: str = Field(..., min_length=1, max_length=10000)
+    owner: str = Field("", max_length=200)
+    agent_name: str = Field("", max_length=200)
+    subject: str = Field("", max_length=500)
+    project: str = Field("", max_length=500)
+    category: str = Field("general", max_length=100)
+    level: str = Field("P2", pattern=r"^(P[0-2]|L(10|11|[1-9]))$")
+    metadata: str = "{}"
+    thread_id: Optional[int] = Field(None, ge=1)
 
 
 class RetrieveInput(BaseModel):
@@ -23,7 +39,7 @@ class RetrieveInput(BaseModel):
     agent_name: Optional[str] = Field(None, max_length=200)
     category: Optional[str] = Field(None, max_length=100)
     project: Optional[str] = Field(None, max_length=500)
-    level: Optional[str] = Field(None, max_length=20)
+    level: Optional[str] = Field(None, max_length=20, pattern=r"^(P[0-2]|L(10|11|[1-9]))$")
     limit: int = Field(20, ge=1, le=500)
 
 
@@ -61,6 +77,9 @@ class PersonaInput(BaseModel):
     agent_name: str = Field(..., min_length=1, max_length=200)
     evolution: bool = False
     window_days: int = Field(30, ge=1, le=365)
+    # Extra fields accepted by the persona handler beyond the enum'd schema.
+    mode: Optional[str] = Field(None, pattern=r"^(static|dual|dynamic)$")
+    dynamic_window_days: Optional[int] = Field(None, ge=1, le=365)
 
 
 class PersonaProfileInput(BaseModel):
@@ -74,6 +93,21 @@ class AskInput(BaseModel):
     # Fix Bug-1: 显式声明 subject 字段，agent_name 保留为向后兼容 alias
     subject: Optional[str] = Field(None, max_length=200)
     agent_name: Optional[str] = Field(None, max_length=200)
+
+
+class ProfilePreloadInput(BaseModel):
+    """profile_preload / 预加载画像 — reads identities by agent_name."""
+    agent_name: str = Field("", max_length=200)
+
+
+class PersonaSearchInput(BaseModel):
+    """profile_search / 搜画像 — LIKE search over identities."""
+    query: str = Field("", max_length=500)
+
+
+class PersonaForesightInput(BaseModel):
+    """foresight / 前瞻 — predicts next-needed info from recent activity."""
+    agent_name: str = Field("", max_length=200)
 
 
 # ── Smart / Batch / Update / VectorSearch tools ──
@@ -97,7 +131,7 @@ class StoreBatchItem(BaseModel):
     subject: str = ""
     project: str = ""
     category: str = "general"
-    level: str = "P2"
+    level: str = Field("P2", pattern=r"^(P[0-2]|L(10|11|[1-9]))$")
 
 
 class StoreBatchInput(BaseModel):
@@ -121,6 +155,18 @@ class UpdateInput(BaseModel):
 class VectorSearchInput(BaseModel):
     query: str = Field(..., min_length=1, max_length=5000)
     top_k: int = Field(10, ge=1, le=500)
+
+
+class UnifiedSearchInput(BaseModel):
+    """search / chat / hybrid_search — the unified-search engine router."""
+    query: str = Field(..., min_length=1, max_length=5000)
+    top_k: int = Field(10, ge=1, le=500)
+    mode: str = Field("auto", pattern=r"^(auto|direct|fts5|vector|hybrid)$")
+    rrf_k: int = Field(60, ge=1, le=200)
+    category: Optional[str] = Field(None, max_length=100)
+    level: Optional[str] = Field(None, pattern=r"^(P[0-2]|L(10|11|[1-9]))$")
+    owner: Optional[str] = Field(None, max_length=200)
+    rerank: bool = False
 
 
 # ── Session tools (Phase 8) ──
@@ -176,12 +222,22 @@ class FedExtractInput(BaseModel):
     session_id: str = Field(..., min_length=1, max_length=200)
 
 
+class FedDeliverInput(BaseModel):
+    """federation deliver — hub push to a target agent."""
+    target_agent: str = Field(..., min_length=1, max_length=200)
+    content: str = Field(..., min_length=1, max_length=10000)
+    event_type: str = Field("hub_push", max_length=100)
+    category: str = Field("reflection", max_length=100)
+    source: str = Field("hub", max_length=200)
+
+
 # ── Forgetting (Phase 11) ──
+# memall_write forget re-dispatches on sub_action: the handler receives
+# action=<sub_action>, so the vocabulary constraint lives on sub_action.
+# The handler defaults missing sub_action to "expired" — mirrored here.
 
 class ForgetInput(BaseModel):
-    action: str = Field(
-        ..., pattern=r"^(expired|low_value|review|stats|all)$"
-    )
+    sub_action: str = Field("expired", pattern=r"^(expired|low_value|review|stats|all)$")
     days: int = Field(90, ge=1, le=3650)
     agent_name: Optional[str] = Field(None, max_length=200)
     # Explicit opt-in for irreversible deletion (see manage.handle_forget).
@@ -189,9 +245,11 @@ class ForgetInput(BaseModel):
 
 
 # ── Security (Phase 13) ──
+# memall_system security re-dispatches on sub_action (no handler default
+# → required, so bare calls fail with a structured error, not an opaque one).
 
 class SecurityInput(BaseModel):
-    action: str = Field(
+    sub_action: str = Field(
         ..., pattern=r"^(audit|permit|check|score|list)$"
     )
     agent_name: Optional[str] = Field(None, max_length=200)
@@ -201,9 +259,10 @@ class SecurityInput(BaseModel):
 
 
 # ── Ops (Phase 14) ──
+# memall_write ops re-dispatches on sub_action (no handler default → required).
 
 class OpsInput(BaseModel):
-    action: str = Field(
+    sub_action: str = Field(
         ..., pattern=r"^(merge|split|tag|batch_tag|archive|restore|dedup|undo)$"
     )
     source_id: Optional[int] = Field(None, ge=1)
@@ -231,18 +290,20 @@ class OpsInput(BaseModel):
 
 
 # ── Adaptive (Phase 12) ──
+# memall_system adaptive re-dispatches on sub_action (no handler default).
 
 class AdaptiveInput(BaseModel):
-    action: str = Field(
+    sub_action: str = Field(
         ..., pattern=r"^(clean|index|distill|all|report)$"
     )
     agent_name: Optional[str] = Field(None, max_length=200)
 
 
 # ── Gateway (Phase 15) ──
+# memall_system gateway re-dispatches on sub_action (no handler default).
 
 class GatewayInput(BaseModel):
-    action: str = Field(
+    sub_action: str = Field(
         ..., pattern=r"^(start|stop|export|import|discover|pair|peers|federated)$"
     )
     port: Optional[int] = Field(None, ge=1024, le=65535)
@@ -254,11 +315,17 @@ class GatewayInput(BaseModel):
 
 
 # ── DB Maintenance (Phase 21) ──
+# memall_system db re-dispatches on sub_action (no handler default).
 
 class DBInput(BaseModel):
-    action: str = Field(
-        ..., pattern=r"^(optimize|stats|vacuum)$"
+    sub_action: str = Field(
+        ...,
+        pattern=r"^(optimize|stats|vacuum|archive_stats|archive_vacuum|"
+                r"backfill_thread|backfill_project|dedupe_l9|dedupe_l10)$",
     )
+    dry_run: bool = False
+    confirm: bool = False
+    archive_corrupt: bool = True
 
 
 # ── Discussion tools (Phase 1.5) ──
@@ -273,14 +340,32 @@ class DiscussionCreateInput(BaseModel):
     recommendation: str = Field("", max_length=5000)
     action_items: Optional[list] = None
     timeout_hours: int = Field(24, ge=1, le=720)
+    convergence_rule: str = Field("unanimous", pattern=r"^(unanimous|majority|any)$")
 
 
 class DiscussionRespondInput(BaseModel):
     discussion_id: int = Field(..., ge=1)
     agent_name: str = Field(..., min_length=1, max_length=200)
-    stance: str = Field(..., pattern=r"^(agree|disagree|pass|abstain)$")
-    arguments: str = ""
+    # Dual-vocabulary acceptance: the MCP schema advertised agree/disagree/pass
+    # while the convergence layer only recognizes confirm/reject/abstain —
+    # stances were silently counted as "other" and consensus never converged.
+    # We now accept both vocabularies and normalize to the canonical one.
+    stance: str = Field(..., pattern=r"^(agree|disagree|pass|abstain|confirm|reject)$")
+    # Field name clash: the JSON-RPC wrapper is also called "arguments", so the
+    # reasoning text previously read arguments["arguments"] — a key that only
+    # existed when the client double-wrapped.  Accept both spellings and keep
+    # the schema name "arguments" for backwards compatibility.
+    arguments: str = Field("", max_length=10000)
     round_num: int = Field(1, ge=1, le=100)
+
+    @field_validator("stance", mode="before")
+    @classmethod
+    def _normalize_stance(cls, v):
+        if not isinstance(v, str):
+            raise ValueError("stance must be a string")
+        s = v.strip().lower()
+        # MCP schema vocabulary → convergence-layer vocabulary
+        return {"agree": "confirm", "disagree": "reject", "pass": "abstain"}.get(s, s)
 
 
 class DiscussionStatusInput(BaseModel):
@@ -307,11 +392,22 @@ class ReflectInteractInput(BaseModel):
     context: str = ""
 
 
-# ── Onboarding ──
+class ReflectInteractMCPInput(BaseModel):
+    """memall_system reflect — sub_action carries the interaction verb.
+    Required: reflect.handle records the verb verbatim, so an empty one would
+    be silently persisted as a meaningless interaction."""
+    sub_action: str = Field(..., pattern=r"^(agree|disagree|probe)$")
+    memory_id: int = Field(..., ge=1)
+    context: str = ""
 
+
+# ── Onboarding ──
+# NOTE: the dispatch verb lives in sub_action (the schema's action pattern
+# with submit_step was dead — submit_step is carried by sub_action).
+# No handler default → required.
 
 class OnboardingInput(BaseModel):
-    action: str = Field(..., pattern=r"^(status|start|reset|submit_step|skip)$")
+    sub_action: str = Field(..., pattern=r"^(status|start|reset|submit_step|skip)$")
     step: Optional[int] = Field(None, ge=1, le=5)
     input_data: Optional[dict] = None
     user_id: str = "default"
@@ -328,13 +424,56 @@ class RunPipelineInput(BaseModel):
     timeout: int = Field(300, ge=30, le=3600)
 
 
+# ── Distill ──
+# memall_system distill re-dispatches on sub_action (handler defaults "list")
+
+
+class DistillListInput(BaseModel):
+    """memall_system distill sub_action=list — list groups needing summaries."""
+    sub_action: str = Field("list", pattern=r"^list$")
+    limit: int = Field(10, ge=1, le=100)
+
+
+class DistillSummarizeInput(BaseModel):
+    """memall_system distill sub_action=summarize — write narrative summary."""
+    sub_action: str = Field("summarize", pattern=r"^summarize$")
+    group_id: int = Field(..., ge=1)
+    summary: str = Field(..., min_length=10, max_length=4000)
+    insight: Optional[str] = Field(None, max_length=2000)
+    gap: Optional[str] = Field(None, max_length=2000)
+    next: Optional[str] = Field(None, max_length=2000)
+
+
 # ── Agent Hub bridge ──
 
 
 class HubConnectInput(BaseModel):
-    pass
+    group_id: Optional[int] = Field(None, ge=1)
 
 
 class HubSyncInput(BaseModel):
     direction: str = Field("bidirectional", pattern=r"^(bidirectional|to_hub|from_hub)$")
     limit: int = Field(20, ge=1, le=500)
+
+
+class ImportInput(BaseModel):
+    """memall_system import — bulk import from jsonl/csv/mem0 files."""
+    path: str = Field(..., min_length=1, max_length=1000)
+    format: str = Field("jsonl", pattern=r"^(jsonl|json|csv|mem0)$")
+    agent_name: str = Field("imported", max_length=200)
+
+
+class IndexRebuildInput(BaseModel):
+    force: bool = False
+
+
+class DigestInput(BaseModel):
+    """digest/hot take no parameters; this model only guards payload shape."""
+    model_config = {"extra": "ignore"}
+
+
+# ── Hooks ──
+
+
+class HooksRecentInput(BaseModel):
+    n: int = Field(10, ge=1, le=100)

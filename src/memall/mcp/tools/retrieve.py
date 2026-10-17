@@ -26,6 +26,8 @@ def handle_retrieve(arguments: dict) -> str:
 
 
 def handle_vector_search(arguments: dict) -> str:
+    if not arguments.get("query"):
+        return json.dumps({"error": "query is required"})
     result = vector_search(
         query=arguments["query"],
         top_k=arguments.get("top_k", 10),
@@ -34,6 +36,8 @@ def handle_vector_search(arguments: dict) -> str:
 
 
 def handle_hybrid_search(arguments: dict) -> str:
+    if not arguments.get("query"):
+        return json.dumps({"error": "query is required"})
     result = hybrid_search(
         query=arguments["query"],
         top_k=arguments.get("top_k", 10),
@@ -100,7 +104,9 @@ def handle_unified_search(arguments: dict) -> str:
 
 
 def handle_trace(arguments: dict) -> str:
-    mem_id = arguments["memory_id"]
+    mem_id = arguments.get("memory_id")
+    if not mem_id:
+        return json.dumps({"error": "memory_id is required"})
     conn = get_conn()
     try:
         row = conn.execute(

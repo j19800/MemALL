@@ -40,7 +40,9 @@ def _confirmation_required(arguments: dict, op: str, hint: str = "") -> Optional
 
 
 def handle_forget(arguments: dict) -> str:
-    action = arguments["action"]
+    action = arguments.get("action", "")
+    if not action:
+        return json.dumps({"error": "sub_action is required (expired|low_value|review|stats|all)"})
     days = arguments.get("days", 90)
     agent = arguments.get("agent_name", None) or None
 
@@ -69,7 +71,9 @@ def handle_forget(arguments: dict) -> str:
 
 
 def handle_adaptive(arguments: dict) -> str:
-    action = arguments["action"]
+    action = arguments.get("action", "")
+    if not action:
+        return json.dumps({"error": "sub_action is required (clean|index|distill|all|report)"})
     agent = arguments.get("agent_name", None) or None
 
     if action == "clean":
@@ -88,7 +92,9 @@ def handle_adaptive(arguments: dict) -> str:
 
 
 def handle_security(arguments: dict) -> str:
-    action = arguments["action"]
+    action = arguments.get("action", "")
+    if not action:
+        return json.dumps({"error": "sub_action is required (audit|permit|check|score|list)"})
 
     if action == "audit":
         agent = arguments.get("agent_name", None) or None
@@ -116,7 +122,9 @@ def handle_security(arguments: dict) -> str:
 
 
 def handle_ops(arguments: dict) -> str:
-    action = arguments["action"]
+    action = arguments.get("action", "")
+    if not action:
+        return json.dumps({"error": "sub_action is required (merge|split|tag|batch_tag|archive|restore|dedup|undo)"})
 
     # merge / split / dedup rewrite or delete memories → gated.
     if action in ("merge", "split", "dedup"):
@@ -136,12 +144,18 @@ def handle_ops(arguments: dict) -> str:
             return gate
 
     if action == "merge":
+        if not arguments.get("source_id") or not arguments.get("target_id"):
+            return json.dumps({"error": "source_id and target_id are required for ops:merge"})
         result = merge_memories(arguments["source_id"], arguments["target_id"],
                                 separator=arguments.get("separator", "\n---\n"))
     elif action == "split":
+        if not arguments.get("memory_id"):
+            return json.dumps({"error": "memory_id is required for ops:split"})
         delim = arguments.get("delimiter", "\n\n")
         result = split_memory(arguments["memory_id"], delimiter=delim)
     elif action == "tag":
+        if not arguments.get("memory_id"):
+            return json.dumps({"error": "memory_id is required for ops:tag"})
         result = tag_memory(
             arguments["memory_id"],
             arguments.get("tags", []),
@@ -180,6 +194,8 @@ def handle_ops(arguments: dict) -> str:
             dry_run=arguments.get("dry_run", False),
         )
     elif action == "undo":
+        if not arguments.get("op_id"):
+            return json.dumps({"error": "op_id is required for ops:undo"})
         result = undo(arguments["op_id"])
     else:
         return json.dumps({"error": f"unknown action: {action}"})
@@ -187,7 +203,9 @@ def handle_ops(arguments: dict) -> str:
 
 
 def handle_db(arguments: dict) -> str:
-    action = arguments["action"]
+    action = arguments.get("action", "")
+    if not action:
+        return json.dumps({"error": "sub_action is required (optimize|stats|vacuum|...)"})
 
     # VACUUM rewrites the whole database file (long exclusive lock, not
     # undoable) → gated.  Backfills / L9-L10 de-dup are reversible-ish but still

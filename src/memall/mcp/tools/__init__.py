@@ -371,21 +371,30 @@ def _handle_system(args: dict) -> str:
         # Daily digest — count today's memories by category with content snippets
         import json, datetime
         from memall.core.db import pool_conn
-        now_utc = datetime.datetime.utcnow()
-        # Compute today's date in UTC+8, then convert boundaries to UTC
-        now_utc8 = now_utc + datetime.timedelta(hours=8)
+        # Days roll over at UTC+8 local midnight; created_at is stored UTC.
+        now_utc8 = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)
         today_date = now_utc8.date()
         today_start = datetime.datetime(today_date.year, today_date.month, today_date.day) \
                      - datetime.timedelta(hours=8)
         today_end = today_start + datetime.timedelta(hours=24) - datetime.timedelta(seconds=1)
-        today_start_s = today_start.strftime("%Y-%m-%d %H:%M:%S")
-        today_end_s = today_end.strftime("%Y-%m-%d %H:%M:%S")
+        # created_at rows come in two lexical formats:
+        #   canonical now_iso(): "2026-10-18T12:34:56+00:00"  (T-separated)
+        #   legacy writers:      "2026-10-18 12:34:56"        (space-separated)
+        # Lexicographic BETWEEN only matches the format the bounds were built
+        # with, so query both — a single-format bound silently returned only
+        # legacy rows (or none at all for canonical-only ranges).
+        t_lo = today_start.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        t_hi = today_end.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        s_lo = today_start.strftime("%Y-%m-%d %H:%M:%S")
+        s_hi = today_end.strftime("%Y-%m-%d %H:%M:%S")
+        span_sql = "(created_at BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)"
+        span_args = (t_lo, t_hi, s_lo, s_hi)
         with pool_conn() as conn:
             rows = conn.execute(
-                "SELECT category, level, COUNT(*) as cnt FROM memories "
-                "WHERE created_at BETWEEN ? AND ? "
-                "GROUP BY category, level ORDER BY cnt DESC LIMIT 15",
-                (today_start_s, today_end_s)
+                f"SELECT category, level, COUNT(*) as cnt FROM memories "
+                f"WHERE {span_sql} "
+                f"GROUP BY category, level ORDER BY cnt DESC LIMIT 15",
+                span_args
             ).fetchall()
             total = sum(r[2] for r in rows)
             if not rows:
@@ -398,10 +407,10 @@ def _handle_system(args: dict) -> str:
             # Add sample content for each category
             for cat in categories:
                 samples = conn.execute(
-                    "SELECT subject, summary, content FROM memories "
-                    "WHERE category = ? AND created_at BETWEEN ? AND ? AND subject != '' "
-                    "ORDER BY created_at DESC LIMIT 3",
-                    (cat, today_start_s, today_end_s)
+                    f"SELECT subject, summary, content FROM memories "
+                    f"WHERE category = ? AND {span_sql} AND subject != '' "
+                    f"ORDER BY created_at DESC LIMIT 3",
+                    (cat,) + span_args
                 ).fetchall()
                 categories[cat]["samples"] = [
                     {"subject": s[0], "summary": (s[1] or s[2])[:80] if s[2] else ""}
@@ -413,8 +422,8 @@ def _handle_system(args: dict) -> str:
         from memall.core.db import get_conn
         import json, datetime
         conn = get_conn()
-        now_utc = datetime.datetime.utcnow()
-        week_ago = (now_utc - datetime.timedelta(days=7)).isoformat()
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        week_ago = now_utc.isoformat()
         rows = conn.execute(
             "SELECT id, subject, category, level, access_count, summary FROM memories "
             "WHERE created_at > ? AND access_count > 0 "

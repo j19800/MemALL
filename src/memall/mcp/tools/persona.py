@@ -2,11 +2,13 @@ import json
 from memall.pipeline.persona import generate_persona, generate_dual_persona, get_evolution as persona_evolution, generate_profile_3layer
 from memall.pipeline.ask import ContextAssembler
 from memall.core.db import get_conn
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 def handle_persona(arguments: dict) -> str:
     agent = arguments.get("agent_name", "")
+    if not agent:
+        return json.dumps({"error": "agent_name is required"}, ensure_ascii=False)
     mode = arguments.get("mode", "static")
 
     if mode == "dual":
@@ -25,8 +27,10 @@ def handle_persona(arguments: dict) -> str:
 
 
 def handle_persona_profile(arguments: dict) -> str:
-    agent = arguments["agent_name"]
-    layer = arguments.get("layer", "all")
+    agent = arguments.get("agent_name", "")
+    if not agent:
+        return json.dumps({"error": "agent_name is required"}, ensure_ascii=False)
+    layer = str(arguments.get("layer", "all"))
     profile = generate_profile_3layer(agent)
     if layer != "all":
         key = f"layer_{layer}"
@@ -35,6 +39,8 @@ def handle_persona_profile(arguments: dict) -> str:
 
 
 def handle_ask(arguments: dict) -> str:
+    if not arguments.get("question"):
+        return json.dumps({"error": "question is required"}, ensure_ascii=False)
     subject = arguments.get("subject") or arguments.get("agent_name", "")
     result = ContextAssembler.ask(
         query=arguments["question"],
@@ -110,11 +116,15 @@ def handle_profile_preload(arguments: dict) -> str:
                 flat.setdefault("preferences", []).append(snippet[:120])
 
         # Get recent category distribution (last 7 days)
-        now = datetime.utcnow()
-        week_ago = (now - timedelta(days=7)).isoformat()
+        # created_at rows come in both now_iso (T-separated, +00:00) and legacy
+        # space-separated formats — filter against both lexical formats.
+        now = datetime.now(timezone.utc)
+        week_ago_t = (now - timedelta(days=7)).isoformat()
+        week_ago_s = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
         cat_rows = conn.execute(
-            "SELECT category, COUNT(*) as cnt FROM memories WHERE agent_name = ? AND created_at > ? GROUP BY category ORDER BY cnt DESC LIMIT 5",
-            (agent, week_ago),
+            "SELECT category, COUNT(*) as cnt FROM memories WHERE agent_name = ? "
+            "AND (created_at > ? OR created_at > ?) GROUP BY category ORDER BY cnt DESC LIMIT 5",
+            (agent, week_ago_t, week_ago_s),
         ).fetchall()
         flat["recent_categories"] = [{"category": r[0], "count": r[1]} for r in cat_rows]
 
@@ -128,6 +138,8 @@ def handle_profile_search(arguments: dict) -> str:
     Enables cross-agent profile discovery.
     """
     query = arguments.get("query", "")
+    if not query:
+        return json.dumps({"error": "query is required"}, ensure_ascii=False)
     conn = get_conn()
     try:
         rows = conn.execute(
@@ -149,11 +161,13 @@ def handle_foresight(arguments: dict) -> str:
     conn = get_conn()
     try:
         # Analyze recent category transitions to predict next likely query
-        now = datetime.utcnow()
-        month_ago = (now - timedelta(days=30)).isoformat()
+        now = datetime.now(timezone.utc)
+        month_ago_t = (now - timedelta(days=30)).isoformat()
+        month_ago_s = (now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
         rows = conn.execute(
-            "SELECT category, created_at FROM memories WHERE agent_name = ? AND created_at > ? ORDER BY created_at ASC",
-            (agent, month_ago),
+            "SELECT category, created_at FROM memories WHERE agent_name = ? "
+            "AND (created_at > ? OR created_at > ?) ORDER BY created_at ASC",
+            (agent, month_ago_t, month_ago_s),
         ).fetchall()
 
         if len(rows) < 5:
