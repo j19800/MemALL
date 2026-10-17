@@ -2,13 +2,22 @@
 
 ### Fixed（MCP 工具审计：验证层重构 + 错误信封 + 词汇表统一）
 
+#### 第 2 批 — server 协议层与执行器
+
+- **server.py EOF/坏请求歧义（P1，致命）**：`_read_request()` 对 EOF、oversized 行、malformed JSON 三种情形都返回 `None`，而主循环把 `req is None` 当作 stdin 关闭 — 首条坏请求即把整个 MCP server 关机，且 oversized 行静默丢弃让调用方永久挂起。重构 `_read_request()`：仅 EOF 返回 None；坏请求记入 `_pending_errors` 队列，serve 循环开头 flush 为 JSON-RPC `-32700` 结构化错误；oversized 行 drain 余下字节维持流同步；空行跳过继续读。STDIO 协议 harness 全绿（6 请求 → 6 响应，含 2 条错误信封、1 条 notification 无响应）。
+- **server.py `_initialized` 永不重置（P3）**：module-level 状态使进程内二次 `serve()`（测试/网关热载）继承上个 client 的 initialized 标志。新增 `_reset_state()`。
+- **pipeline executor stranded worker（P2）**：模块级 `ThreadPoolExecutor()` 无 `max_workers`（默认 unbounded），超时后 future 被弃但 worker 线程继续无限存活。定界 `max_workers=2` + `thread_name_prefix`，timeout 钳到 ≤3600s；超时语义改为「后台继续跑完（事务安全），调用方立即解锁」。评估后不引入 fut.cancel()（事务中强制取消不安全）。
+- **distill `_do_summarize` 直写 UPDATE（P2）**：绕过单写漏斗。改走 `thin_waist.update()`：content 白名单字段、metadata 合并非替换语义、updated_at 自动戳、embedding 自动刷新全部生效。端到端实测 `insight`/`next` 正确落入 `metadata.distill_analysis`。
+
+#### 第 1 批 — validator 与聚合工具
+
 - **validator 键失配全量修正（P1）**：`memall_write` 的 `forget`/`ops` 与 `memall_system` 的 `distill`/`gateway`/`db`/`security`/`adaptive`/`reflect`/`onboarding` 在聚合 handler 中先改写 `args["action"] = sub_action` 再派发，但旧 `_ACTION_MODELS` 按聚合名映射到以子动作词汇表约束 `action` 字段的模型 — 客户端发 `{'action':'forget'}` 100% 验证失败，`{'action':'pipeline'}` 则静默跳过验证。重构：词汇表约束全部移到 `sub_action` 字段，validator 按 `(tool, action, sub_action)` 三元组选模型（`distill` 的 `list`/`summarize` 使用不同模型）。
-- **验证覆盖缺口消除（P1）**：空 `TOOL_VALIDATORS` 导致未列 `(tool, action)` 全部透传不验证。新增 19 个模型（`UnifiedSearchInput`/`FedDeliverInput`/`DBInput.sub_action`/`AdaptiveInput`/`GatewayInput`/`SessionStart/End/SummaryInput`/`ImportInput`/`IndexRebuildInput`/`DigestInput`/`HooksRecentInput`/`DistillListInput`/`DistillSummarizeInput`/`ReflectInteractMCPInput`/`ProfilePreloadInput`/`PersonaSearchInput`/`PersonaForesightInput` 等），**每个注册 action 均有验证规则**；未知 action 现在拒绝并返回合法清单，不再透传到 handler 的孤儿 ValueError。
+- **验证覆盖缺口消除（P1）**：空 `TOOL_VALIDATORS` 导致未列 `(tool, action)` 全部透传不验证。新增 19 个模型（`UnifiedSearchInput`/`FedDeliverInput`/`DBInput`/`AdaptiveInput`/`GatewayInput`/`SessionStart/End/SummaryInput`/`ImportInput`/`IndexRebuildInput`/`DigestInput`/`HooksRecentInput`/`DistillListInput`/`DistillSummarizeInput`/`ReflectInteractMCPInput`/`ProfilePreloadInput`/`PersonaSearchInput`/`PersonaForesightInput` 等），**每个注册 action 均有验证规则**；未知 action 现在拒绝并返回合法清单，不再透传到 handler 的孤儿 ValueError。
 - **stance 词汇表漂移（P1）**：MCP schema 只允许 `agree/disagree/pass`，收敛层（`convergence.confirm_discussion`/`_analyze_stances`）只认 `confirm/reject/abstain` — 所有 MCP 面表态都被计成 `other`，共识判定失效。`DiscussionRespondInput.stance` 现接受双词汇表并在 `field_validator` 中归一化为收敛层词汇（`agree→confirm`、`disagree→reject`、`pass→abstain`）。
 - **discussion note 键冲突（P2）**：`handle_respond` 从 `arguments.get("arguments")` 读表态理由，与 JSON-RPC `arguments` 包装器名冲突。补 `note` 别名 + 缺失字段结构化报错。
-- **digest 时间边界恒空（P2）**：DB 存 `now_iso()`（`T` 分隔 + `+00:00`），digest 边界却用空格分隔 naive 格式做字典序 `BETWEEN` — 仅历史遗留空格格式行能命中。改为双格式 OR 匹配（canonical + legacy），并弃 naive `utcnow()` 改 timezone-aware。
+- **reflect 直写 SQL 绕过写漏斗（P2）**：L6 反思互动改走 `thin_waist.update(memory_id, metadata=...)`，白名单/agent_name 归一/updated_at 标记全部生效。
+- **digest 时间边界恒空（P2）**：DB 存 `now_iso()`（`T` 分隔 + `+00:00`），digest 边界却用空格分隔 naive 格式做字典序 `BETWEEN` — 仅历史遗留空格格式行能命中。改为双格式 OR 匹配（canonical + legacy），并弃 naive `utcnow()` 改 timezone-aware。实测立即恢复数据（total=20）。
 - **hot/persona naive 时间**：`hot` 榜、`profile_preload`、`foresight` 的 `datetime.utcnow()` 改 `now(timezone.utc)`，并按双格式比较 created_at。
-- **绕过单写漏斗（P2）**：`reflect.handle`（L6 反思互动）与 `distill._do_summarize` 直写 `UPDATE memories SET ...`，绕过 `thin_waist` 的白名单/agent_name 归一/updated_at 标记。`reflect` 改走 `thin_waist.update(memory_id, metadata=...)`（metadata 合并非替换语义由 update() 承担）。
 - **bare KeyError → 结构化错误信封（P3）**：`discussion`/`persona`（persona/persona_profile/ask/profile_search）/`retrieve`（vector_search/hybrid_search/trace）/`timeline`/`memory_write`（smart_store/store_batch/update）/`manage`（forget/adaptive/security/ops/db 的 action 缺失与 merge/split/tag/undo 的字段缺失）/`gateway` 全部改为描述性 `{"error": ...}` JSON，MCP 客户端不再收到不可诊断的 Python 回溯。
 - **timeline 字段投影补全（P3）**：仅返回 id/content/category/occurred_at，消费方需要 level/owner/agent_name/subject 时被迫二次 trace。补齐四字段。
 - **gateway discover 阻塞**：固定 `time.sleep(0.5)` 改为 0.05s 步进轮询至多 0.5s，MCP 单线程事件循环不再固定停顿。
@@ -17,7 +26,7 @@
 ### Changed
 
 - `models.py` 扩展：`CaptureInput.thread_id`（原被 validator 静默丢弃，thread 回复链在 MCP 面断裂）、`RetrieveInput`/`StoreBatchItem.level` 收紧为 `^(P[0-2]|L(10|11|[1-9]))$` 正则、`PersonaInput.mode/dynamic_window_days`（schema 未列的 handler 实有字段）。REST 网关消费的 7 个基础模型字段语义不变。
-- 干运行验证：43+10 用例全 PASS（含 3 类期望失败信封），端到端 adapter `handle_call` 16 场景回归通过。
+- 干运行验证：43+10 用例全 PASS（含 3 类期望失败信封），端到端 adapter `handle_call` 16 场景回归通过；STDIO 协议 harness、distill 写漏斗 e2e、`update()` metadata 合并单测全部验证。
 
 ## [v0.1.67] - 2026-10-15
 

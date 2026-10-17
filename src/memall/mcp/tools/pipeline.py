@@ -2,8 +2,13 @@ import json
 import concurrent.futures
 from memall.pipeline.pipeline import run_pipeline
 
-# Module-level executor shared across calls
-_POOL = concurrent.futures.ThreadPoolExecutor()
+# Dedicated executor: bounded so a burst of pipeline calls cannot spawn
+# unbounded threads, and daemon threads so a timed-out run does not keep the
+# process alive (the worker itself cannot be force-killed mid-DB-transaction,
+# so abandoning it is the only sane timeout story).
+_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="memall-pipeline"
+)
 
 
 def handle(arguments: dict) -> str:
@@ -12,7 +17,7 @@ def handle(arguments: dict) -> str:
     include_integrate = arguments.get("include_integrate", True)
     include_persona = arguments.get("include_persona", True)
     include_archive = arguments.get("include_archive", True)
-    timeout = arguments.get("timeout", 300)
+    timeout = min(arguments.get("timeout", 300), 3600)
     fut = _POOL.submit(
         run_pipeline,
         include_reflect=include_reflect,
@@ -24,5 +29,13 @@ def handle(arguments: dict) -> str:
     try:
         result = fut.result(timeout=timeout)
     except concurrent.futures.TimeoutError:
-        result = {"status": "timeout", "error": f"pipeline exceeded {timeout}s timeout", "elapsed": timeout}
+        # The pipeline keeps running to completion in its worker (abandoning a
+        # mid-transaction write is unsafe), but the caller is unblocked now.
+        # Not cancelling: fut.cancel() only works pre-run and would leak a
+        # dead future without stopping the write either.
+        result = {
+            "status": "timeout",
+            "error": f"pipeline exceeded {timeout}s timeout; it continues running in the background",
+            "elapsed": timeout,
+        }
     return json.dumps(result, ensure_ascii=False, default=str)

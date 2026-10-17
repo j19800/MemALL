@@ -34,20 +34,53 @@ def _ensure_logging():
 
 
 def _read_request() -> dict | None:
+    """Read one JSON-RPC request from stdin.
+
+    Returns None ONLY at EOF — malformed/oversized requests are recorded in
+    ``_pending_errors`` and surfaced as JSON-RPC error responses by serve().
+    (Feeding None on a bad request made the very first broken input shut the
+    server down: req-is-None doubles as the EOF signal in the main loop.)
+    """
     line = sys.stdin.readline(_MAX_LINE_LENGTH)
     if not line:
         return None
-    if len(line) >= _MAX_LINE_LENGTH:
-        # Drain the rest of this oversized line to keep stream in sync
+    while len(line) >= _MAX_LINE_LENGTH:
+        # Drain the rest of this oversized line to keep the stream in sync,
+        # then defer a structured JSON-RPC error (a silent drop left the
+        # awaiting client hanging forever).
         sys.stdin.readline()
-        return None
+        _pending_errors.append({
+            "jsonrpc": "2.0", "id": None,
+            "error": {
+                "code": -32700,
+                "message": f"request line exceeds {_MAX_LINE_LENGTH} bytes",
+            },
+        })
+        line = sys.stdin.readline(_MAX_LINE_LENGTH)
+        if not line:
+            return None
+        if line.strip():
+            break
     line = line.strip()
     if not line:
-        return None
+        # Blank line: not EOF, just skip it — read the next request.
+        return _read_request()
     try:
         return json.loads(line)
     except json.JSONDecodeError:
-        return None
+        # Malformed JSON must get a parse error response per JSON-RPC 2.0
+        # (a silent drop leaves the awaiting client hanging forever).
+        _pending_errors.append({
+            "jsonrpc": "2.0", "id": None,
+            "error": {"code": -32700, "message": "parse error: request is not valid JSON"},
+        })
+        return _read_request()
+
+
+# Error responses deferred to the next serve-loop iteration (reading stdin
+# blocks the loop, so errors detected in _read_request are flushed before
+# the next request is processed).
+_pending_errors: list[dict] = []
 
 
 def _respond(msg: dict):
@@ -98,6 +131,11 @@ def serve():
 
     try:
         while True:
+            # Flush parse/oversize errors deferred by _read_request first —
+            # they belong to requests already consumed from the stream.
+            while _pending_errors:
+                _respond(_pending_errors.pop(0))
+
             req = _read_request()
             if req is None:
                 _log.info("stdin closed — shutting down")
@@ -308,6 +346,17 @@ def serve():
         raise
     finally:
         _log.info("MCP server stopped")
+
+
+def _reset_state():
+    """Reset module-level session state so serve() can run again in-process
+    (tests / gateway import). Without this, a restart inherits the previous
+    client's initialized flag and identity."""
+    global _initialized, _client_name, _client_version, _LOGGING_CONFIGURED, _pending_errors
+    _initialized = False
+    _client_name = ""
+    _client_version = ""
+    _pending_errors.clear()
 
 
 if __name__ == "__main__":

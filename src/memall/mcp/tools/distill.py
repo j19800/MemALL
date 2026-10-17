@@ -202,11 +202,18 @@ def _do_summarize(conn, group_id: int, summary: str, analysis: dict = None) -> s
             "_meta": {"version": 1, "written_at": now},
         }
 
-    conn.execute(
-        "UPDATE memories SET content = ?, metadata = ?, updated_at = ? WHERE id = ?",
-        (new_content[:4000], json.dumps(existing_meta, ensure_ascii=False), now, group_id),
-    )
-    conn.commit()
+    # Route through the single write funnel instead of a raw UPDATE, so the
+    # whitelist, updated_at stamping, and embedding auto-refresh all apply.
+    # update() MERGES metadata (not replace), so pass only the new key.
+    from memall.core.thin_waist import update as _tw_update
+    fields = {"content": new_content[:4000]}
+    if analysis:
+        fields["metadata"] = json.dumps(
+            {"distill_analysis": existing_meta["distill_analysis"]},
+            ensure_ascii=False,
+        )
+    if not _tw_update(group_id, **fields):
+        return json.dumps({"error": f"memory #{group_id} not found or not L9/L10"})
 
     response = {
         "status": "updated",
