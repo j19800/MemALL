@@ -178,8 +178,10 @@ def discover_associations(memory_id: int) -> list[dict]:
         if entities:
             eids = [r["entity_id"] for r in entities]
             placeholders = ",".join("?" * len(eids))
+            # Include m.content — the fallback r["content"][:60] below needs it
+            # (previously selected subject only → "No item with that key").
             entity_rel = conn.execute(
-                f"SELECT DISTINCT m.id, m.subject, m.level, m.created_at FROM memories m "
+                f"SELECT DISTINCT m.id, m.subject, m.level, m.created_at, m.content FROM memories m "
                 f"JOIN memory_entities me ON m.id = me.memory_id "
                 f"WHERE me.entity_id IN ({placeholders}) AND m.id != ? "
                 f"ORDER BY m.created_at DESC LIMIT 5",

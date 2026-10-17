@@ -112,7 +112,14 @@ def decay_step() -> dict:
                     protected += 1
                     continue
 
-                new_conf = max(0.1, row["confidence"] - base_rate * multiplier)
+                # confidence may contain legacy string values stored before the
+                # REAL affinity migration — coerce defensively so one corrupt
+                # row can't abort the whole step.
+                try:
+                    cur_conf = float(row["confidence"])
+                except (TypeError, ValueError):
+                    cur_conf = 0.0
+                new_conf = max(0.1, cur_conf - base_rate * multiplier)
                 conn.execute(
                     "UPDATE memories SET confidence = ?, updated_at = datetime('now') WHERE id = ?",
                     (new_conf, mid),

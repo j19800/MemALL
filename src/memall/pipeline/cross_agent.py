@@ -142,7 +142,16 @@ def knowledge_distill_step() -> dict:
                 "agent" in m for m in members
             ) else list(set(m["agent_name"] for m in members))
             conf_field = "confidence" if "confidence" in members[0] else "weight"
-            avg_conf = sum(float(m.get(conf_field) or 0) for m in members) / len(members)
+            # confidence/weight may hold legacy string values (e.g. visibility
+            # words like 'private' were mis-mapped historically) — coerce
+            # defensively so a single corrupt row can't abort the step.
+            confs = []
+            for m in members:
+                try:
+                    confs.append(float(m.get(conf_field) or 0))
+                except (TypeError, ValueError):
+                    confs.append(0.0)
+            avg_conf = sum(confs) / len(members)
 
             l10_content = (
                 f"[L10 全局知识] {topic}\n"

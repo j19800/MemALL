@@ -233,11 +233,17 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
         ).fetchone()
         if not existing_l6:
             l6_subject = _smart_subject(l6_content)
+            # 16 placeholders: content, hash, agent_name, project, subject,
+            # summary, occurred_at, created_at, updated_at, confidence,
+            # visibility, metadata, thread_id (l4_id) — 'L6'/'reflection'/
+            # 'private'/'ledger' are inline literals. Previously 'thread_id'
+            # was declared a column but missing from VALUES, producing
+            # "16 values for 17 columns".
             conn.execute(
                 "INSERT OR IGNORE INTO memories "
                 "(content, content_hash, level, owner, agent_name, category, project, subject, summary, "
                 "occurred_at, created_at, updated_at, confidence, visibility, metadata, thread_id, stream) "
-                "VALUES (?, ?, 'L6', 'system', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ledger')",
+                "VALUES (?, ?, 'L6', 'system', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ledger')",
                 (l6_content[:2000], hashlib.sha256(l6_content.encode()).hexdigest(), agent_name, session_project,
                  l6_subject, "", now, now, now, 0.6, "private",
                  json.dumps({"session_id": session_id, "source": "pipeline_harvest"}),
