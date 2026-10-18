@@ -10,6 +10,10 @@ All notable changes to MemALL are documented in this file.
 - Added `unified_search` action to `memall_read` tool that routes between FTS5, vector, and hybrid search based on mode or intent detection
 - Added contextual recall hook in thin_waist to surface related high-level memories after capture
 - Added `contextual_recall_enabled` configuration option to enable/disable contextual recall feature
+- Added semantic similarity fallback to thread ID inference (M2) when temporal window yields no candidate
+- Added `source_ids` field to Memory and MemoryInput models for provenance tracking (M3)
+- Added heat-based level promotion pipeline step (M4) that promotes frequently accessed memories to higher levels
+- Added `promotion` configuration section with access thresholds, minimum age, and reference considerations
 
 ### Changed
 - Increased level weights for L9-L11 in search ranking from 0.3 to 0.7 to surface distilled knowledge more prominently
@@ -18,6 +22,9 @@ All notable changes to MemALL are documented in this file.
 - Updated thin_waist.py to dispatch the unified_search function for unified search entrance
 - Enhanced quality scoring to use configurable thresholds and gate policy
 - Added minimum content length check based on quality.min_length setting
+- Enhanced thread ID inference to include semantic similarity fallback after temporal window check
+- Updated Memory and MemoryInput models to include source_ids field for tracking provenance
+- Added promote_step to pipeline execution sequence
 
 ### Fixed
 - Fixed missing `BatchSearchInput` import in `memall/mcp/validator.py`

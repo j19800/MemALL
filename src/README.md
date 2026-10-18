@@ -15,6 +15,9 @@ MemALL is a sophisticated memory management system designed for AI agents, provi
 - **Contextual Recall**: Automatically surfaces related high-level memories after capturing new content
 - **Batch Operations**: Efficient batch memory capture and search
 - **Thread-aware Operations**: Groups related memories into conversation threads for improved contextual understanding
+- **Semantic Thread Fallback**: When temporal window yields no thread candidates, uses semantic similarity to find related memories (M2)
+- **Provenance Tracking**: Source IDs track which memories contributed to distilled knowledge (M3)
+- **Heat-based Level Promotion**: Automatically promotes frequently accessed memories to higher knowledge levels (M4)
 - **MCP Server**: Full Model Context Protocol implementation for seamless integration with AI agents
 - **Lifecycle Management**: Automated distillation, forgetting, and maintenance operations
 - **Security & Access Control**: Agent-based ownership validation and visibility controls
@@ -86,6 +89,65 @@ Contextual recall can be enabled/disabled via configuration:
 },
 ```
 
+### Thread ID Inference with Semantic Fallback (M2)
+
+Thread inference can be configured to use semantic similarity as a fallback when the temporal window yields no candidates:
+
+```python
+"capture": {
+    # ... other capture settings ...
+    # Thread inference: link new memories to a thread root within N minutes.
+    # 0 disables the feature (thread_id left null). Tune per deployment.
+    "thread_inference_window_minutes": 60,
+    # Thread inference semantic fallback: when temporal window yields no candidate,
+    # use semantic similarity to find related memories (M2 enhancement).
+    "thread_inference_semantic_window": 50,
+    "thread_inference_semantic_threshold": 0.7,
+    # ... other capture settings ...
+},
+```
+
+### Provenance Tracking with Source IDs (M3)
+
+Memories now track their source memories for provenance tracking, especially useful for distilled knowledge:
+
+```python
+# In Memory and MemoryInput models:
+source_ids: str = "[]"  # JSON array of source memory IDs
+```
+
+### Heat-based Level Promotion (M4)
+
+Automatically promote frequently accessed memories to higher knowledge levels:
+
+```python
+"promotion": {
+    # Enable/disable heat-based level promotion
+    "enabled": true,
+    # Access count thresholds for promotion between levels
+    # Format: "from_level": {"to_level": min_access_count, ...}
+    "access_thresholds": {
+        "P2": {"L1": 15},      # Promote P2→L1 when accessed 15+ times
+        "L1": {"L2": 25},      # Promote L1→L2 when accessed 25+ times
+        "L2": {"L3": 35},      # Promote L2→L3 when accessed 35+ times
+        "L3": {"L4": 50},      # Promote L3→L4 when accessed 50+ times
+        "L4": {"L5": 75},      # Promote L4→L5 when accessed 75+ times
+        "L5": {"L6": 100},     # Promote L5→L6 when accessed 100+ times
+        "L6": {"L7": 150},     # Promote L6→L7 when accessed 150+ times
+        "L7": {"L8": 200},     # Promote L7→L8 when accessed 200+ times
+        "L8": {"L9": 300},     # Promote L8→L9 when accessed 300+ times
+        "L9": {"L10": 500},    # Promote L9→L10 when accessed 500+ times
+        "L10": {"L11": 800},   # Promote L10→L11 when accessed 800+ times
+    },
+    # Minimum time (in days) a memory must exist before being eligible for promotion
+    "min_age_days": 7,
+    # Whether to also consider referenced memories (edges pointing to this memory)
+    "consider_references": true,
+    # Reference count threshold for promotion (in addition to access count)
+    "reference_threshold": 5,
+},
+```
+
 ## Usage
 
 ### Basic Memory Capture
@@ -99,6 +161,22 @@ memory_id = capture(MemoryInput(
     category="your_category",
     project="your_project",
     level="P2"  # or L1-L11 for different knowledge levels
+))
+```
+
+### Capturing Memories with Source IDs (for Provenance Tracking)
+
+```python
+from memall.core.thin_waist import capture, MemoryInput
+
+# Create a distilled memory from source memories
+memory_id = capture(MemoryInput(
+    content="Distilled insight from multiple source memories",
+    agent_name="your_agent_name",
+    category="your_category",
+    project="your_project",
+    level="L9",  # Distilled knowledge level
+    source_ids='["123", "456", "789"]'  # JSON array of source memory IDs
 ))
 ```
 
@@ -162,6 +240,10 @@ MemALL follows a modular architecture with clearly separated concerns:
 - **Search**: FTS5, vector, and hybrid search implementations
 - **MCP Layer**: Model Context Protocol implementation for agent integration
 - **Pipeline**: Intelligent capture, distillation, and maintenance workflows
+- **Pipeline Steps**: 
+  - Standard steps: event_processor, enrich, cleanup, classify, procedure, time_slice, arc_status, echo, epoch, convergence, link, decay, backup, session, extract, entity_extraction, embed_index, reflect, distill_l7, distill, integrate, improve, observation, identity, reasoning, auto_summarize, discover_assoc, cross_agent, adaptive_ttl, archive
+  - **New in M4**: promote (heat-based level promotion)
+  - Optional steps: persona, narrative, cluster, suggest, bridge
 - **Utilities**: Configuration, logging, and helper functions
 
 ## Development
