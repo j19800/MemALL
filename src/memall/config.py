@@ -137,6 +137,29 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
     "plugins": {
         "auto_load": True,
     },
+    "quality": {
+        # Quality thresholds per level - memories scoring below these thresholds
+        # may be rejected by the quality gate depending on gate_policy
+        "thresholds": {
+            "P0": 0,      # No quality gate for highest priority
+            "P1": 15,     # Very low threshold for P1
+            "P2": 20,     # Low threshold for P2
+            "L1": 25,     # Increasing thresholds for lower levels
+            "L2": 30,
+            "L3": 35,
+            "L4": 40,
+            "L5": 45,
+            "L6": 50,
+            "L7": 55,
+            "L8": 60,
+            "L9": 65,
+            "L10": 70,
+            "L11": 75,
+        },
+        # Gate policy: "strict" (reject if ANY dimension below threshold) or 
+        # "lenient" (reject only if AVERAGE score below threshold)
+        "gate_policy": "lenient",
+    },
     "scheduler": {
         "forget_interval": 86400,
         "audit_interval": 86400,
