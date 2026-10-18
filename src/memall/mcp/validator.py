@@ -55,6 +55,7 @@ _ACTION_MODELS: dict[tuple[str, str], type[BaseModel]] = {
     # memall_read
     ("memall_read", "retrieve"): RetrieveInput,
     ("memall_read", "search"): UnifiedSearchInput,
+    ("memall_read", "unified_search"): UnifiedSearchInput,
     ("memall_read", "chat"): UnifiedSearchInput,
     ("memall_read", "nl_search"): UnifiedSearchInput,
     ("memall_read", "自然语言搜索"): UnifiedSearchInput,

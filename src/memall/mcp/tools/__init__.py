@@ -126,6 +126,8 @@ def _handle_read(args: dict) -> str:
         return retrieve.handle_batch_search(args)
     elif action == "search":
         return retrieve.handle_unified_search(args)
+    elif action == "unified_search":
+        return retrieve.handle_unified_search(args)
     elif action in ("chat", "nl_search", "自然语言搜索"):
         # Natural language chat search — always uses hybrid mode
         args["mode"] = "hybrid"
@@ -146,9 +148,9 @@ def _handle_read(args: dict) -> str:
 
 registry.register(ToolDef(
     name="memall_read",
-    description="Search/retrieve memories, trace provenance, explore graph, timeline, federated queries, natural language chat search. Actions: retrieve | search | chat | vector_search | hybrid_search | batch_search | trace | traverse | timeline | fed_query | fed_conflicts",
+    description="Search/retrieve memories, trace provenance, explore graph, timeline, federated queries, natural language chat search. Actions: retrieve | search | unified_search | chat | vector_search | hybrid_search | batch_search | trace | traverse | timeline | fed_query | fed_conflicts",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["retrieve", "search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "batch_search", "trace", "traverse", "timeline", "fed_query", "fed_conflicts"]},
+        "action": {"type": "string", "enum": ["retrieve", "search", "unified_search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "batch_search", "trace", "traverse", "timeline", "fed_query", "fed_conflicts"]},
         "query": {"type": "string", "description": "Search query"},
         "queries": {"type": "array", "items": {"type": "string"}, "description": "Queries for batch_search"},
         "mode": {"type": "string", "enum": ["auto", "direct", "fts5", "vector", "hybrid"]},

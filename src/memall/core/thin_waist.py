@@ -384,8 +384,9 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
     avg = sum(scores.values()) / len(scores) if scores else 0
     min_dim = min(scores.values()) if scores else 0
 
-    # Level-specific thresholds
-    threshold_map = {
+    # Get quality thresholds from config, with fallback to hardcoded values
+    quality_config = get_config("quality.thresholds", {})
+    default_threshold_map = {
         "P0": 4,
         "P1": 5,
         "P2": 4,
@@ -399,8 +400,13 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
         "L10": 4,
         "L11": 4,
     }
+    # Merge config with defaults (config overrides defaults)
+    threshold_map = {**default_threshold_map, **quality_config}
     required = threshold_map.get(data.level or "P2", 5)
 
+    # Get quality gate policy from config
+    gate_policy = get_config("quality.gate_policy", "strict")  # strict or lenient
+    
     # Minimum content length: content under 15 chars is too short to be meaningful
     if text_len < 15:
         gate = "rejected"
@@ -413,9 +419,15 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
         gate = "rejected"
     else:
         passed = avg >= required
-        gate = (
-            "accepted" if passed else ("review" if avg >= required - 1 else "rejected")
-        )
+        if gate_policy == "strict":
+            gate = (
+                "accepted" if passed else ("review" if avg >= required - 1 else "rejected")
+            )
+        else:  # lenient policy
+            # Only reject if significantly below threshold (more than 2 points below)
+            gate = (
+                "accepted" if passed else ("review" if avg >= required - 2 else "rejected")
+            )
 
     result = {
         "dimensions": scores,
@@ -1009,6 +1021,105 @@ def capture(
         mem_id = _capture_insert_row(conn, data, h, now)
         _capture_post_insert(conn, mem_id, data, h)
         return mem_id
+
+
+def unified_search(arguments: dict) -> str:
+    """Unified search entrance that routes to FTS5, vector, or hybrid search based on mode or intent.
+    Returns a JSON string with the search results.
+    """
+    import json
+    query = arguments.get("query", "").strip()
+    top_k = arguments.get("top_k", 10)
+    mode = arguments.get("mode", "auto")
+
+    if not query:
+        return json.dumps({"error": "query is required"})
+
+    if mode == "auto":
+        from memall.search.intent_router import classify, resolve_mode
+        intent = classify(query)
+        mode = resolve_mode(intent)
+
+    if mode == "direct":
+        # Direct lookup: pure numeric ID.
+        # We use the same retrieve function (FTS5 based) but note that direct lookup in the current
+        # handle_unified_search in retrieve.py uses the retrieve function and then formats the result.
+        # We will do the same.
+        retrieve_args = {
+            "query": query,
+            "limit": top_k,
+            "owner": arguments.get("owner"),
+            "agent_name": arguments.get("agent_name"),
+            "category": arguments.get("category"),
+            "project": arguments.get("project"),
+            "level": arguments.get("level"),
+            "occurred_at": arguments.get("occurred_at"),
+            "from_occurred_at": arguments.get("from_occurred_at"),
+            "to_occurred_at": arguments.get("to_occurred_at"),
+            "include_content": True,
+        }
+        retrieve_args = {k: v for k, v in retrieve_args.items() if v is not None}
+        result = retrieve(**retrieve_args)
+        if result is None:
+            return json.dumps({"query": query, "mode": "direct", "results": [], "total": 0})
+        if isinstance(result, list):
+            items = [{"memory_id": r.id, "content": r.content[:200], "subject": r.subject,
+                      "category": r.category, "level": r.level, "owner": r.owner, "agent_name": r.agent_name}
+                     for r in result]
+        else:
+            items = [{"memory_id": result.id, "content": result.content[:200], "subject": result.subject,
+                      "category": result.category, "level": result.level, "owner": result.owner, "agent_name": result.agent_name}]
+        return json.dumps({"query": query, "mode": "direct", "results": items, "total": len(items)},
+                           ensure_ascii=False)
+
+    if mode == "fts5":
+        retrieve_args = {
+            "query": query,
+            "limit": top_k,
+            "owner": arguments.get("owner"),
+            "agent_name": arguments.get("agent_name"),
+            "category": arguments.get("category"),
+            "project": arguments.get("project"),
+            "level": arguments.get("level"),
+            "occurred_at": arguments.get("occurred_at"),
+            "from_occurred_at": arguments.get("from_occurred_at"),
+            "to_occurred_at": arguments.get("to_occurred_at"),
+            "include_content": True,
+        }
+        retrieve_args = {k: v for k, v in retrieve_args.items() if v is not None}
+        result = retrieve(**retrieve_args)
+        if result is None:
+            return json.dumps({"query": query, "mode": "fts5", "results": [], "total": 0})
+        if isinstance(result, list):
+            items = [{"memory_id": r.id, "content": r.content[:200], "subject": r.subject,
+                      "category": r.category, "level": r.level, "owner": r.owner, "agent_name": r.agent_name}
+                     for r in result]
+        else:
+            items = [{"memory_id": result.id, "content": result.content[:200], "subject": result.subject,
+                      "category": result.category, "level": result.level, "owner": result.owner, "agent_name": result.agent_name}]
+        return json.dumps({"query": query, "mode": "fts5", "results": items, "total": len(items)},
+                           ensure_ascii=False)
+
+    if mode == "vector":
+        # Vector search: only accepts query and top_k
+        result = vector_search(
+            query=query,
+            top_k=top_k,
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
+
+    # Default to hybrid search
+    result = hybrid_search(
+        query=query,
+        top_k=top_k,
+        rrf_k=arguments.get("rrf_k", 60),
+        category=arguments.get("category"),
+        level=arguments.get("level"),
+        owner=arguments.get("owner"),
+        rerank=arguments.get("rerank", False),
+    )
+    result["mode"] = mode if mode != "auto" else result.get("mode", "hybrid_rrf")
+    return json.dumps(result, ensure_ascii=False, default=str)
 
 
 def update(memory_id: int, **fields) -> bool:
