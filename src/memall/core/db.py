@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS identities (
 
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     content, subject, summary,
+    tokenize="unicode61",
     content='memories', content_rowid='id'
 );
 
