@@ -22,7 +22,8 @@ logger = logging.getLogger(__name__)
 # P0-P2: working memories → full weight
 # L1-L3: identity/metadata → moderate
 # L4-L5: summaries/decisions → moderate
-# L6-L10: reflections/distillations → lower (let P0-P2 surface)
+# L6-L8: reflections/distillations → lower (let P0-P2 surface)
+# L9-L11: knowledge/wisdom → increased weight to surface valuable distilled content
 _LEVEL_BOOST = {
     "P0": 1.0,
     "P1": 1.0,
@@ -35,9 +36,9 @@ _LEVEL_BOOST = {
     "L6": 0.4,
     "L7": 0.4,
     "L8": 0.4,
-    "L9": 0.3,
-    "L10": 0.3,
-    "L11": 0.3,
+    "L9": 0.7,
+    "L10": 0.7,
+    "L11": 0.7,
 }
 _DEFAULT_BOOST = 0.4
 

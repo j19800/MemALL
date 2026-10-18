@@ -15,6 +15,10 @@ All notable changes to MemALL are documented in this file.
 - `mcp/models.py`: `CaptureInput.level`, `SmartStoreInput.level`, and `UpdateInput.level` patterns now accept `L11` (previously rejected), matching the CLI choices and SQLite `CHECK` constraint (`P0/P1/P2` + `L1–L11`).
 - `config.py`: default `search.provider` changed from `"tfidf"` (not registered in `search/registry.py`, which caused `get_provider()` to return `None`) to `"vec0"` (a registered, working provider).
 - `core/db.py`: Changed FTS5 tokenizer to `unicode61` to improve Chinese full-text search recall.
+- `core/thin_waist.py`: Made quality scoring thresholds and gate policy configurable via `quality.thresholds` and `quality.gate_policy` to reduce false rejections of valuable short content.
+- `graph/retrieve.py`: Increased level weights for L9-L11 from 0.3 to 0.7 to surface valuable distilled knowledge in search results.
+
+
 
 
 ## [0.1.66] — 2026-10-17
