@@ -117,7 +117,7 @@ Model Context Protocol server exposing tools to AI agent hosts.
   `sub_action` family) has a model — e.g. `CaptureInput`, `RetrieveInput`,
   `SmartStoreInput`, plus the `sub_action`-driven families (`ForgetInput`,
   `OpsInput`, `DBInput`, `GatewayInput`, `SecurityInput`, `AdaptiveInput`,
-  `OnboardingInput`, `DistillListInput`/`DistillSummarizeInput`).
+  `OnboardingInput`, `DistillListInput`/`DistillSummarizeInput`), **BatchCaptureInput**, and **BatchSearchInput**.
 - `mcp/validator.py` — Maps `(tool_name, action)` → Pydantic model for strict
   input validation. `sub_action`-driven actions constrain the vocabulary on
   `sub_action` (handlers rewrite `action = sub_action` before dispatch).
@@ -128,6 +128,8 @@ Model Context Protocol server exposing tools to AI agent hosts.
 - `mcp/tools/` — Individual tool handlers: capture, retrieve, memory_write, discuss, distill,
   federation, gateway, graph, hub, index, manage, onboarding, persona, pipeline, reflect,
   search, security, session, smart_store, trace, trust, update.
+  - **memory_write.py**: Added `handle_batch_capture` for efficient multiple memory capture
+  - **retrieve.py**: Added `handle_batch_search` for efficient multiple query search
 - `mcp/http_transport.py` — MCP over HTTP (SSE + POST).
 - `mcp/shared.py` — Session auto-start, pending session notes, intercept logging.
 

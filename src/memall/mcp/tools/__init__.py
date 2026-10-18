@@ -33,6 +33,8 @@ def _handle_write(args: dict) -> str:
         return memory_write.handle_smart_store(args)
     elif action == "store_batch":
         return memory_write.handle_store_batch(args)
+    elif action == "batch_capture":
+        return memory_write.handle_batch_capture(args)
     elif action == "update":
         return memory_write.handle_update(args)
     elif action == "connect":
@@ -73,9 +75,9 @@ def _handle_write(args: dict) -> str:
 
 registry.register(ToolDef(
     name="memall_write",
-    description="Write/capture/search/update memories, create connections, manage forgetting & ops. Actions: capture | smart_store | store_batch | update | connect | forget | ops | quick (快速记)",
+    description="Write/capture/search/update memories, create connections, manage forgetting & ops. Actions: capture | smart_store | store_batch | batch_capture | update | connect | forget | ops | quick (快速记)",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["capture", "smart_store", "store_batch", "update", "connect", "forget", "ops", "quick", "记一下", "快速记", "随手记"]},
+        "action": {"type": "string", "enum": ["capture", "smart_store", "store_batch", "batch_capture", "update", "connect", "forget", "ops", "quick", "记一下", "快速记", "随手记"]},
         "content": {"type": "string", "description": "Memory content"},
         "owner": {"type": "string"},
         "agent_name": {"type": "string"},
@@ -97,7 +99,7 @@ registry.register(ToolDef(
         "dry_run": {"type": "boolean", "description": "Preview-only pass for ops archive/dedup"},
         "tags": {"type": "array", "items": {"type": "string"}},
         "dedup_threshold": {"type": "number"},
-        "items": {"type": "array", "description": "Items for store_batch"},
+        "items": {"type": "array", "description": "Items for store_batch and batch_capture"},
         "delimiter": {"type": "string"},
         "mode": {"type": "string", "enum": ["add", "set", "remove"]},
         "threshold": {"type": "number"},
@@ -120,6 +122,8 @@ def _handle_read(args: dict) -> str:
         return retrieve.handle_vector_search(args)
     elif action == "hybrid_search":
         return retrieve.handle_hybrid_search(args)
+    elif action == "batch_search":
+        return retrieve.handle_batch_search(args)
     elif action == "search":
         return retrieve.handle_unified_search(args)
     elif action in ("chat", "nl_search", "自然语言搜索"):
@@ -142,10 +146,11 @@ def _handle_read(args: dict) -> str:
 
 registry.register(ToolDef(
     name="memall_read",
-    description="Search/retrieve memories, trace provenance, explore graph, timeline, federated queries, natural language chat search. Actions: retrieve | search | chat | vector_search | hybrid_search | trace | traverse | timeline | fed_query | fed_conflicts",
+    description="Search/retrieve memories, trace provenance, explore graph, timeline, federated queries, natural language chat search. Actions: retrieve | search | chat | vector_search | hybrid_search | batch_search | trace | traverse | timeline | fed_query | fed_conflicts",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["retrieve", "search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "trace", "traverse", "timeline", "fed_query", "fed_conflicts"]},
+        "action": {"type": "string", "enum": ["retrieve", "search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "batch_search", "trace", "traverse", "timeline", "fed_query", "fed_conflicts"]},
         "query": {"type": "string", "description": "Search query"},
+        "queries": {"type": "array", "items": {"type": "string"}, "description": "Queries for batch_search"},
         "mode": {"type": "string", "enum": ["auto", "direct", "fts5", "vector", "hybrid"]},
         "top_k": {"type": "integer"},
         "rrf_k": {"type": "integer"},

@@ -19,6 +19,7 @@ and an automated processing pipeline.
 | **Pipeline** | Background processing steps (enrich, classify, distill, integrate, decay, forget, …) that are reentrant and commit per step. |
 | **Federation** | Cross-instance memory sharing, conflict detection, and automatic conflict resolution. |
 | **MCP** | Model Context Protocol server (STDIO + HTTP) exposing 7 aggregated tools (`memall_write`, `memall_read`, `memall_persona`, `memall_discussion`, `memall_federation`, `memall_system`, `memall_hooks_recent`), each dispatching on `action` (some also on `sub_action`). Every action is schema-validated; unknown actions are rejected with a list of valid ones. Discussion stances accept both `agree/disagree/pass` (MCP surface) and `confirm/reject/abstain` (convergence layer), normalized automatically. |
+| **Batch Operations** | Efficiently capture multiple memories or search multiple queries in single operations via `memall_write action=batch_capture` and `memall_read action=batch_search`. |
 
 ## Quick Start
 

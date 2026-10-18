@@ -6,7 +6,6 @@ from memall.search.intent_router import classify, resolve_mode
 logger = logging.getLogger(__name__)
 
 
-
 def handle_retrieve(arguments: dict) -> str:
     from memall.core.thin_waist import retrieve
     result = retrieve(**arguments)
@@ -74,7 +73,7 @@ def handle_unified_search(arguments: dict) -> str:
             items = [{"memory_id": result.id, "content": result.content[:200], "subject": result.subject,
                        "category": result.category, "level": result.level}]
         return json.dumps({"query": query, "mode": "direct", "results": items, "total": len(items)},
-                          ensure_ascii=False)
+                           ensure_ascii=False)
 
     if mode == "fts5":
         result = retrieve(query=query)
@@ -85,7 +84,7 @@ def handle_unified_search(arguments: dict) -> str:
             items.append({"memory_id": r.id, "content": r.content[:200], "subject": r.subject,
                            "category": r.category, "level": r.level, "owner": r.owner, "agent_name": r.agent_name})
         return json.dumps({"query": query, "mode": "fts5", "results": items, "total": len(items)},
-                          ensure_ascii=False)
+                           ensure_ascii=False)
 
     if mode == "vector":
         result = vector_search(query=query, top_k=top_k)
@@ -103,6 +102,81 @@ def handle_unified_search(arguments: dict) -> str:
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
+def handle_batch_search(arguments: dict) -> str:
+    """Search for multiple queries in a single operation for improved efficiency."""
+    queries = arguments.get("queries") or []
+    if not queries:
+        return json.dumps({"error": "queries is required (non-empty array)"}, ensure_ascii=False)
+    
+    limit = arguments.get("limit", 10)
+    results = []
+    errors = []
+    
+    for i, query in enumerate(queries):
+        try:
+            if not query or not isinstance(query, str):
+                errors.append({"index": i, "error": "query must be a non-empty string"})
+                continue
+                
+            # Perform unified search for each query
+            search_result = retrieve(
+                query=query,
+                limit=limit
+            )
+            
+            if search_result is None:
+                results.append({
+                    "index": i,
+                    "query": query,
+                    "results": [],
+                    "total": 0
+                })
+            elif isinstance(search_result, list):
+                formatted_results = [{
+                    "id": r.id, "content": r.content, "category": r.category,
+                    "level": r.level, "owner": r.owner, "agent_name": r.agent_name,
+                    "subject": r.subject, "occurred_at": r.occurred_at,
+                } for r in search_result]
+                results.append({
+                    "index": i,
+                    "query": query,
+                    "results": formatted_results,
+                    "total": len(formatted_results)
+                })
+            else:
+                # Single result
+                formatted_result = [{
+                    "id": search_result.id, "content": search_result.content, 
+                    "category": search_result.category, "level": search_result.level,
+                    "owner": search_result.owner, "agent_name": search_result.agent_name,
+                    "subject": search_result.subject, "occurred_at": search_result.occurred_at,
+                }]
+                results.append({
+                    "index": i,
+                    "query": query,
+                    "results": formatted_result,
+                    "total": 1
+                })
+        except Exception as e:
+            errors.append({
+                "index": i,
+                "query": query,
+                "error": str(e)
+            })
+    
+    # Return results
+    response = {
+        "processed": len(results),
+        "errors": len(errors),
+        "results": results
+    }
+    
+    if errors:
+        response["errors_detail"] = errors
+        
+    return json.dumps(response, ensure_ascii=False)
+
+
 def handle_trace(arguments: dict) -> str:
     mem_id = arguments.get("memory_id")
     if not mem_id:
@@ -115,13 +189,13 @@ def handle_trace(arguments: dict) -> str:
         ).fetchone()
         if not row:
             return json.dumps({"error": f"memory #{mem_id} not found"})
-
+        
         meta = {}
         try:
             meta = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]
         except Exception:
             logger.warning("retrieve.py: silent error", exc_info=True)
-
+        
         from datetime import datetime, timezone
         _now = datetime.now(timezone.utc).isoformat()
         rels = conn.execute(
@@ -131,13 +205,13 @@ def handle_trace(arguments: dict) -> str:
             "AND (e.valid_from IS NULL OR e.valid_from <= ?) AND (e.invalid_at IS NULL OR e.invalid_at > ?) LIMIT 10",
             (mem_id, mem_id, mem_id, _now, _now),
         ).fetchall()
-
+        
         ctx = conn.execute(
             "SELECT id, level, subject, created_at FROM memories "
             "WHERE subject = ? AND id != ? AND level IN ('L4','L5') ORDER BY created_at DESC LIMIT 5",
             (row["subject"], mem_id),
         ).fetchall() if row["subject"] else []
-
+        
         # Thread chain: walk up thread_id parents
         thread_chain = []
         cur_id = row["thread_id"] if row["thread_id"] else None
@@ -157,14 +231,14 @@ def handle_trace(arguments: dict) -> str:
                 cur_id = parent["thread_id"] if parent["thread_id"] else None
             else:
                 break
-
+        
         # Thread children: memories that have this ID as thread_id
         children = conn.execute(
             "SELECT id, level, subject, agent_name, substr(created_at,1,19) as ca "
             "FROM memories WHERE thread_id = ? ORDER BY created_at LIMIT 10",
             (mem_id,),
         ).fetchall()
-
+        
         result = {
             "id": row["id"],
             "level": row["level"],

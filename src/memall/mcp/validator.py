@@ -19,7 +19,7 @@ from typing import Any, Dict, Tuple
 from pydantic import BaseModel, ValidationError
 
 from memall.mcp.models import (
-    AdaptiveInput, AskInput, CaptureInput, ConnectInput, DBInput,
+    AdaptiveInput, AskInput, BatchCaptureInput, BatchSearchInput, CaptureInput, ConnectInput, DBInput,
     DigestInput, DiscussionCreateInput, DiscussionRespondInput,
     DiscussionStatusInput, DistillListInput, DistillSummarizeInput,
     FedConflictsInput, FedDeliverInput, FedExtractInput, FedInjectInput,
@@ -42,6 +42,7 @@ _ACTION_MODELS: dict[tuple[str, str], type[BaseModel]] = {
     ("memall_write", "store_batch"): StoreBatchInput,
     ("memall_write", "update"): UpdateInput,
     ("memall_write", "connect"): ConnectInput,
+    ("memall_write", "batch_capture"): BatchCaptureInput,
     # memall_write — sub_action-driven (handler rewrites action=sub_action)
     ("memall_write", "forget"): ForgetInput,
     ("memall_write", "ops"): OpsInput,
@@ -59,6 +60,7 @@ _ACTION_MODELS: dict[tuple[str, str], type[BaseModel]] = {
     ("memall_read", "自然语言搜索"): UnifiedSearchInput,
     ("memall_read", "vector_search"): VectorSearchInput,
     ("memall_read", "hybrid_search"): UnifiedSearchInput,
+    ("memall_read", "batch_search"): BatchSearchInput,
     ("memall_read", "trace"): TraceInput,
     ("memall_read", "traverse"): TraverseInput,
     ("memall_read", "timeline"): TimelineInput,

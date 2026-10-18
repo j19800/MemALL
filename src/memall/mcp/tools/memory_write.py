@@ -1,7 +1,8 @@
 import json
 from memall.config import get_config
 from memall.core.db import get_conn
-from memall.core.thin_waist import smart_store, store_batch, update, normalize_agent_name
+from memall.core.thin_waist import smart_store, store_batch, update, normalize_agent_name, capture
+from memall.core.models import MemoryInput
 
 
 def handle_smart_store(arguments: dict) -> str:
@@ -29,6 +30,65 @@ def handle_store_batch(arguments: dict) -> str:
         return json.dumps({"error": "items is required (non-empty array)"}, ensure_ascii=False)
     result = store_batch(items)
     return json.dumps(result, ensure_ascii=False)
+
+
+def handle_batch_capture(arguments: dict) -> str:
+    """Capture multiple memories in a single operation for improved efficiency."""
+    items = arguments.get("items") or []
+    if not items:
+        return json.dumps({"error": "items is required (non-empty array)"}, ensure_ascii=False)
+    
+    # Process each item
+    results = []
+    errors = []
+    
+    for i, item in enumerate(items):
+        try:
+            # Validate required fields
+            if not item.get("content"):
+                errors.append({"index": i, "error": "content is required"})
+                continue
+                
+            # Create memory input
+            memory_input = MemoryInput(
+                content=item["content"],
+                owner=item.get("owner", ""),
+                agent_name=item.get("agent_name", ""),
+                subject=item.get("subject", ""),
+                project=item.get("project", ""),
+                category=item.get("category", "general"),
+                level=item.get("level", "P2"),
+                tags=json.dumps(item.get("tags", [])),
+                confidence=item.get("confidence", 0.5),
+                visibility=item.get("visibility", "private"),
+                stream=item.get("stream", "ledger"),
+                thread_id=item.get("thread_id")
+            )
+            
+            # Capture the memory
+            memory_id = capture(memory_input)
+            results.append({
+                "index": i,
+                "memory_id": memory_id,
+                "status": "ok"
+            })
+        except Exception as e:
+            errors.append({
+                "index": i,
+                "error": str(e)
+            })
+    
+    # Return results
+    response = {
+        "processed": len(results),
+        "errors": len(errors),
+        "results": results
+    }
+    
+    if errors:
+        response["errors_detail"] = errors
+        
+    return json.dumps(response, ensure_ascii=False)
 
 
 def _is_supervisor(agent: str) -> bool:

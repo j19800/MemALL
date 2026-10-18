@@ -4,14 +4,16 @@ All notable changes to MemALL are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- `mcp/models.py`: Added BatchCaptureInput and BatchSearchInput models for batch memory operations
+- `mcp/validator.py`: Registered batch_capture and batch_search actions in _ACTION_MODELS
+- `mcp/tools/memory_write.py`: Added handle_batch_capture function for efficient multiple memory capture
+- `mcp/tools/retrieve.py`: Added handle_batch_search function for efficient multiple query search
+- `mcp/tools/__init__.py`: Updated memall_read and memall_write tool definitions to include batch operations
+
 ### Fixed
 - `mcp/models.py`: `CaptureInput.level`, `SmartStoreInput.level`, and `UpdateInput.level` patterns now accept `L11` (previously rejected), matching the CLI choices and SQLite `CHECK` constraint (`P0/P1/P2` + `L1–L11`).
 - `config.py`: default `search.provider` changed from `"tfidf"` (not registered in `search/registry.py`, which caused `get_provider()` to return `None`) to `"vec0"` (a registered, working provider).
-
-### Added
-- `README.md` — project overview, quick start, SDK example, interface table, configuration guide, project structure.
-- `ARCHITECTURE.md` — layered architecture, thin-waist core, storage schema, search stack, pipeline, MCP, federation, strategy, plugins, Lark, scheduler, CLI, security model, data flow summary.
-- `CHANGELOG.md` — this file.
 
 ## [0.1.66] — 2026-10-17
 

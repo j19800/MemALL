@@ -1,6 +1,6 @@
 # mcp/models.py - Pydantic models for MCP tool input validation
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List, Literal
+from typing import Optional, List, Literal, Dict, Any
 
 
 # ── Core tools ──
@@ -31,6 +31,47 @@ class QuickCaptureInput(BaseModel):
     level: str = Field("P2", pattern=r"^(P[0-2]|L(10|11|[1-9]))$")
     metadata: str = "{}"
     thread_id: Optional[int] = Field(None, ge=1)
+
+
+class BatchCaptureInput(BaseModel):
+    """memall_write action=batch_capture — capture multiple memories efficiently."""
+    items: List[Dict[str, Any]] = Field(..., min_length=1, description="List of memory objects to capture")
+    
+    @field_validator('items')
+    @classmethod
+    def validate_items(cls, v):
+        if not isinstance(v, list):
+            raise ValueError('items must be a list')
+        if len(v) == 0:
+            raise ValueError('items list cannot be empty')
+        # Validate each item has required content field
+        for i, item in enumerate(v):
+            if not isinstance(item, dict):
+                raise ValueError(f'item at index {i} must be a dictionary')
+            if not item.get('content'):
+                raise ValueError(f'item at index {i} must have content field')
+        return v
+
+
+class BatchSearchInput(BaseModel):
+    """memall_read action=batch_search — search for multiple queries efficiently."""
+    queries: List[str] = Field(..., min_length=1, description="List of search queries")
+    limit: int = Field(10, ge=1, le=100, description="Maximum results per query")
+    
+    @field_validator('queries')
+    @classmethod
+    def validate_queries(cls, v):
+        if not isinstance(v, list):
+            raise ValueError('queries must be a list')
+        if len(v) == 0:
+            raise ValueError('queries list cannot be empty')
+        # Validate each query is a non-empty string
+        for i, query in enumerate(v):
+            if not isinstance(query, str):
+                raise ValueError(f'query at index {i} must be a string')
+            if not query.strip():
+                raise ValueError(f'query at index {i} must be a non-empty string')
+        return v
 
 
 class RetrieveInput(BaseModel):
