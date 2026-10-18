@@ -5,18 +5,23 @@ All notable changes to MemALL are documented in this file.
 ## [Unreleased]
 
 ### Added
-- `mcp/models.py`: Added BatchCaptureInput and BatchSearchInput models for batch memory operations
-- `mcp/validator.py`: Registered batch_capture and batch_search actions in _ACTION_MODELS
-- `mcp/tools/memory_write.py`: Added handle_batch_capture function for efficient multiple memory capture
-- `mcp/tools/retrieve.py`: Added handle_batch_search function for efficient multiple query search
-- `mcp/tools/__init__.py`: Updated memall_read and memall_write tool definitions to include batch operations
+- Added `quality.thresholds` and `quality.gate_policy` configuration options to `memall/config.py` to make the thin_waist quality gate fully configurable
+- Added `quality.min_length` configuration option to set minimum content length for memories
+- Added `unified_search` action to `memall_read` tool that routes between FTS5, vector, and hybrid search based on mode or intent detection
+- Added contextual recall hook in thin_waist to surface related high-level memories after capture
+- Added `contextual_recall_enabled` configuration option to enable/disable contextual recall feature
+
+### Changed
+- Increased level weights for L9-L11 in search ranking from 0.3 to 0.7 to surface distilled knowledge more prominently
+- Made quality scoring thresholds configurable instead of hardcoded values
+- Added `unified_search` action to the memall_read tool input schema and handler
+- Updated thin_waist.py to dispatch the unified_search function for unified search entrance
+- Enhanced quality scoring to use configurable thresholds and gate policy
+- Added minimum content length check based on quality.min_length setting
 
 ### Fixed
-- `mcp/models.py`: `CaptureInput.level`, `SmartStoreInput.level`, and `UpdateInput.level` patterns now accept `L11` (previously rejected), matching the CLI choices and SQLite `CHECK` constraint (`P0/P1/P2` + `L1–L11`).
-- `config.py`: default `search.provider` changed from `"tfidf"` (not registered in `search/registry.py`, which caused `get_provider()` to return `None`) to `"vec0"` (a registered, working provider).
-- `core/db.py`: Changed FTS5 tokenizer to `unicode61` to improve Chinese full-text search recall.
-- `core/thin_waist.py`: Made quality scoring thresholds and gate policy configurable via `quality.thresholds` and `quality.gate_policy` to reduce false rejections of valuable short content.
-- `graph/retrieve.py`: Increased level weights for L9-L11 from 0.3 to 0.7 to surface valuable distilled knowledge in search results.
+- Fixed missing `BatchSearchInput` import in `memall/mcp/validator.py`
+- Fixed `AttributeError: module 'memall.mcp.tools.retrieve' has no attribute 'handle_batch_search'` by implementing the handler and wiring it properly
 
 
 
