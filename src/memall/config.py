@@ -98,6 +98,9 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         # of 'knowledge'.  Deliberately excludes session/meeting/reflection —
         # those carry genuine knowledge and must stay distillable/retrievable.
         "ledger_categories": ["heartbeat", "testing"],
+        # Contextual recall: after storing a memory, check for related high-level
+        # memories in the same project.  Enable to surface related L4/L6/L9+ memories.
+        "contextual_recall_enabled": True,
     },
     "security": {
         # Cross-agent ownership enforcement on memall_write/update: an agent may
@@ -138,27 +141,29 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "auto_load": True,
     },
     "quality": {
-        # Quality thresholds per level - memories scoring below these thresholds
+        # Quality thresholds per level (0-10 scale) - memories scoring below these thresholds
         # may be rejected by the quality gate depending on gate_policy
         "thresholds": {
             "P0": 0,      # No quality gate for highest priority
-            "P1": 15,     # Very low threshold for P1
-            "P2": 20,     # Low threshold for P2
-            "L1": 25,     # Increasing thresholds for lower levels
-            "L2": 30,
-            "L3": 35,
-            "L4": 40,
-            "L5": 45,
-            "L6": 50,
-            "L7": 55,
-            "L8": 60,
-            "L9": 65,
-            "L10": 70,
-            "L11": 75,
+            "P1": 2,      # Very low threshold for P1
+            "P2": 3,      # Low threshold for P2
+            "L1": 3,      # Low threshold for L1
+            "L2": 3,      # Low threshold for L2
+            "L3": 4,      # Moderate threshold for L3
+            "L4": 5,      # Standard threshold for L4
+            "L5": 5,      # Standard threshold for L5 (decisions/tasks need reasoning)
+            "L6": 5,      # Standard threshold for L6 (reflections need substance)
+            "L7": 4,      # Slightly lower for L7
+            "L8": 4,      # Slightly lower for L8
+            "L9": 4,      # Lower threshold for distilled knowledge (L9+)
+            "L10": 4,     # Lower threshold for distilled knowledge (L10+)
+            "L11": 4,     # Lower threshold for distilled knowledge (L11+)
         },
         # Gate policy: "strict" (reject if ANY dimension below threshold) or 
         # "lenient" (reject only if AVERAGE score below threshold)
         "gate_policy": "lenient",
+        # Minimum content length: memories shorter than this are rejected regardless of quality score
+        "min_length": 15,
     },
     "scheduler": {
         "forget_interval": 86400,

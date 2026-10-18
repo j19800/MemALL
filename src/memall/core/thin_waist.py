@@ -407,8 +407,10 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
     # Get quality gate policy from config
     gate_policy = get_config("quality.gate_policy", "strict")  # strict or lenient
     
-    # Minimum content length: content under 15 chars is too short to be meaningful
-    if text_len < 15:
+    # Get minimum content length from config, with fallback to 15
+    min_length = get_config("quality.min_length", 15)
+    # Minimum content length: content under min_length chars is too short to be meaningful
+    if text_len < min_length:
         gate = "rejected"
     # Level-specific gate: L6 reflections MUST have reasoning >= 2
     elif data.level == "L6" and scores["reasoning"] < 2:
@@ -1020,7 +1022,146 @@ def capture(
 
         mem_id = _capture_insert_row(conn, data, h, now)
         _capture_post_insert(conn, mem_id, data, h)
+        
+        # Contextual recall: after storing a memory, check for related high-level memories in the same project.
+        if get_config("contextual_recall_enabled", True):
+            try:
+                _contextual_recall(conn, mem_id, data)
+            except Exception as e:
+                logger.warning(f"Contextual recall failed: {e}", exc_info=True)
+
         return mem_id
+
+
+def _contextual_recall(conn, mem_id: int, data: MemoryInput) -> None:
+    """After storing a memory, surface related high-level memories in the same project.
+    
+    This implements M1: post-capture hook to surface related L4/L6/L9+ memories 
+    based on current content.
+    """
+    # Only run contextual recall for knowledge stream (not ledger)
+    if classify_stream(data.category or "") != "knowledge":
+        return
+        
+    # Only run for memories that have a project
+    project = (data.project or "").strip()
+    if not project:
+        return
+        
+    # Only surface memories of level L4, L6, L9, L10, L11 (high-level knowledge)
+    target_levels = {"L4", "L6", "L9", "L10", "L11"}
+    if data.level not in target_levels:
+        # We're storing a lower-level memory, look for related high-level memories
+        pass
+    else:
+        # We're storing a high-level memory, still look for related high-level memories
+        # (could be useful for connecting related insights)
+        pass
+        
+    # Use FTS5 to find related memories in the same project with high levels
+    # We'll search for key terms from the current content
+    text = data.content or ""
+    if len(text.strip()) < 10:  # Too short to extract meaningful terms
+        return
+        
+    # Extract key terms (simple approach: look for specific patterns)
+    import re
+    # Look for technical terms, numbers, quoted content, etc.
+    terms = []
+    
+    # Extract quoted content
+    quoted_matches = re.findall(r'["“]([^"”]+)["”]', text)
+    terms.extend(quoted_matches)
+    
+    # Extract technical patterns (version numbers, etc.)
+    tech_matches = re.findall(r'\b[vV]\d+\.\d+\b|\b\d{4}\b|\b[A-Z]{2,}\d*\b', text)
+    terms.extend(tech_matches)
+    
+    # Extract potential domain-specific terms (capitalized phrases)
+    cap_matches = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text)
+    terms.extend(cap_matches[:5])  # Limit to avoid too many terms
+    
+    # If we didn't find enough specific terms, use some general content
+    if len(terms) < 2:
+        # Split by common punctuation and take meaningful words
+        words = re.findall(r'\b[^\W\d_]{2,}\b', text.lower())
+        # Filter out very common words
+        stopwords = {'的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一', '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好', '自己', '这'}
+        terms = [w for w in words if w not in stopwords and len(w) >= 2][:10]
+    
+    if not terms:
+        return
+        
+    # Build search query from terms (OR them together for broader recall)
+    query_terms = []
+    for term in terms[:8]:  # Limit number of terms
+        if len(term.strip()) >= 2:
+            query_terms.append(f'"{term}"')
+    
+    if not query_terms:
+        return
+        
+    # Search for memories in the same project with high levels
+    # We'll use a simplified approach: search for each term and combine results
+    try:
+        from memall.core.db import SCHEMA_SQL
+        import sqlite3
+        
+        # Create a temporary connection for the search (to avoid interfering with current transaction)
+        # But we'll use the same connection since we're already in a transaction
+        # We need to be careful not to interfere with the current transaction
+        
+        # For now, we'll implement a simple version that searches for memories
+        # with similar content in the same project and high levels
+        
+        # Get the current memory's content for similarity comparison
+        current_content = (data.content or "").lower()
+        
+        # Search for recent memories in the same project with high levels
+        # We'll look back at recent memories (last 100) to find related ones
+        cursor = conn.execute("""
+            SELECT id, content, level, subject, created_at
+            FROM memories 
+            WHERE project = ? 
+              AND level IN ('L4', 'L6', 'L9', 'L10', 'L11')
+              AND id != ?
+              AND LENGTH(TRIM(content)) >= 10
+            ORDER BY created_at DESC 
+            LIMIT 100
+        """, (project, mem_id))
+        
+        related_memories = []
+        for row in cursor.fetchall():
+            mem_id_db, content, level, subject, created_at = row
+            if not content:
+                continue
+                
+            # Simple similarity check: look for common terms
+            content_lower = content.lower()
+            common_terms = 0
+            for term in terms[:5]:  # Check against top 5 terms
+                if term.lower() in content_lower:
+                    common_terms += 1
+            
+            # If we found at least 2 common terms, consider it related
+            if common_terms >= 2:
+                related_memories.append({
+                    'id': mem_id_db,
+                    'content': content[:100] + ('...' if len(content) > 100 else ''),
+                    'subject': subject,
+                    'level': level,
+                    'common_terms': common_terms
+                })
+        
+        # Log the contextual recall results (in a real implementation, this would trigger notifications)
+        if related_memories:
+            logger.info(f"Contextual recall for memory {mem_id} found {len(related_memories)} related high-level memories in project '{project}':")
+            for mem in related_memories[:3]:  # Log top 3
+                logger.info(f"  - [{mem['level']}] {mem['subject'] or mem['content'][:50]}...")
+                
+    except Exception as e:
+        logger.warning(f"Contextual recall search failed: {e}")
+        # Don't let contextual recall failures break the main capture flow
 
 
 def unified_search(arguments: dict) -> str:
