@@ -76,6 +76,10 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         # Thread inference: link new memories to a thread root within N minutes.
         # 0 disables the feature (thread_id left null). Tune per deployment.
         "thread_inference_window_minutes": 60,
+        # Thread inference semantic fallback: when temporal window yields no candidate,
+        # use semantic similarity to find related memories (M2 enhancement).
+        "thread_inference_semantic_window": 50,
+        "thread_inference_semantic_threshold": 0.7,
         # Category hygiene (root-cause guard for the "field pollution" defect).
         # A distill.py slicing bug once turned two-char domain names into single
         # characters ("决策" -> "决"/"策", "[任务]" -> "["/"任"), producing 159
@@ -101,6 +105,32 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         # Contextual recall: after storing a memory, check for related high-level
         # memories in the same project.  Enable to surface related L4/L6/L9+ memories.
         "contextual_recall_enabled": True,
+    },
+    # Heat-based level promotion configuration (M4)
+    "promotion": {
+        # Enable/disable heat-based level promotion
+        "enabled": True,
+        # Access count thresholds for promotion between levels
+        # Format: "from_level": {"to_level": min_access_count, ...}
+        "access_thresholds": {
+            "P2": {"L1": 15},      # Promote P2→L1 when accessed 15+ times
+            "L1": {"L2": 25},      # Promote L1→L2 when accessed 25+ times
+            "L2": {"L3": 35},      # Promote L2→L3 when accessed 35+ times
+            "L3": {"L4": 50},      # Promote L3→L4 when accessed 50+ times
+            "L4": {"L5": 75},      # Promote L4→L5 when accessed 75+ times
+            "L5": {"L6": 100},     # Promote L5→L6 when accessed 100+ times
+            "L6": {"L7": 150},     # Promote L6→L7 when accessed 150+ times
+            "L7": {"L8": 200},     # Promote L7→L8 when accessed 200+ times
+            "L8": {"L9": 300},     # Promote L8→L9 when accessed 300+ times
+            "L9": {"L10": 500},    # Promote L9→L10 when accessed 500+ times
+            "L10": {"L11": 800},   # Promote L10→L11 when accessed 800+ times
+        },
+        # Minimum time (in days) a memory must exist before being eligible for promotion
+        "min_age_days": 7,
+        # Whether to also consider referenced memories (edges pointing to this memory)
+        "consider_references": True,
+        # Reference count threshold for promotion (in addition to access count)
+        "reference_threshold": 5,
     },
     "security": {
         # Cross-agent ownership enforcement on memall_write/update: an agent may

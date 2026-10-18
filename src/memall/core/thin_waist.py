@@ -744,6 +744,9 @@ def _capture_prepare_identity(conn, data: MemoryInput) -> None:
 
 def _infer_thread_root(conn, data: MemoryInput, now: str) -> Optional[int]:
     """Return a stable thread root id for ``data`` inside a recent time window.
+    
+    First tries temporal window approach. If that fails to find a candidate,
+    falls back to semantic similarity search (M2 enhancement).
 
     A "thread" groups memories of the same agent and (inferred) project that
     arrive close together in time. The root is the *earliest* memory in the
@@ -753,26 +756,71 @@ def _infer_thread_root(conn, data: MemoryInput, now: str) -> Optional[int]:
     Returns None when the feature is disabled (window <= 0) or no recent
     same-agent + same-project memory exists yet.
     """
+    # First try: temporal window approach (existing logic)
     window_min = get_config("capture.thread_inference_window_minutes", 0)
     if not window_min or window_min <= 0:
+        # Temporal feature disabled, go straight to semantic fallback
+        pass
+    else:
+        proj = data.project or ""
+        try:
+            cutoff = (
+                datetime.fromisoformat(now) - timedelta(minutes=int(window_min))
+            ).isoformat()
+        except (ValueError, OverflowError):
+            cutoff = None
+        
+        if cutoff is not None:
+            try:
+                row = conn.execute(
+                    "SELECT id FROM memories "
+                    "WHERE agent_name = ? AND project = ? AND created_at >= ? "
+                    "ORDER BY created_at ASC LIMIT 1",
+                    (data.agent_name, proj, cutoff),
+                ).fetchone()
+            except sqlite3.Error:
+                row = None
+            
+            if row is not None:
+                return row["id"] if row else None
+    
+    # Second try: semantic similarity fallback (M2 enhancement)
+    # Only enable semantic fallback if we have content to compare
+    if not data.content or len(data.content.strip()) < 10:
         return None
-    proj = data.project or ""
-    try:
-        cutoff = (
-            datetime.fromisoformat(now) - timedelta(minutes=int(window_min))
-        ).isoformat()
-    except (ValueError, OverflowError):
+        
+    semantic_window = get_config("capture.thread_inference_semantic_window", 50)
+    semantic_threshold = get_config("capture.thread_inference_semantic_threshold", 0.7)
+    
+    if semantic_window <= 0:
         return None
+        
     try:
-        row = conn.execute(
-            "SELECT id FROM memories "
-            "WHERE agent_name = ? AND project = ? AND created_at >= ? "
-            "ORDER BY created_at ASC LIMIT 1",
-            (data.agent_name, proj, cutoff),
-        ).fetchone()
+        # Get recent memories from the same agent for semantic comparison
+        recent = conn.execute(
+            "SELECT id, content FROM memories "
+            "WHERE agent_name = ? AND LENGTH(TRIM(content)) >= 10 "
+            "ORDER BY created_at DESC LIMIT ?",
+            (data.agent_name, int(semantic_window)),
+        ).fetchall()
     except sqlite3.Error:
+        recent = []
+    
+    if not recent:
         return None
-    return row["id"] if row else None
+    
+    # Use existing semantic dedup function to find the most similar memory
+    try:
+        best_id = _semantic_dedup_lookup(
+            conn, 
+            data, 
+            threshold=semantic_threshold, 
+            window=semantic_window
+        )
+        return best_id
+    except Exception:
+        # If semantic search fails, return None
+        return None
 
 
 def _semantic_dedup_lookup(

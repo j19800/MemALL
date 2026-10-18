@@ -27,6 +27,9 @@ class Memory:
     thread_id: Optional[int] = None
     agent_name_locked: bool = False
     tags: str = "[]"
+    # Source IDs for provenance tracking (M3): track which source memories contributed to this memory
+    # Especially useful for distilled knowledge (L9+) to trace back to source memories
+    source_ids: str = "[]"
 
 
 @dataclass
@@ -48,3 +51,6 @@ class MemoryInput:
     metadata: str = "{}"
     tags: str = "[]"
     thread_id: Optional[int] = None
+    # Source IDs for provenance tracking (M3): specify which source memories this memory is derived from
+    # Particularly useful when creating distilled memories (L9+) from multiple sources
+    source_ids: str = "[]"

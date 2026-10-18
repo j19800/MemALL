@@ -461,6 +461,7 @@ _PIPELINE_STEPS = [
     ("distill",         "memall.pipeline.distill",         "distill_step",                    QUALITY_GATES.get("distill")),
     ("integrate",       "memall.pipeline.integrate",       "integrate_step",                  QUALITY_GATES.get("integrate")),
     ("improve",         "memall.pipeline.improve",         "improve_step",                    None),
+    ("promote",         "memall.pipeline.promote",         "promote_step",                    None),
     ("observation",     "memall.pipeline.observe",     "observation_step",                None),
     ("identity",        "memall.pipeline.identity",        "identity_step",                   None),
     ("reasoning",       "memall.pipeline.reasoning",        "reasoning_step",                  None),
