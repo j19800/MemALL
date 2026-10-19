@@ -309,6 +309,13 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
     "logging": {
         "level": "INFO",
     },
+    "prompt": {
+        # Language of the session-injection labels (memall.i18n).  Affects
+        # only the section labels/connective copy an agent re-reads every
+        # session — not stored memory content.  Unknown values fall back to
+        # zh.  Adding a language = adding a pack in memall/i18n.py.
+        "lang": "zh",
+    },
 }
 
 # Cached config, loaded lazily

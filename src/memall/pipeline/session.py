@@ -256,61 +256,68 @@ def _harvest_session(conn, session_id: str, started_at: str, agent_name: str,
 
 
 def _build_narrative_greeting(data: dict, agent_name: str) -> str:
-    """Build a natural-language greeting paragraph from session context data."""
+    """Build a natural-language greeting paragraph from session context data.
+
+    Every phrase routes through :mod:`memall.i18n` so the greeting follows
+    ``prompt.lang`` — this is the text an agent re-reads at every session
+    start, the highest-frequency prompt surface in the system.
+    """
+    from memall.i18n import L
+
     parts = []
 
     # Time since last session
     h = data.get("hours_elapsed")
     if h is not None:
         if h < 2:
-            parts.append("不久未见")
+            parts.append(L("narrative_short_absence"))
         elif h < 48:
-            parts.append(f"距离上次会话约 {h} 小时")
+            parts.append(L("narrative_hours_since", h=h))
         else:
             days = h // 24
             if days == 1:
-                parts.append("隔了一天")
+                parts.append(L("narrative_one_day"))
             elif days <= 7:
-                parts.append(f"隔了 {days} 天")
+                parts.append(L("narrative_days_short", days=days))
             else:
-                parts.append(f"距上次会话约 {days} 天")
+                parts.append(L("narrative_days_long", days=days))
     else:
-        parts.append("新会话开始")
+        parts.append(L("narrative_new_session"))
 
     # New memories since last session
     new_mem = data.get("new_memories", 0)
     if new_mem > 0:
-        parts.append(f"期间新增 {new_mem} 条记忆")
+        parts.append(L("narrative_new_memories", n=new_mem))
 
     # Current epoch
     epoch_label = data.get("epoch_label")
     if epoch_label:
-        parts.append(f"当前阶段「{epoch_label[:30]}」")
+        parts.append(L("narrative_epoch", label=epoch_label[:30]))
 
     # TODOs
     if data.get("has_todo"):
         tc = data["todo_count"]
         if data.get("todo_p0"):
-            parts.append(f"有 {tc} 件待办（含 P0 紧急项）")
+            parts.append(L("narrative_todo_p0", n=tc))
         elif tc > 0:
-            parts.append(f"有 {tc} 件待办未处理")
+            parts.append(L("narrative_todo", n=tc))
 
     # Open arcs
     if data.get("open_arcs_count", 0) > 0:
-        parts.append(f"{data['open_arcs_count']} 条决策未闭合")
+        parts.append(L("narrative_open_arcs", n=data["open_arcs_count"]))
 
     # Weekly summary
     if data.get("has_weekly"):
-        parts.append("本周有回顾总结")
+        parts.append(L("narrative_weekly"))
 
     # Pulse (stale items)
     if data.get("has_pulse"):
-        parts.append("有长期未动的待办")
+        parts.append(L("narrative_pulse"))
 
     if not parts:
         return ""
 
-    return f"[NARRATIVE] {'，'.join(parts)}。"
+    return f"[NARRATIVE] {L('narrative_joiner').join(parts)}{L('narrative_term')}"
 
 
 def _build_cross_agent_section(conn, agent_name: str) -> list:
@@ -562,6 +569,7 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 stable_parts.append(f"[DOMAIN] {tops}")
 
             # ── VOLATILE: counts and state that change every session ──
+            from memall.i18n import L
             # [DECISIONS] L4 decision arcs
             darcs = injection.get("decision_arcs", {})
             open_dec = darcs.get("open", [])
@@ -569,9 +577,9 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
             if open_dec or in_prog:
                 parts = ["[DECISIONS]"]
                 if open_dec:
-                    parts.append(f"待决({len(open_dec)})")
+                    parts.append(f"{L('decisions_pending')}({len(open_dec)})")
                 if in_prog:
-                    parts.append(f"进行中({len(in_prog)})")
+                    parts.append(f"{L('decisions_in_progress')}({len(in_prog)})")
                 volatile_parts.append(" ".join(parts))
 
             # [TODO]
@@ -585,7 +593,7 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 _distill_result = json.loads(_distill_handle({"action": "list", "limit": 5}))
                 _pending = _distill_result.get("pending", [])
                 if _pending:
-                    volatile_parts.append(f"[DISTILL] {len(_pending)} 组待写摘要，调 memall_system action=distill 查看")
+                    volatile_parts.append(f"[DISTILL] {len(_pending)} {L('distill_pending')}")
             except (ImportError, json.JSONDecodeError) as e:
                 logger.warning(f"Failed to query pending distill items: {e}")
 
@@ -595,7 +603,8 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                     h = narrative_data.get("hours_elapsed")
                     nc = narrative_data.get("new_memories", 0)
                     if h is not None:
-                        cont = f"[CONTINUITY] 距上次约{h if h<48 else h//24}{'h' if h<48 else 'd'}"
+                        cont = (f"[CONTINUITY] {L('continuity_prefix')}"
+                                f"{h if h < 48 else h // 24}{'h' if h < 48 else 'd'}")
                         if nc > 0:
                             cont += f" +{nc}mem"
                         if prev_session:
@@ -615,7 +624,7 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 volatile_parts.append(narrative_line)
 
             result["injection_formatted"] = chr(10).join(
-                ["[CONTEXT] 会话上下文（首段先概括以下信息）："]
+                [L("context_header")]
                 + stable_parts
                 + volatile_parts
             )

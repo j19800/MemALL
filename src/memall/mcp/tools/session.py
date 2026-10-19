@@ -5,12 +5,14 @@ from memall.pipeline.session import session_start, session_end, session_summary
 def _format_l7_instructions(injection: dict) -> str:
     """Extract L7 lessons and preferences and format as explicit behavioral
     instructions that Claude will read at the top of the session_start response."""
+    from memall.i18n import L
+
     lines = []
 
     # L7 Lessons (preference memories)
     lesson_list = (injection or {}).get("l7_lessons") or []
     if lesson_list:
-        lines.append("【行为准则（L7 经验教训）】")
+        lines.append(L("l7_rules_header"))
         for i, item in enumerate(lesson_list, 1):
             txt = item.get('lesson', '')[:200]
             w = item.get('weight', 1)
@@ -22,7 +24,7 @@ def _format_l7_instructions(injection: dict) -> str:
     identity = (injection or {}).get("identity_traits") or {}
     prefs = identity.get("l7_preferences") or []
     if prefs:
-        lines.append("【工作偏好（L7 偏好提取）】")
+        lines.append(L("l7_prefs_header"))
         for p in prefs:
             label = p.get("type", "偏好")
             snippet = p.get("snippet", "")
@@ -32,7 +34,7 @@ def _format_l7_instructions(injection: dict) -> str:
     # L6 Reflections (corrections/lessons)
     reflection_list = (injection or {}).get("reflections") or []
     if reflection_list:
-        lines.append("【历史反思（L6 反思摘要）】")
+        lines.append(L("l7_reflect_header"))
         for i, item in enumerate(reflection_list, 1):
             lines.append(f"  {i}. {item.get('summary', '')[:200]}")
         lines.append("")
