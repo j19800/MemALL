@@ -1,6 +1,7 @@
 import sqlite3
 import hashlib
 import os
+import re
 import threading
 import queue
 import logging
@@ -165,6 +166,25 @@ CREATE TABLE IF NOT EXISTS narratives (
 
 CREATE INDEX IF NOT EXISTS idx_narratives_agent ON narratives(agent_name);
 CREATE INDEX IF NOT EXISTS idx_narratives_span ON narratives(span_start, span_end);
+
+CREATE TABLE IF NOT EXISTS search_interactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query TEXT NOT NULL,
+    memory_id INTEGER,
+    action TEXT NOT NULL DEFAULT 'click'
+        CHECK (action IN ('click', 'dwell', 'impression', 'copy', 'skip')),
+    dwell_ms INTEGER NOT NULL DEFAULT 0,
+    rank_position INTEGER,
+    agent_name TEXT NOT NULL DEFAULT '',
+    owner TEXT NOT NULL DEFAULT '',
+    session_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_interactions_agent ON search_interactions(agent_name);
+CREATE INDEX IF NOT EXISTS idx_interactions_query ON search_interactions(query);
+CREATE INDEX IF NOT EXISTS idx_interactions_memory ON search_interactions(memory_id);
+CREATE INDEX IF NOT EXISTS idx_interactions_created ON search_interactions(created_at);
 
 CREATE TABLE IF NOT EXISTS suggestions (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -346,19 +366,19 @@ CREATE INDEX IF NOT EXISTS idx_shared_source ON shared_records(source_agent);
 FTS5_TRIGGERS = """
 CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
     INSERT INTO memories_fts(rowid, content, subject, summary)
-    VALUES (new.id, new.content, new.subject, new.summary);
+    VALUES (new.id, memall_split_cjk(new.content), memall_split_cjk(new.subject), memall_split_cjk(new.summary));
 END;
 
 CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
     INSERT INTO memories_fts(memories_fts, rowid, content, subject, summary)
-    VALUES ('delete', old.id, old.content, old.subject, old.summary);
+    VALUES ('delete', old.id, memall_split_cjk(old.content), memall_split_cjk(old.subject), memall_split_cjk(old.summary));
 END;
 
 CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
     INSERT INTO memories_fts(memories_fts, rowid, content, subject, summary)
-    VALUES ('delete', old.id, old.content, old.subject, old.summary);
+    VALUES ('delete', old.id, memall_split_cjk(old.content), memall_split_cjk(old.subject), memall_split_cjk(old.summary));
     INSERT INTO memories_fts(rowid, content, subject, summary)
-    VALUES (new.id, new.content, new.subject, new.summary);
+    VALUES (new.id, memall_split_cjk(new.content), memall_split_cjk(new.subject), memall_split_cjk(new.summary));
 END;
 """
 
@@ -373,6 +393,61 @@ def ensure_dir():
 
 def content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+# ── FTS5 CJK tokenisation helper ─────────────────────────────────────
+# FTS5's built-in unicode61 tokenizer treats a contiguous CJK run as ONE
+# token ("检索架构" → "检索架构").  A query for "检索" then only matches
+# documents containing that exact 2-char run as a standalone token — which
+# is almost never the case inside longer prose, so Chinese keyword search
+# silently returns nothing.
+#
+# ``memall_split_cjk`` inserts a space between every CJK character so
+# unicode61 emits one token per character ("检 索 架 构").  Single
+# characters are searchable, and a contiguous run is matched with a
+# space-separated phrase query ("检 索").
+#
+# It is registered as a SQL function and called from the FTS5 sync
+# triggers, so it must be deterministic, total, and never raise.
+
+_CJK_CHAR_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u2e80-\u2eff\u2f00-\u2fdf]+")
+
+
+def memall_split_cjk(text) -> str:
+    """Insert spaces between CJK characters for FTS5 unicode61 indexing.
+
+    Non-CJK runs (ASCII words, digits, punctuation) are left untouched, so
+    ``"FTS5 检索"`` becomes ``"FTS5 检 索"``.
+    """
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        try:
+            text = str(text)
+        except Exception:
+            return ""
+    parts: list[str] = []
+    pos = 0
+    for m in _CJK_CHAR_RE.finditer(text):
+        if m.start() > pos:
+            parts.append(text[pos:m.start()])
+        parts.append(" ".join(m.group()))
+        pos = m.end()
+    if pos < len(text):
+        parts.append(text[pos:])
+    return "".join(parts)
+
+
+def _register_sql_functions(conn) -> None:
+    """Register MemALL's custom SQL functions on *conn*.
+
+    Must run before ``init_db`` executes the FTS5 triggers (which call
+    ``memall_split_cjk``), and before any INSERT/UPDATE touches them.
+    """
+    try:
+        conn.create_function("memall_split_cjk", 1, memall_split_cjk, deterministic=True)
+    except Exception:
+        logger.debug("db.py: could not register memall_split_cjk", exc_info=True)
 
 
 def get_conn(db_path=None) -> sqlite3.Connection:
@@ -405,6 +480,10 @@ def get_conn(db_path=None) -> sqlite3.Connection:
     conn.execute("PRAGMA cache_size=-8000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=5000")
+
+    # Custom SQL functions must exist before init_db runs the FTS5 triggers
+    # (which call memall_split_cjk) and before any write touches them.
+    _register_sql_functions(conn)
 
     if not _auto_init_done:
         with _auto_init_lock:
@@ -458,11 +537,7 @@ def init_db(conn=None, migrate=True, db_path_for_backup: str = ""):
         _ensure_missing_columns(conn)
         conn.commit()
         # Only execute FTS5 triggers if they haven't been set up yet
-        _fts_triggers_done = conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'memories_%'"
-        ).fetchone()[0]
-        if _fts_triggers_done < 3:
-            conn.executescript(FTS5_TRIGGERS)
+        _ensure_fts_triggers(conn)
         if migrate:
             # Formal migration system (GAP-7: auto-migration on pip upgrade)
             try:
@@ -495,6 +570,15 @@ def init_db(conn=None, migrate=True, db_path_for_backup: str = ""):
         # migrating so a skipped migration cannot corrupt the schema.
         _ensure_missing_columns(conn)
         conn.commit()
+        # A table-rebuilding migration (021 / 028) DROPs ``memories``, which takes
+        # the AFTER INSERT/UPDATE/DELETE FTS5 triggers with it.  On a fresh DB the
+        # triggers are created *before* the migrations run, so they were gone by
+        # the time the first capture() landed — leaving ``memories_fts`` empty and
+        # every keyword search returning zero rows (silent, no error).  Re-assert
+        # the triggers *after* migrating, then backfill any gap so the index is
+        # consistent with the table.
+        _ensure_fts_triggers(conn)
+        _backfill_fts_if_empty(conn)
         # Seed "system" identity — required by capture() identity check
         # (normalize_agent_name() falls back to "system" for empty/invalid names)
         conn.execute(
@@ -507,8 +591,63 @@ def init_db(conn=None, migrate=True, db_path_for_backup: str = ""):
             conn.close()
 
 
+def _ensure_fts_triggers(conn) -> None:
+    """Create the FTS5 sync triggers if any are missing.
+
+    ``DROP TABLE memories`` (in the table-rebuild migrations 021 / 028) removes
+    its triggers, so this is re-checked after migrations as well as at schema
+    creation time.
+    """
+    done = conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'memories_%'"
+    ).fetchone()[0]
+    if done < 3:
+        conn.executescript(FTS5_TRIGGERS)
+        conn.commit()
+
+
+def _backfill_fts_if_empty(conn) -> None:
+    """Rebuild the FTS index when it has drifted from ``memories``.
+
+    Guards against the fresh-DB window where the triggers were dropped by a
+    table rebuild and memories written before the backfill never got indexed.
+    Cheap when already consistent (a single COUNT comparison).
+    """
+    try:
+        mem_count = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        fts_count = conn.execute("SELECT COUNT(*) FROM memories_fts").fetchone()[0]
+        if fts_count == mem_count:
+            return
+        if fts_count == 0 and mem_count > 0:
+            # Tokenise through memall_split_cjk so the index matches what the
+            # sync triggers produce — a verbatim copy would index CJK runs as
+            # single tokens and make Chinese keyword search miss them.
+            conn.execute("INSERT INTO memories_fts(rowid, content, subject, summary) "
+                         "SELECT id, memall_split_cjk(content), memall_split_cjk(subject), "
+                         "memall_split_cjk(summary) FROM memories")
+            conn.commit()
+            logger.info(
+                "db.py: backfilled FTS index with %d memories", mem_count
+            )
+    except sqlite3.Error:
+        logger.debug("db.py: FTS backfill skipped", exc_info=True)
+
+
 def rebuild_fts(conn):
-    conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')")
+    """Rebuild the whole FTS index with the current tokenisation.
+
+    FTS5's own ``'rebuild'`` command re-reads the content columns *without*
+    applying our ``memall_split_cjk`` transformation, so it cannot change the
+    tokenisation.  Delete and re-insert through the split instead, which keeps
+    the index identical to what the sync triggers produce.
+    """
+    _register_sql_functions(conn)
+    conn.execute("DELETE FROM memories_fts")
+    conn.execute(
+        "INSERT INTO memories_fts(rowid, content, subject, summary) "
+        "SELECT id, memall_split_cjk(content), memall_split_cjk(subject), "
+        "memall_split_cjk(summary) FROM memories"
+    )
     conn.commit()
 
 
@@ -558,6 +697,9 @@ class ConnectionPool:
         conn.execute("PRAGMA cache_size=-8000")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=5000")
+        # Custom SQL functions must exist before init_db runs the FTS5
+        # triggers (which call memall_split_cjk) and before any write.
+        _register_sql_functions(conn)
         self._conn_tids[id(conn)] = threading.get_ident()
 
         if not _auto_init_done:

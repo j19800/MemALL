@@ -1215,6 +1215,16 @@ def _contextual_recall(conn, mem_id: int, data: MemoryInput) -> None:
 def unified_search(arguments: dict) -> str:
     """Unified search entrance that routes to FTS5, vector, or hybrid search based on mode or intent.
     Returns a JSON string with the search results.
+
+    Enhancement arguments (all opt-in, additionally gated by config):
+      - ``facet_fields``: list/"auto" — aggregate counts over candidates.
+      - ``expand_query``: bool — synonym/history expansion before matching.
+      - ``suggest``: bool — query completions from the corpus vocabulary.
+      - ``explain``: bool — per-result score breakdown.
+      - ``cluster``: bool — topic grouping of results.
+      - ``personalize``: bool — per-agent affinity ranking.
+      - ``context_boost``: bool — boost active project/category matches.
+      - ``agent_name``: viewer identity for personalisation/context/trust.
     """
     import json
     query = arguments.get("query", "").strip()
@@ -1224,10 +1234,70 @@ def unified_search(arguments: dict) -> str:
     if not query:
         return json.dumps({"error": "query is required"})
 
+    # Enhancement flags — honoured by the fts5 / direct paths (which go
+    # through enhanced_search) and by hybrid/vector via apply_enhancements.
+    facet_fields = arguments.get("facet_fields")
+    expand_query = bool(arguments.get("expand_query", False))
+    suggest = bool(arguments.get("suggest", False))
+    explain = bool(arguments.get("explain", False))
+    cluster = bool(arguments.get("cluster", False))
+    personalize = bool(arguments.get("personalize", False))
+    context_boost = bool(arguments.get("context_boost", False))
+    wants_enhancements = any(
+        (facet_fields, expand_query, suggest, explain, cluster, personalize, context_boost)
+    )
+
     if mode == "auto":
         from memall.search.intent_router import classify, resolve_mode
         intent = classify(query)
         mode = resolve_mode(intent)
+
+    if mode in ("direct", "fts5") and wants_enhancements:
+        result = enhanced_search(
+            query=query,
+            viewer=arguments.get("viewer"),
+            agent_name=arguments.get("agent_name"),
+            limit=top_k,
+            facet_fields=facet_fields,
+            expand_query=expand_query,
+            suggest=suggest,
+            explain=explain,
+            cluster=cluster,
+            personalize=personalize,
+            context_boost=context_boost,
+            owner=arguments.get("owner"),
+            agent_name_filter=arguments.get("agent_name"),
+            category=arguments.get("category"),
+            project=arguments.get("project"),
+            level=arguments.get("level"),
+            occurred_at=arguments.get("occurred_at"),
+            from_occurred_at=arguments.get("from_occurred_at"),
+            to_occurred_at=arguments.get("to_occurred_at"),
+        )
+        # enhanced_search returns Memory objects; serialise to the same
+        # shape the plain paths use.
+        items = [
+            {
+                "memory_id": m.id,
+                "content": m.content[:200],
+                "subject": m.subject,
+                "category": m.category,
+                "level": m.level,
+                "owner": m.owner,
+                "agent_name": m.agent_name,
+            }
+            for m in result["results"]
+        ]
+        payload = {
+            "query": query,
+            "mode": mode,
+            "results": items,
+            "total": result.get("total", len(items)),
+        }
+        for key in ("facets", "suggestions", "clusters", "explanations", "expanded_query"):
+            if key in result:
+                payload[key] = result[key]
+        return json.dumps(payload, ensure_ascii=False)
 
     if mode == "direct":
         # Direct lookup: pure numeric ID.
@@ -1295,6 +1365,12 @@ def unified_search(arguments: dict) -> str:
             query=query,
             top_k=top_k,
         )
+        if wants_enhancements:
+            _apply_enhancements_inplace(
+                result, arguments,
+                expand_query=expand_query, suggest=suggest, explain=explain,
+                cluster=cluster, personalize=personalize, context_boost=context_boost,
+            )
         return json.dumps(result, ensure_ascii=False, default=str)
 
     # Default to hybrid search
@@ -1306,9 +1382,96 @@ def unified_search(arguments: dict) -> str:
         level=arguments.get("level"),
         owner=arguments.get("owner"),
         rerank=arguments.get("rerank", False),
+        viewer=arguments.get("agent_name"),
     )
+    if wants_enhancements:
+        _apply_enhancements_inplace(
+            result, arguments,
+            expand_query=expand_query, suggest=suggest, explain=explain,
+            cluster=cluster, personalize=personalize, context_boost=context_boost,
+        )
     result["mode"] = mode if mode != "auto" else result.get("mode", "hybrid_rrf")
     return json.dumps(result, ensure_ascii=False, default=str)
+
+
+def _apply_enhancements_inplace(result: dict, arguments: dict, **flags) -> None:
+    """Apply post-retrieval enhancements to a dict-shaped search result.
+
+    Used by the vector / hybrid paths of :func:`unified_search`, where the
+    results are already dicts.  Facets and query suggestions are computed
+    against the ``memories`` table with the same WHERE semantics as
+    ``retrieve()`` so they describe the same candidate population.
+    """
+    from memall.search.enhancements import (
+        apply_enhancements,
+        compute_facets,
+        suggest_queries,
+        _default_facet_fields,
+        _norm_facet_fields,
+    )
+    from memall.config import get_config
+
+    query = arguments.get("query", "")
+    agent_name = arguments.get("agent_name", "") or arguments.get("viewer", "") or ""
+    results = result.get("results") or []
+
+    with _pool_conn() as conn:
+        fields = []
+        facet_fields = arguments.get("facet_fields")
+        if facet_fields:
+            if isinstance(facet_fields, str) and facet_fields.strip().lower() == "auto":
+                fields = _default_facet_fields()
+            else:
+                fields = _norm_facet_fields(
+                    facet_fields, max_fields=get_config("search.facets.max_fields", 8)
+                )
+        if fields:
+            filters = {
+                k: arguments.get(k)
+                for k in ("owner", "category", "project", "level")
+                if arguments.get(k)
+            }
+            where = ["1=1"]
+            params: list = []
+            for key, val in filters.items():
+                where.append(f"memories.{key} = ?")
+                params.append(val)
+            if agent_name:
+                where.append("memories.agent_name = ?")
+                params.append(agent_name)
+            if query and isinstance(query, str):
+                q = fts_query(query)
+                if q:
+                    where.append(
+                        "memories.id IN (SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?)"
+                    )
+                    params.append(q)
+            result["facets"] = compute_facets(conn, " AND ".join(where), params, fields)
+
+        if flags.get("suggest"):
+            result["suggestions"] = suggest_queries(conn, query, limit=10)
+
+        enhanced = apply_enhancements(
+            results,
+            query=query,
+            conn=conn,
+            agent_name=agent_name,
+            explain=flags.get("explain", False),
+            cluster=flags.get("cluster", False),
+            personalize=flags.get("personalize", False),
+            context_boost=flags.get("context_boost", False),
+        )
+    result["results"] = enhanced.get("results") or results
+    if enhanced.get("clusters"):
+        result["clusters"] = enhanced["clusters"]
+    if enhanced.get("explained"):
+        result["explained"] = True
+    if flags.get("expand_query") and get_config("search.query_expansion.enabled", False):
+        from memall.search.enhancements import expand_query as _expand, load_synonyms
+
+        expanded = _expand(query, synonyms=load_synonyms())
+        if expanded != query:
+            result["expanded_query"] = expanded
 
 
 def update(memory_id: int, **fields) -> bool:
@@ -1428,6 +1591,55 @@ def update(memory_id: int, **fields) -> bool:
         return True
 
 
+def _build_retrieve_where(conn, query, viewer, filters) -> tuple[list, list, bool]:
+    """Assemble the shared WHERE clause + params for ``retrieve``.
+
+    Returns ``(where_parts, params, is_direct)``.  Factored out so that
+    :func:`enhanced_search` can reuse the *identical* filter semantics for
+    its facet aggregates (facets must count the same population the results
+    come from, just without LIMIT).
+    """
+    where = ["1=1"]
+    params = []
+
+    for key in ("owner", "agent_name", "category", "project", "level"):
+        val = filters.get(key)
+        if val:
+            where.append(f"memories.{key} = ?")
+            params.append(val)
+
+    # Agent isolation: when a viewer identifies itself but no explicit
+    # agent_name filter is set, default to viewing only its own memories.
+    # This ensures agents see their own data by default.
+    if viewer and not filters.get("agent_name"):
+        where.append("memories.agent_name = ?")
+        params.append(viewer)
+
+    subject = filters.get("subject")
+    if subject:
+        where.append("memories.subject LIKE ?")
+        params.append(f"%{subject}%")
+
+    date_start = filters.get("date_start")
+    if date_start:
+        where.append("memories.occurred_at >= ?")
+        params.append(date_start)
+    date_end = filters.get("date_end")
+    if date_end:
+        where.append("memories.occurred_at <= ?")
+        params.append(date_end)
+
+    if query and isinstance(query, str):
+        q = fts_query(query)
+        if q:
+            where.append(
+                "memories.id IN (SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?)"
+            )
+            params.append(q)
+
+    return where, params, False
+
+
 def retrieve(query=None, viewer=None, **filters) -> list | Memory | None:
     dispatch_lifecycle(HOOK_PRE_RETRIEVE, query=query, viewer=viewer, filters=filters)
     with _pool_conn() as conn:
@@ -1447,45 +1659,8 @@ def retrieve(query=None, viewer=None, **filters) -> list | Memory | None:
             dispatch_lifecycle(HOOK_POST_RETRIEVE, query=query, result=None)
             return None
 
-        where = ["1=1"]
-        params = []
-
-        for key in ("owner", "agent_name", "category", "project", "level"):
-            val = filters.get(key)
-            if val:
-                where.append(f"memories.{key} = ?")
-                params.append(val)
-
-        # Agent isolation: when a viewer identifies itself but no explicit
-        # agent_name filter is set, default to viewing only its own memories.
-        # This ensures agents see their own data by default.
-        if viewer and not filters.get("agent_name"):
-            where.append("memories.agent_name = ?")
-            params.append(viewer)
-
-        subject = filters.get("subject")
-        if subject:
-            where.append("memories.subject LIKE ?")
-            params.append(f"%{subject}%")
-
-        date_start = filters.get("date_start")
-        if date_start:
-            where.append("memories.occurred_at >= ?")
-            params.append(date_start)
-        date_end = filters.get("date_end")
-        if date_end:
-            where.append("memories.occurred_at <= ?")
-            params.append(date_end)
-
+        where, params, _ = _build_retrieve_where(conn, query, viewer, filters)
         limit = filters.get("limit", 20)
-
-        if query and isinstance(query, str):
-            q = fts_query(query)
-            if q:
-                where.append(
-                    "memories.id IN (SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?)"
-                )
-                params.append(q)
 
         sql = f"SELECT * FROM memories WHERE {' AND '.join(where)} ORDER BY occurred_at DESC LIMIT ?"
         params.append(limit)
@@ -1502,6 +1677,163 @@ def retrieve(query=None, viewer=None, **filters) -> list | Memory | None:
 
 VISIBILITY_ORDER = ["public", "shared", "family", "trusted", "private"]
 VISIBILITY_RANK = {v: i for i, v in enumerate(VISIBILITY_ORDER)}
+
+
+def enhanced_search(
+    query: str = "",
+    viewer: str = "",
+    agent_name: str = "",
+    limit: int = 20,
+    facet_fields=None,
+    expand_query: bool = False,
+    suggest: bool = False,
+    explain: bool = False,
+    cluster: bool = False,
+    personalize: bool = False,
+    context_boost: bool = False,
+    agent_name_filter: Optional[str] = None,
+    **filters,
+) -> dict:
+    """Retrieval with the query-enhancement layer applied.
+
+    Wraps :func:`retrieve` and adds, all independently optional:
+
+    * ``facet_fields`` — aggregate counts over the *unlimited* candidate set
+      (``["level", "category", "project"]``, or ``"auto"`` for config
+      defaults).  Unknown fields are dropped against a whitelist.
+    * ``expand_query`` — synonym / history expansion before matching.
+    * ``suggest`` — query completions from the corpus vocabulary.
+    * ``explain`` — per-result score breakdown + matched terms.
+    * ``cluster`` — topic grouping of the result set.
+    * ``personalize`` — per-agent affinity from interaction history.
+    * ``context_boost`` — boost results matching the active project/category.
+
+    Every enhancement is additionally gated by its ``search.*`` config flag,
+    so passing an argument alone cannot enable a feature a deployment left
+    disabled.  Returns a dict; ``results`` always mirrors ``retrieve()``'s
+    list so existing consumers keep working.
+    """
+    from memall.search.enhancements import (
+        compute_facets,
+        expand_query as _expand,
+        load_synonyms,
+        suggest_queries,
+        apply_enhancements,
+        _default_facet_fields,
+    )
+    from memall.config import get_config
+
+    out: dict = {"query": query, "results": [], "total": 0}
+
+    # ── Facets: normalise + validate the requested fields first ──
+    max_fields = get_config("search.facets.max_fields", 8)
+    fields: list[str] = []
+    if facet_fields:
+        if isinstance(facet_fields, str) and facet_fields.strip().lower() == "auto":
+            fields = _default_facet_fields()
+        else:
+            from memall.search.enhancements import _norm_facet_fields
+
+            fields = _norm_facet_fields(facet_fields, max_fields=max_fields)
+
+    # ── Query expansion (synonyms + history) ──
+    effective_query = query
+    if expand_query and get_config("search.query_expansion.enabled", False):
+        synonyms = load_synonyms()
+        with _pool_conn() as conn:
+            history = []
+            if agent_name or viewer:
+                from memall.search.enhancements import _recent_query_terms
+
+                history = _recent_query_terms(
+                    conn, agent_name or viewer,
+                    limit=get_config("search.query_expansion.history_expansion", 3),
+                )
+        if synonyms or history:
+            effective_query = _expand(query, synonyms=synonyms, history_terms=history)
+            out["expanded_query"] = effective_query
+
+    # ── Base retrieval (same filter semantics as retrieve) ──
+    retrieve_kwargs = dict(filters)
+    retrieve_kwargs.setdefault("limit", limit)
+    if agent_name_filter is not None:
+        retrieve_kwargs["agent_name"] = agent_name_filter
+    results = retrieve(effective_query or None, viewer=viewer, **retrieve_kwargs)
+
+    if results is None:
+        results = []
+    if not isinstance(results, list):
+        results = [results]
+    out["results"] = results
+    out["total"] = len(results)
+
+    with _pool_conn() as conn:
+        # ── Facet aggregates over the unlimited candidate set ──
+        if fields:
+            where, params, _ = _build_retrieve_where(
+                conn, effective_query, viewer, {k: v for k, v in filters.items() if k != "limit"}
+            )
+            out["facets"] = compute_facets(conn, " AND ".join(where), params, fields)
+
+        # ── Query suggestions ──
+        if suggest:
+            out["suggestions"] = suggest_queries(conn, query, limit=10)
+
+        # ── Post-retrieval enhancements (need dict-shaped results) ──
+        if explain or cluster or personalize or context_boost:
+            as_dicts = [
+                {
+                    "memory_id": m.id,
+                    "content": m.content,
+                    "subject": m.subject,
+                    "category": m.category,
+                    "level": m.level,
+                    "project": m.project,
+                    "owner": m.owner,
+                    "agent_name": m.agent_name,
+                    "created_at": m.created_at,
+                    "occurred_at": m.occurred_at,
+                    "rrf_score": None,
+                    "fts_rank": None,
+                    "vec_rank": None,
+                }
+                for m in results
+            ]
+            enhanced = apply_enhancements(
+                as_dicts,
+                query=query,
+                conn=conn,
+                agent_name=agent_name or viewer,
+                explain=explain,
+                cluster=cluster,
+                personalize=personalize,
+                context_boost=context_boost,
+            )
+            out["clusters"] = enhanced.get("clusters") or []
+            out["explained"] = bool(enhanced.get("explained"))
+            # Re-order the Memory objects to match the enhanced ordering.
+            order = [d.get("memory_id") for d in enhanced.get("results") or []]
+            if order:
+                by_id = {m.id: m for m in results}
+                out["results"] = [by_id[i] for i in order if i in by_id]
+            # Attach explanations alongside the memories for JSON callers.
+            expl_by_id = {
+                d.get("memory_id"): d
+                for d in (enhanced.get("results") or [])
+                if d.get("explanation")
+            }
+            if expl_by_id:
+                out["explanations"] = {
+                    str(mid): d.get("explanation") for mid, d in expl_by_id.items()
+                }
+
+    dispatch_lifecycle(
+        HOOK_POST_RETRIEVE,
+        query=query,
+        results=out["results"],
+        facets=out.get("facets"),
+    )
+    return out
 
 
 def _get_agent_read_level(conn, agent_name: str) -> str:
@@ -1603,6 +1935,10 @@ def _split_cjk(text: str) -> str:
     treats each CJK character as a separate token.
 
     Non-CJK sequences (ASCII, digits) are left untouched.
+
+    The FTS5 index is built with the same transformation (see
+    ``memall.core.db.memall_split_cjk``), so a query built here matches the
+    indexed tokens one-to-one.
     """
     parts: list[str] = []
     pos = 0
@@ -1619,9 +1955,19 @@ def _split_cjk(text: str) -> str:
 def fts_query(raw: str) -> str:
     """Build an FTS5 MATCH query string from a raw user query.
 
-    FTS5 unicode61 tokenizer treats 2+ consecutive CJK characters as tokens.
-    Single CJK characters are dropped. jieba sub-tokens are added as OR
-    alternatives for broader recall. Non-CJK words use exact match.
+    The FTS5 index stores each CJK character as its own token (the sync
+    triggers run ``memall_split_cjk`` on the way in), so a CJK run in the
+    query is likewise split and emitted as a *phrase* of single-char tokens:
+    ``"检索"`` → ``"检 索"``.  A phrase requires the characters to be
+    adjacent in the document, which keeps precision while making single
+    characters searchable on their own.
+
+    For CJK runs of 3+ characters we additionally OR in the adjacent
+    2-character sub-phrases ("检索库" → ("检 索 库" OR "检 索" OR "索 库"))
+    so a document containing only part of the run is still recalled.
+
+    Non-CJK words use exact match.  Multiple whitespace-separated terms are
+    AND-ed together.
     """
     terms = raw.strip().split()
     if not terms:
@@ -1629,29 +1975,14 @@ def fts_query(raw: str) -> str:
     tokenized: list[str] = []
     for t in terms:
         if _CJK_RE.search(t):
-            # Base: the raw CJK run (a valid unicode61 token)
-            cjk_options = [f'"{t}"']
-            if _HAS_JIEBA:
-                words = [
-                    w
-                    for w in jieba.cut(t, cut_all=False)
-                    if len(w.strip()) >= 2 and w not in _CJK_STOP
-                ]
-                for w in words:
-                    if len(w) >= 2 and w != t:
-                        cjk_options.append(f'"{w}"')
-            # Sliding 2-char windows for any CJK run >= 3 chars.
-            # Covers the residual gap where a 3-char query (e.g. "检索库") is
-            # not present as an exact adjacent run in any memory: we OR in every
-            # adjacent 2-char segment ("检索" OR "索库") so memories containing
-            # any segment are still recalled. Overlapping (step 1) gives full
-            # coverage; for longer runs it also broadens recall beyond the old
-            # non-overlapping step-2 sampling.
+            # Phrase of individually-indexed CJK characters.
+            cjk_options = [f'"{_split_cjk(t)}"']
+            # Adjacent 2-char sub-phrases for broader recall on long runs.
             if len(t) >= 3:
                 for i in range(len(t) - 1):
                     sub = t[i : i + 2]
-                    tok = f'"{sub}"'
-                    if len(sub) >= 2 and sub != t and tok not in cjk_options:
+                    tok = f'"{_split_cjk(sub)}"'
+                    if tok not in cjk_options:
                         cjk_options.append(tok)
             if len(cjk_options) > 1:
                 tokenized.append(f"({' OR '.join(cjk_options)})")

@@ -93,6 +93,17 @@ def _exec_migration_script(file_path: Path, conn) -> dict:
         return {"status": "skipped", "migration_id": migration_id,
                 "reason": "Already applied"}
 
+    # The FTS5 sync triggers call ``memall_split_cjk`` on every UPDATE of
+    # ``memories`` (e.g. migration 003's primary_layer backfill).  Migrations
+    # run on a connection obtained outside ``get_conn()``'s normal path, so
+    # re-register MemALL's SQL functions here to keep them available.
+    try:
+        from memall.core.db import _register_sql_functions
+
+        _register_sql_functions(conn)
+    except Exception:
+        logger.debug("migrations: SQL function re-registration skipped", exc_info=True)
+
     # Apply migration
     try:
         module.apply(conn)

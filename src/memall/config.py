@@ -47,6 +47,50 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
             "freshness_boost": 1.1,
             "affinity_boost": 1.2,
         },
+        # ── Query enhancement layer (retrieval quality) ──
+        # Applied by ``enhanced_search()`` (memall/search/enhancements.py) and
+        # surfaced through ``unified_search`` / ``memall_read``.
+        "query_expansion": {
+            "enabled": False,
+            # Term → synonyms.  Keys are matched case-insensitively after
+            # whitespace tokenisation.  Deployments can extend this in
+            # config.json / memall.yaml; a JSON file at
+            # ``~/.memall/synonyms.json`` is also honoured.
+            "synonyms": {},
+            # Number of query-history expansions to blend in (recent hot
+            # queries that share tokens with the current query).
+            "history_expansion": 3,
+        },
+        "facets": {
+            # Default facet fields when the caller passes facet_fields="auto".
+            # Must be real ``memories`` columns (see _FACET_WHITELIST).
+            "default_fields": ["level", "category", "project"],
+            "max_fields": 8,
+        },
+        "explain": {
+            "enabled": False,
+        },
+        "clustering": {
+            "enabled": False,
+            # Number of clusters (0 = auto, derived from result count).
+            "k": 0,
+            "min_cluster_size": 2,
+        },
+        "personalization": {
+            "enabled": False,
+            # Weight of the learned per-agent term→memory affinity in the
+            # final score.  0 disables personalization even when enabled.
+            "weight": 0.25,
+            # Interaction window (days) used to build the affinity profile.
+            "window_days": 30,
+        },
+        "context_boost": {
+            "enabled": False,
+            # Boost applied to memories that share the active project / category
+            # inferred from recent interactions.
+            "weight": 0.15,
+            "window_days": 7,
+        },
     },
     "dream": {
         "enabled": True,

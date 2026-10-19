@@ -133,6 +133,8 @@ def _handle_read(args: dict) -> str:
         args["mode"] = "hybrid"
         args["top_k"] = args.get("top_k", 15)
         return retrieve.handle_unified_search(args)
+    elif action == "record_interaction":
+        return retrieve.handle_record_interaction(args)
     elif action == "trace":
         return retrieve.handle_trace(args)
     elif action == "traverse":
@@ -148,9 +150,9 @@ def _handle_read(args: dict) -> str:
 
 registry.register(ToolDef(
     name="memall_read",
-    description="Search/retrieve memories, trace provenance, explore graph, timeline, federated queries, natural language chat search. Actions: retrieve | search | unified_search | chat | vector_search | hybrid_search | batch_search | trace | traverse | timeline | fed_query | fed_conflicts",
+    description="Search/retrieve memories, trace provenance, explore graph, timeline, federated queries, natural language chat search. Actions: retrieve | search | unified_search | chat | vector_search | hybrid_search | batch_search | record_interaction | trace | traverse | timeline | fed_query | fed_conflicts",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["retrieve", "search", "unified_search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "batch_search", "trace", "traverse", "timeline", "fed_query", "fed_conflicts"]},
+        "action": {"type": "string", "enum": ["retrieve", "search", "unified_search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "batch_search", "record_interaction", "trace", "traverse", "timeline", "fed_query", "fed_conflicts"]},
         "query": {"type": "string", "description": "Search query"},
         "queries": {"type": "array", "items": {"type": "string"}, "description": "Queries for batch_search"},
         "mode": {"type": "string", "enum": ["auto", "direct", "fts5", "vector", "hybrid"]},
@@ -160,6 +162,7 @@ registry.register(ToolDef(
         "level": {"type": "string"},
         "owner": {"type": "string"},
         "agent_name": {"type": "string"},
+        "viewer": {"type": "string", "description": "Viewer identity for trust filtering / personalisation"},
         "project": {"type": "string"},
         "limit": {"type": "integer"},
         "rerank": {"type": "boolean"},
@@ -169,6 +172,18 @@ registry.register(ToolDef(
         "memory_id": {"type": "integer", "description": "Memory ID for trace"},
         "hours": {"type": "integer"},
         "trust_level": {"type": "string"},
+        # ── Query enhancement layer ──
+        "facet_fields": {"type": "array", "items": {"type": "string"}, "maxItems": 8, "description": "Fields to aggregate as facets: level|category|project|agent_name|owner|stream|visibility|memory_status|confidence, or ['auto']"},
+        "facet_fields_str": {"type": "string", "description": "Comma-separated facet fields (clients that cannot send arrays)"},
+        "expand_query": {"type": "boolean", "description": "Expand query with synonyms / recent query history"},
+        "suggest": {"type": "boolean", "description": "Return query completions from the corpus vocabulary"},
+        "explain": {"type": "boolean", "description": "Return a per-result score breakdown (matched terms, ranks, boosts)"},
+        "cluster": {"type": "boolean", "description": "Group results into topic clusters"},
+        "personalize": {"type": "boolean", "description": "Rank results by per-agent interaction affinity"},
+        "context_boost": {"type": "boolean", "description": "Boost results matching the active project / category"},
+        "memory_id": {"type": "integer", "description": "Memory ID for record_interaction / trace"},
+        "dwell_ms": {"type": "integer", "description": "Dwell time in ms for record_interaction (action=dwell)"},
+        "rank_position": {"type": "integer", "description": "1-based rank of the clicked result"},
     }, "required": ["action"]},
     handler=_handle_read,
     annotations={"readOnlyHint": True, "idempotentHint": True},

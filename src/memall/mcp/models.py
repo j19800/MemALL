@@ -198,6 +198,39 @@ class VectorSearchInput(BaseModel):
     top_k: int = Field(10, ge=1, le=500)
 
 
+class RecordInteractionInput(BaseModel):
+    """memall_read action=record_interaction — feed the learning-to-rank profiles.
+
+    Note: ``action`` is the MCP routing field (always "record_interaction"),
+    so the interaction kind is carried in ``interaction_type``.  ``action`` is
+    still accepted as a legacy alias, hence no pattern on it — the routing
+    validator only guarantees it equals the tool action name.
+    """
+    query: str = Field(..., min_length=1, max_length=5000)
+    # Optional for query-only impressions; required for click/dwell/copy/skip.
+    memory_id: Optional[int] = Field(None, ge=1)
+    interaction_type: str = Field(
+        "click", pattern=r"^(click|dwell|impression|copy|skip)$",
+        description="Kind of interaction (action is reserved for MCP routing)",
+    )
+    # Backwards-compatible alias for older callers.  Carries the MCP routing
+    # value ("record_interaction") on the normal path, so it is validated
+    # against the interaction vocabulary *after* routing in the handler.
+    action: Optional[str] = Field(None, max_length=50)
+    dwell_ms: int = Field(0, ge=0, le=3600000)
+    rank_position: Optional[int] = Field(None, ge=1, le=500)
+    agent_name: Optional[str] = Field(None, max_length=200)
+    owner: Optional[str] = Field(None, max_length=200)
+    session_id: Optional[str] = Field(None, max_length=200)
+
+    def resolved_type(self) -> str:
+        """Interaction kind, ignoring the MCP routing value in ``action``."""
+        candidate = self.interaction_type or self.action or "click"
+        if candidate in ("click", "dwell", "impression", "copy", "skip"):
+            return candidate
+        return "click"
+
+
 class UnifiedSearchInput(BaseModel):
     """search / chat / hybrid_search — the unified-search engine router."""
     query: str = Field(..., min_length=1, max_length=5000)
@@ -208,6 +241,64 @@ class UnifiedSearchInput(BaseModel):
     level: Optional[str] = Field(None, pattern=r"^(P[0-2]|L(10|11|[1-9]))$")
     owner: Optional[str] = Field(None, max_length=200)
     rerank: bool = False
+    # Viewer identity — used for trust filtering, personalisation and
+    # context-aware boosting.
+    agent_name: Optional[str] = Field(None, max_length=200)
+    viewer: Optional[str] = Field(None, max_length=200)
+
+    # ── Query enhancement layer (see memall/search/enhancements.py) ──
+    # Facet fields: list of column names, or "auto" for config defaults.
+    # Unknown columns are dropped against a whitelist server-side.
+    facet_fields: Optional[List[str]] = Field(
+        None, max_length=8,
+        description="Fields to aggregate as facets: level|category|project|agent_name|owner|stream|visibility|memory_status|confidence, or ['auto']",
+    )
+    facet_fields_str: Optional[str] = Field(
+        None, max_length=200,
+        description="Comma-separated alternative to facet_fields (for clients that cannot send arrays)",
+    )
+    expand_query: bool = Field(False, description="Expand the query with synonyms/query history")
+    suggest: bool = Field(False, description="Return query completions from the corpus vocabulary")
+    explain: bool = Field(False, description="Return a per-result score breakdown")
+    cluster: bool = Field(False, description="Group results into topic clusters")
+    personalize: bool = Field(False, description="Rank by per-agent interaction affinity")
+    context_boost: bool = Field(False, description="Boost results matching the active project/category")
+
+    @field_validator("facet_fields")
+    @classmethod
+    def validate_facet_fields(cls, v):
+        if v is None:
+            return v
+        allowed = {
+            "level", "category", "project", "agent_name", "owner", "stream",
+            "visibility", "memory_status", "confidence", "auto",
+        }
+        for f in v:
+            if not isinstance(f, str) or f not in allowed:
+                raise ValueError(
+                    f"unsupported facet field {f!r}; allowed: {sorted(allowed)}"
+                )
+        return v
+
+
+class RetrieveInput(BaseModel):
+    query: Optional[str] = Field(None, max_length=5000)
+    owner: Optional[str] = Field(None, max_length=200)
+    agent_name: Optional[str] = Field(None, max_length=200)
+    category: Optional[str] = Field(None, max_length=100)
+    project: Optional[str] = Field(None, max_length=500)
+    level: Optional[str] = Field(None, max_length=20, pattern=r"^(P[0-2]|L(10|11|[1-9]))$")
+    limit: int = Field(20, ge=1, le=500)
+    # Enhancement layer (same semantics as UnifiedSearchInput).
+    facet_fields: Optional[List[str]] = Field(None, max_length=8)
+    facet_fields_str: Optional[str] = Field(None, max_length=200)
+    expand_query: bool = False
+    suggest: bool = False
+    explain: bool = False
+    cluster: bool = False
+    personalize: bool = False
+    context_boost: bool = False
+    viewer: Optional[str] = Field(None, max_length=200)
 
 
 # ── Session tools (Phase 8) ──

@@ -5,9 +5,48 @@ from memall.core.db import get_conn
 from memall.search.intent_router import classify, resolve_mode
 logger = logging.getLogger(__name__)
 
+# Enhancement flags shared by handle_retrieve / handle_unified_search.
+_ENHANCE_FLAGS = ("expand_query", "suggest", "explain", "cluster", "personalize", "context_boost")
+
+
+def _split_facet_fields(arguments: dict):
+    """Merge ``facet_fields`` (array) and ``facet_fields_str`` (string) inputs."""
+    fields = arguments.get("facet_fields")
+    if isinstance(fields, str):
+        fields = [f.strip() for f in fields.split(",") if f.strip()]
+    if not fields:
+        raw = arguments.get("facet_fields_str") or ""
+        if isinstance(raw, str) and raw.strip():
+            fields = [f.strip() for f in raw.split(",") if f.strip()]
+    if isinstance(fields, str) and fields.strip().lower() == "auto":
+        return "auto"
+    return fields or None
+
+
+def _wants_enhancements(arguments: dict) -> bool:
+    if _split_facet_fields(arguments):
+        return True
+    return any(bool(arguments.get(f)) for f in _ENHANCE_FLAGS)
+
 
 def handle_retrieve(arguments: dict) -> str:
-    from memall.core.thin_waist import retrieve
+    from memall.core.thin_waist import retrieve, enhanced_search
+    if _wants_enhancements(arguments):
+        # Route through the enhancement layer; drop routing-only keys.
+        args = dict(arguments)
+        args["facet_fields"] = _split_facet_fields(args)
+        result = enhanced_search(**args)
+        items = [{
+            "id": m.id, "content": m.content, "category": m.category,
+            "level": m.level, "owner": m.owner, "agent_name": m.agent_name,
+            "subject": m.subject, "occurred_at": m.occurred_at,
+        } for m in result["results"]]
+        payload = {"results": items, "total": result.get("total", len(items))}
+        for key in ("facets", "suggestions", "clusters", "explanations", "expanded_query"):
+            if key in result:
+                payload[key] = result[key]
+        return json.dumps(payload, ensure_ascii=False)
+
     result = retrieve(**arguments)
     if result is None:
         return json.dumps({"status": "not_found"})
@@ -53,6 +92,52 @@ def handle_unified_search(arguments: dict) -> str:
     """Unified search — auto-routes between FTS5, vector, and hybrid engines."""
     from memall.core.thin_waist import unified_search
     return unified_search(arguments)
+
+
+def handle_record_interaction(arguments: dict) -> str:
+    """Record a search interaction (click / dwell / impression / copy / skip).
+
+    Feeds the personalisation and context-boost profiles.  Best-effort:
+    telemetry failures never break the caller's turn.
+
+    The interaction kind is read from ``interaction_type`` (``action`` is
+    reserved for MCP routing); a legacy ``action`` value is accepted as a
+    fallback.
+    """
+    from memall.core.db import get_conn
+    from memall.search.enhancements import record_interaction
+
+    query = arguments.get("query") or ""
+    if not query:
+        return json.dumps({"error": "query is required"}, ensure_ascii=False)
+    memory_id = arguments.get("memory_id")
+    interaction = (
+        arguments.get("interaction_type")
+        or arguments.get("action")
+        or "click"
+    )
+    conn = get_conn()
+    try:
+        ok = record_interaction(
+            conn,
+            query=query,
+            memory_id=int(memory_id) if memory_id is not None else None,
+            action=interaction,
+            dwell_ms=int(arguments.get("dwell_ms") or 0),
+            rank_position=arguments.get("rank_position"),
+            agent_name=arguments.get("agent_name", "") or "",
+            owner=arguments.get("owner", "") or "",
+            session_id=arguments.get("session_id", "") or "",
+        )
+    finally:
+        conn.close()
+    if ok:
+        return json.dumps({"status": "ok", "recorded": True}, ensure_ascii=False)
+    return json.dumps(
+        {"status": "ignored", "recorded": False,
+         "reason": "invalid action, or memory_id required for non-impression actions"},
+        ensure_ascii=False,
+    )
 
 
 def handle_batch_search(arguments: dict) -> str:

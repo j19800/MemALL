@@ -196,13 +196,82 @@ search_results = json.loads(result)
 
 # Specific search modes
 result = handle_call('memall_read', {
-    'action': 'memall_read',
     'action': 'search',  # or 'vector_search', 'hybrid_search', etc.
     'query': 'your search query',
     'mode': 'hybrid',    # auto, direct, fts5, vector, hybrid
     'limit': 10
 })
 ```
+
+### Query Enhancement Layer
+
+Six retrieval-quality features sit between the candidate set and the caller.
+Every one is **off by default** and gated by its own `search.*` config flag,
+so the plain search path is unchanged until a deployment opts in:
+
+```python
+# Faceted search — aggregate counts over the *unlimited* candidate set
+result = handle_call('memall_read', {
+    'action': 'search', 'query': '检索', 'mode': 'fts5',
+    'facet_fields': ['level', 'category', 'project'],   # or ['auto']
+})
+# -> {"results": [...], "facets": {"level": {"L4": 3, "P2": 5}, ...}}
+
+# Explainability — why did this result rank here?
+result = handle_call('memall_read', {
+    'action': 'search', 'query': '检索',
+    'explain': True,     # matched_terms, ranks, score contributions
+})
+
+# Query expansion + suggestions
+result = handle_call('memall_read', {
+    'action': 'search', 'query': '检索',
+    'expand_query': True,   # synonym + query-history expansion
+    'suggest': True,        # corpus-vocabulary completions
+})
+
+# Result clustering — topic grouping
+result = handle_call('memall_read', {
+    'action': 'search', 'query': '检索',
+    'cluster': True,        # -> {"clusters": [{"label": ..., "size": ..., "results": [...]}]}
+})
+
+# Personalised ranking + context boosting — learn from interactions
+result = handle_call('memall_read', {
+    'action': 'search', 'query': '检索', 'agent_name': 'workbuddy',
+    'personalize': True,    # per-agent affinity from search_interactions
+    'context_boost': True,  # boost results in the active project/category
+})
+
+# Feed the learning signal (clicks / dwells / impressions)
+result = handle_call('memall_read', {
+    'action': 'record_interaction',
+    'query': '检索',
+    'memory_id': 42,
+    'interaction_type': 'click',   # click | dwell | impression | copy | skip
+    'dwell_ms': 45000,
+    'rank_position': 1,
+    'agent_name': 'workbuddy',
+})
+```
+
+Config defaults (all disabled):
+
+```json
+{
+  "search": {
+    "query_expansion": {"enabled": false, "synonyms": {}, "history_expansion": 3},
+    "facets": {"default_fields": ["level", "category", "project"], "max_fields": 8},
+    "explain": {"enabled": false},
+    "clustering": {"enabled": false, "k": 0, "min_cluster_size": 2},
+    "personalization": {"enabled": false, "weight": 0.25, "window_days": 30},
+    "context_boost": {"enabled": false, "weight": 0.15, "window_days": 7}
+  }
+}
+```
+
+Enable a feature by setting its flag, e.g. `search.explain.enabled = true` in
+`config.json` / `memall.yaml` (or `MEMALL_SEARCH_EXPLAIN__ENABLED=true`).
 
 ### Batch Operations
 
@@ -238,6 +307,8 @@ MemALL follows a modular architecture with clearly separated concerns:
 
 - **Core**: Database models, memory capture, quality scoring
 - **Search**: FTS5, vector, and hybrid search implementations
+  - `search/enhancements.py` — the query enhancement layer (facets, expansion,
+    suggestions, clustering, explainability, personalisation, context boosting)
 - **MCP Layer**: Model Context Protocol implementation for agent integration
 - **Pipeline**: Intelligent capture, distillation, and maintenance workflows
 - **Pipeline Steps**: 

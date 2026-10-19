@@ -13,7 +13,14 @@ from memall.search.registry import get_provider, register_provider, list_provide
 from memall.search.base import SearchProvider
 from memall.search.intent_router import classify, resolve_mode, SearchIntent
 
+# Query enhancement layer (facets / expansion / suggestions / clustering /
+# explainability / personalisation / context boosting).  Imported lazily by
+# the callers that need it — keeping it out of __all__ avoids making every
+# ``import memall.search`` pull in the enhancement machinery.
+from memall.search import enhancements  # noqa: F401  (re-exported submodule)
+
 __all__ = [
     "SearchProvider", "get_provider", "register_provider", "list_providers",
     "classify", "resolve_mode", "SearchIntent",
+    "enhancements",
 ]
