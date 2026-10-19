@@ -5,6 +5,34 @@ All notable changes to MemALL are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Auto-capture is now wired up and functional.** `memall/auto_capture.py` registered its `post_tool_use` hook at module import, but no module ever imported it — the feature had never run in production. `mcp/adapter.py` now imports it.
+- **Auto-capture rewritten around explicit extractors.** The old condition read `arguments["content"]`, which only exists on capture-family calls — the same calls it then skipped, so it could never fire. Extraction now keys off `(tool, action)` with one extractor per source, reading `arguments` and `result` as appropriate:
+  - `memall_persona/ask` → `L4/decision` (question + reasoned answer)
+  - `memall_system/reflect` → `L6/reflection` (stance + reasoning on a lesson)
+  - `memall_discussion/respond` → `L4/discussion` (stance + argument)
+  Pure reads and the capture family are deliberately excluded.
+- Auto-capture de-duplication: a per-process LRU keyed on `(action, target id, content prefix)` stops the same conclusion being re-stored on every repeat call. `capture()`'s hash dedup cannot cover this because auto-captured text varies in wording.
+- `scheduler.proxy_session_interval` config key (default 300s). `scheduler.py` had always read this key, but it was absent from `_DEFAULT_CONFIG`, so the `agent_round` cadence could only be changed by editing code.
+- `test_search_features.py` coverage extended; `test_auto_capture.py` (19 assertions) covers the auto-capture sources, the de-duplication, the feedback-loop guards, and the hash-hit promotion semantics.
+
+### Changed
+- **Hash-hit re-capture now promotes instead of discarding intent.** `_capture_dedup_check` used to only bump `access_count` on a content-hash hit, silently swallowing the caller's level: re-capturing the same text at a higher level left the row unchanged with no signal. It now applies a level change using `_should_promote_level()`, which treats a band change (priority `P0/P1/P2` ↔ lifecycle `L1..L11`) as a deliberate re-classification and otherwise only moves toward the more significant end. It also fills `category`/`subject`/`project`/`summary` when they were empty.
+- `_PENDING_SESSION_NOTE` (a single module-level string) became `_PENDING_SESSION_NOTES`, a per-agent dict, and `consume_session_note()` takes the agent name. A second agent starting a session in the same process used to overwrite the first agent's pending context, which could deliver one agent's injected memories to another.
+- `auto_inject()` de-duplicated two pairs of redundant queries: the L5 `pending_tasks` and `l5_active_global` sections now derive from one query, as do the L4 `decision_arcs` and `l4_recent_global` sections. 16 serial queries per `session_start` became 14 with identical output shapes.
+- `mcp/tools/retrieve.py` pre-checks `query`/`content` by name for the high-frequency search handlers.
+- `ReflectInteractMCPInput` now declares `agent_name`. The validator's `model_dump(exclude_unset=True)` was dropping it, so every reflect-derived memory was attributed to `system` regardless of the caller.
+
+### Fixed
+- **`classify` silently demoted caller-assigned levels.** `_detect_layers()` accepted a `current_level` argument and never used it, and its fallback for unrecognised text was `P2`. Any explicitly-written `L4`/`L5`/`L6`/`L7`/`L8`/`L11` memory whose text matched no marker pattern was rewritten to `P2` by the capture-triggered lightweight pipeline. The fallback now preserves a non-default `current_level`; only `L9`/`L10` remain hard-protected as before.
+- **`_inline_classify` overwrote category with `"general"`.** `best_cat` defaulted to `"general"` and was written unconditionally, so an unmatched memory lost its caller-assigned category (e.g. `reflection` → `general`) on every pass. It is now `None` until a rule matches, and only changed columns are written.
+- **English L6 reflections were always rejected.** `_REASONING_MARKERS` held only Chinese terms and the L6 gate hard-rejects `reasoning < 2`, so any English reflection scored 0 and was refused by the quality gate. Added 27 English equivalents; verified the Chinese side is unchanged (good content still accepted, junk still rejected).
+- **`ask` reinforced its own output.** Every answer is auto-captured as `L4`, and `_search_memories()` had no source filter — so each stance became "evidence" for the next question on the same topic, drifting toward its own earlier answer. The evidence pool now excludes `metadata.source = "ask"`.
+- **`distill` could promote the system's own speculation into `L9`.** Auto-captured `ask`/`reflect`/`discussion` rows sit at `L4`/`L5`, which the distiller's level filter admits. The distill source query now excludes all three markers, so only genuinely authored memories are distilled.
+
+### Notes
+- `normalize_agent_name()` maps any name containing a date or 10+ consecutive digits to `system` (a guard against parse artifacts like `claude-2026-01-01`). This is pre-existing and intentional, but it means a timestamp-suffixed agent name is silently redirected — worth knowing when writing tests or naming agents.
+
+### Added
 - **Query enhancement layer** (`memall/search/enhancements.py`) implementing the six previously-unimplemented retrieval features:
   - **Faceted search** — `compute_facets()` aggregates counts over the unlimited candidate set. Column names validated against a hard whitelist (`level`, `category`, `project`, `agent_name`, `owner`, `stream`, `visibility`, `memory_status`, `confidence`); unknown fields are dropped rather than interpolated into SQL.
   - **Query expansion** — `expand_query()` blends a synonym dictionary (`search.query_expansion.synonyms` config or `~/.memall/synonyms.json`) with recent query-history terms; OR-only so recall can never drop.

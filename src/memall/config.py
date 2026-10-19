@@ -246,6 +246,12 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "pipeline_interval": 21600,
         "doctor_interval": 3600,
         "marvis_interval": 300,
+        # agent_round cadence: how often the daemon scans active agents for
+        # pending discussions / tasks and writes P2 reminder memories.
+        # Agents have no runtime of their own, so this is what makes proactive
+        # reminders reach them at all.  Without this key the interval was only
+        # settable by editing code.
+        "proxy_session_interval": 300,
         "missed_heartbeat_limit": 7,
         # Destructive maintenance passes owned by the single scheduler daemon
         # (see F-04).  Opt-in: OFF by default to avoid surprise data churn.

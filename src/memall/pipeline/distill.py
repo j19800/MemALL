@@ -18,8 +18,22 @@ def distill_step() -> dict:
     fk_was_on = conn.execute("PRAGMA foreign_keys").fetchone()[0]
     conn.execute("PRAGMA foreign_keys=OFF")
     try:
+        # Exclude memories the system produced about itself.  ``ask`` /
+        # ``reflect`` / ``discussion`` results are auto-captured with a
+        # ``metadata.source`` marker; distilling those would promote the
+        # system's own speculation into L9 "knowledge", which then outranks
+        # the real observations it was derived from.  Genuine L4/L5 memories
+        # written by an agent carry no such marker and remain eligible.
         rows = conn.execute(
-            "SELECT id, content, category, agent_name, summary FROM memories WHERE category != '' AND category IS NOT NULL AND LENGTH(TRIM(content)) > 20 AND level NOT IN ('P0', 'P1', 'P2', 'P3', 'P4', 'L6', 'L9', 'L10', 'L11') AND stream = 'knowledge' ORDER BY id DESC LIMIT 5000"
+            "SELECT id, content, category, agent_name, summary FROM memories "
+            "WHERE category != '' AND category IS NOT NULL "
+            "AND LENGTH(TRIM(content)) > 20 "
+            "AND level NOT IN ('P0', 'P1', 'P2', 'P3', 'P4', 'L6', 'L9', 'L10', 'L11') "
+            "AND stream = 'knowledge' "
+            "AND COALESCE(metadata, '') NOT LIKE '%\"source\": \"ask\"%' "
+            "AND COALESCE(metadata, '') NOT LIKE '%\"source\": \"reflect\"%' "
+            "AND COALESCE(metadata, '') NOT LIKE '%\"source\": \"discussion\"%' "
+            "ORDER BY id DESC LIMIT 5000"
         ).fetchall()
 
         groups = defaultdict(list)

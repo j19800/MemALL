@@ -339,6 +339,75 @@ Validation errors are phrased as one actionable sentence, e.g.
 ops_sub_action: must be one of: merge, split, tag, batch_tag, archive, restore, dedup, undo (got 'expired')
 ```
 
+## Proactive Memory
+
+MemALL surfaces memories without being asked, through three independent paths.
+
+### 1. Session injection (`session_start`)
+
+`auto_inject()` assembles 16 sections for the calling agent in one pass —
+persona, L1/L7 identity traits, L3 workflow skills, L4 decision arcs, L5 active
+tasks, L6 reflections, L7 lessons, L10 panoramic overview, L11 domain knowledge,
+pending discussions, and behaviour patterns. Two shapes come back:
+
+- `injection` — the structured dict, for programmatic consumers
+- `injection_formatted` — a ~800-character compact block that the model reads
+  directly at the top of the session:
+
+```
+[CONTEXT] 会话上下文（首段先概括以下信息）：
+[NARRATIVE] 新会话开始。
+[PROFILE] L1=… L7=…
+[TODO] task one | task two
+[CONTINUITY] 距上次约 6h +4mem 2dec
+[CORRECTIONS] …
+[LESSONS] …
+[WORKFLOW] …
+[DECISIONS] 待决(2) 进行中(1)
+[OVERVIEW] …
+[DOMAIN] …
+[DISTILL] 2 组待写摘要，调 memall_system action=distill 查看
+```
+
+Results are cached for 300s per agent.
+
+### 2. Zero-cost delivery on every read
+
+Agents do not have to call `session_start` themselves. The first non-read
+tool call from an agent auto-starts a session, and the formatted block is
+attached to the next `memall_read` / `memall_persona` response under
+`_meta.session_context`. Async hook activity arrives the same way under
+`_meta.hook_activity`.
+
+### 3. Background rounds (agents have no runtime)
+
+An agent never "wakes up" on its own, so the scheduler daemon runs
+`agent_round()` every `scheduler.proxy_session_interval` seconds (default 300).
+For each active agent it finds pending discussions and active L5 tasks and
+writes a P2 reminder memory, which the agent then encounters in its next real
+retrieval. Reminders are de-duplicated (1h for discussions, 6h for tasks).
+
+### Auto-capture
+
+Conclusions reached *through* the tools are captured without an explicit
+`capture()` call. A `post_tool_use` hook extracts from three sources:
+
+| Source action | Captured as | Content |
+|---|---|---|
+| `memall_persona ask` | `L4` / `decision` | question + reasoned answer |
+| `memall_system reflect` | `L6` / `reflection` | stance + reasoning on a lesson |
+| `memall_discussion respond` | `L4` / `discussion` | stance + argument |
+
+Guardrails, so the system's own output cannot become its own evidence:
+
+- Auto-captured rows are tagged `metadata.source`, and **`ask` excludes them
+  from its evidence pool** — otherwise each stance would reinforce itself
+  across later questions on the same topic.
+- **`distill` excludes them too** — otherwise speculation would be promoted
+  into `L9` "knowledge" and outrank the observations it came from.
+- Repeated identical conclusions are de-duplicated per process.
+- Pure reads and the capture family never trigger auto-capture.
+
 ## Architecture
 
 MemALL follows a modular architecture with clearly separated concerns:
@@ -348,6 +417,9 @@ MemALL follows a modular architecture with clearly separated concerns:
   - `search/enhancements.py` — the query enhancement layer (facets, expansion,
     suggestions, clustering, explainability, personalisation, context boosting)
 - **MCP Layer**: Model Context Protocol implementation for agent integration
+- **Proactive**: `mcp/federation_tools.auto_inject` (session injection),
+  `mcp/shared.ensure_session_started` (zero-cost delivery),
+  `scheduler/agent_round` (background rounds), `auto_capture` (auto-capture)
 - **Pipeline**: Intelligent capture, distillation, and maintenance workflows
 - **Pipeline Steps**: 
   - Standard steps: event_processor, enrich, cleanup, classify, procedure, time_slice, arc_status, echo, epoch, convergence, link, decay, backup, session, extract, entity_extraction, embed_index, reflect, distill_l7, distill, integrate, improve, observation, identity, reasoning, auto_summarize, discover_assoc, cross_agent, adaptive_ttl, archive

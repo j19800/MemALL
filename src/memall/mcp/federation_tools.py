@@ -330,18 +330,52 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject identity_traits failed", exc_info=True)
 
-        # ── 5. Pending L5 tasks assigned to this agent ──
+        # ── 5+12. Pending L5 tasks assigned to this agent ──
+        # One query feeds both shapes: ``pending_tasks`` (id/content/subject,
+        # category='task' only) and ``l5_active_global`` (id/subject/summary/
+        # assignee/depends_on, any category, subject-deduplicated).  They used
+        # to be two separate queries over the same rows.
         pending_tasks = []
+        l5_active_global = []
         try:
             rows = conn.execute(
-                "SELECT id, content, subject, created_at FROM memories "
-                "WHERE level='L5' AND category='task' AND agent_name = ? "
-                "AND json_extract(metadata, '$.status') = 'active'",
+                "SELECT id, content, summary, subject, metadata, category, level, created_at "
+                "FROM memories "
+                "WHERE level = 'L5' AND LOWER(agent_name) = LOWER(?) "
+                "AND LENGTH(TRIM(content)) > 5 "
+                "ORDER BY created_at DESC LIMIT 20",
                 (agent_name,),
             ).fetchall()
-            pending_tasks = [dict(r) for r in rows]
+            seen_subs = set()
+            for r in rows:
+                meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else r["metadata"]
+                if not isinstance(meta, dict):
+                    meta = {}
+                status = meta.get("status") or "active"
+                if status != "active":
+                    continue
+                if r["category"] == "task":
+                    pending_tasks.append({
+                        "id": r["id"],
+                        "content": r["content"],
+                        "subject": r["subject"],
+                        "created_at": r["created_at"],
+                    })
+                subj_key = (r["subject"] or "")[:40]
+                if subj_key in seen_subs:
+                    continue
+                seen_subs.add(subj_key)
+                l5_active_global.append({
+                    "id": r["id"],
+                    "subject": r["subject"],
+                    "summary": r["summary"] or r["content"][:200],
+                    "assignee": meta.get("assignee", ""),
+                    "depends_on": meta.get("depends_on", []),
+                    "level_tag": {"P0": "(P0)", "P1": "(P1)", "P2": "(P2)"}.get(r["level"] or "", ""),
+                    "created_at": r["created_at"],
+                })
         except Exception:
-            logger.warning("auto_inject pending_tasks failed", exc_info=True)
+            logger.warning("auto_inject l5_tasks failed", exc_info=True)
 
         # ── 6. Pending discussions for this agent ──
         pending_discussions = []
@@ -385,27 +419,45 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject workflow_skills failed", exc_info=True)
 
-        # ── 8. L4 Decision Arcs ──
+        # ── 8+11. L4 decision arcs and recent L4 summaries ──
+        # One L4 query feeds both shapes: ``decision_arcs`` (bucketed by
+        # arc_status) and ``l4_recent_global`` (latest 3 with participants /
+        # key_decisions / continuation_note).  They used to be two queries.
         decision_arcs = {"open": [], "in_progress": [], "closed": []}
+        l4_recent_global = []
         try:
             rows = conn.execute(
-                "SELECT id, subject, content, arc_status, created_at FROM memories "
-                "WHERE level = 'L4' AND agent_name = ? "
+                "SELECT id, subject, content, summary, metadata, arc_status, created_at "
+                "FROM memories "
+                "WHERE level = 'L4' AND LOWER(agent_name) = LOWER(?) "
+                "AND LENGTH(TRIM(content)) > 5 "
                 "ORDER BY created_at DESC LIMIT 20",
                 (agent_name,),
             ).fetchall()
             for r in rows:
                 status = r["arc_status"] or "open"
-                entry = {
-                    "id": r["id"],
-                    "subject": r["subject"][:60],
-                    "summary": (r["content"] or "")[:120],
-                    "decided_at": r["created_at"],
-                }
                 if status in decision_arcs:
-                    decision_arcs[status].append(entry)
+                    decision_arcs[status].append({
+                        "id": r["id"],
+                        "subject": (r["subject"] or "")[:60],
+                        "summary": (r["content"] or "")[:120],
+                        "decided_at": r["created_at"],
+                    })
+            for r in rows[:3]:
+                meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else r["metadata"]
+                if not isinstance(meta, dict):
+                    meta = {}
+                l4_recent_global.append({
+                    "id": r["id"],
+                    "subject": r["subject"],
+                    "summary": r["summary"] or r["content"][:200],
+                    "participants": meta.get("participants", []),
+                    "key_decisions": (meta.get("key_decisions") or [])[:3],
+                    "continuation_note": meta.get("continuation_note", ""),
+                    "created_at": r["created_at"],
+                })
         except Exception:
-            logger.warning("auto_inject decision_arcs failed", exc_info=True)
+            logger.warning("auto_inject l4 failed", exc_info=True)
 
         # ── 9. L10 Panoramic Overview (terminal, comprehensive) ──
         panoramic_overview = []
@@ -444,60 +496,6 @@ def auto_inject(agent_name: str) -> dict:
                 })
         except Exception:
             logger.warning("auto_inject domain_knowledge failed", exc_info=True)
-
-        # ── 11. L4 recent summaries (scoped to agent) ──
-        l4_recent_global = []
-        try:
-            rows = conn.execute(
-                "SELECT id, content, summary, subject, metadata, created_at FROM memories "
-                "WHERE level = 'L4' AND LOWER(agent_name) = LOWER(?) AND LENGTH(TRIM(content)) > 5 "
-                "ORDER BY created_at DESC LIMIT 3",
-                (agent_name,),
-            ).fetchall()
-            for r in rows:
-                meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else r["metadata"]
-                l4_recent_global.append({
-                    "id": r["id"],
-                    "subject": r["subject"],
-                    "summary": r["summary"] or r["content"][:200],
-                    "participants": (meta or {}).get("participants", []),
-                    "key_decisions": ((meta or {}).get("key_decisions") or [])[:3],
-                    "continuation_note": (meta or {}).get("continuation_note", ""),
-                    "created_at": r["created_at"],
-                })
-        except Exception:
-            logger.warning("auto_inject l4_recent failed", exc_info=True)
-
-        # ── 12. L5 active todos (scoped to agent) ──
-        l5_active_global = []
-        try:
-            rows = conn.execute(
-                "SELECT id, content, summary, subject, metadata, level, created_at FROM memories "
-                "WHERE level = 'L5' AND LOWER(agent_name) = LOWER(?) AND LENGTH(TRIM(content)) > 5 "
-                "ORDER BY created_at DESC LIMIT 20",
-                (agent_name,),
-            ).fetchall()
-            seen_subs = set()
-            for r in rows:
-                meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else r["metadata"]
-                status = (meta.get("status") or "active") if isinstance(meta, dict) else "active"
-                if status != "active":
-                    continue
-                subj_key = (r["subject"] or "")[:40]
-                if subj_key in seen_subs:
-                    continue
-                seen_subs.add(subj_key)
-                l5_active_global.append({
-                    "id": r["id"],
-                    "subject": r["subject"],
-                    "summary": r["summary"] or r["content"][:200],
-                    "assignee": (meta or {}).get("assignee", ""),
-                    "depends_on": (meta or {}).get("depends_on", []),
-                    "level_tag": {"P0": "(P0)", "P1": "(P1)", "P2": "(P2)"}.get(r["level"] or "", ""),
-                    "created_at": r["created_at"],
-                })
-        except Exception:
-            logger.warning("auto_inject l5_active failed", exc_info=True)
 
         # ── 13. BEHAVIOR patterns (agent-specific, for session_start) ──
         behavior_patterns = []

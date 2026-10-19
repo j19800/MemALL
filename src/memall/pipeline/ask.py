@@ -104,9 +104,16 @@ def _search_memories(conn, query: str, agent_name: str = "", limit: int = 20):
     if agent_name:
         agent_where = " AND LOWER(m.agent_name) = LOWER(?)"
         agent_params.append(agent_name)
+    # Exclude the system's own prior 推演 from the evidence pool.  ``ask``
+    # results are auto-captured as L4 (source="ask"), so without this filter
+    # each answer becomes "evidence" for the next question on the same topic —
+    # the stance drifts toward its own earlier output instead of the underlying
+    # memories.  human/agent-authored decisions carry no such marker and stay.
     rows = conn.execute(
         "SELECT m.id, m.content, m.category, m.level, m.agent_name, m.occurred_at "
-        "FROM memories m WHERE 1=1{}{} ORDER BY m.occurred_at DESC LIMIT ?".format(agent_where, fts_where),
+        "FROM memories m WHERE 1=1{}{} "
+        "AND COALESCE(m.metadata, '') NOT LIKE '%\"source\": \"ask\"%' "
+        "ORDER BY m.occurred_at DESC LIMIT ?".format(agent_where, fts_where),
         tuple(agent_params + fts_params + [limit]),
     ).fetchall()
     return rows

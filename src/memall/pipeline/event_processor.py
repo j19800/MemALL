@@ -148,8 +148,11 @@ def _inline_classify(conn, row: dict, meta: dict) -> None:
     result = _detect_layers(content, summary, current_level=current_level)
     detected = result["primary"]
 
-    # Category detection (simple rule-based)
-    best_cat = "general"
+    # Category detection (simple rule-based).  ``best_cat`` stays None unless a
+    # rule actually matched — defaulting it to "general" meant an unmatched
+    # memory had its caller-assigned category (e.g. "reflection") overwritten
+    # with "general" on every pass.
+    best_cat = None
     best_score = 0
     for pattern, cat in CATEGORY_RULES:
         matches = re.findall(pattern, content)
@@ -158,8 +161,16 @@ def _inline_classify(conn, row: dict, meta: dict) -> None:
             best_score = score
             best_cat = cat
 
-    if detected != current_level or best_cat != row["category"]:
+    sets: list[str] = []
+    params: list = []
+    if detected != current_level:
+        sets.append("level = ?")
+        params.append(detected)
+    if best_cat is not None and best_cat != row["category"]:
+        sets.append("category = ?")
+        params.append(best_cat)
+    if sets:
+        params.append(row["id"])
         conn.execute(
-            "UPDATE memories SET level = ?, category = ? WHERE id = ?",
-            (detected, best_cat, row["id"]),
+            f"UPDATE memories SET {', '.join(sets)} WHERE id = ?", params
         )

@@ -578,6 +578,10 @@ class ReflectInteractMCPInput(BaseModel):
     )
     memory_id: int = Field(..., ge=1)
     context: str = ""
+    # Declared so the identity survives validation: the auto-capture hook reads
+    # it to attribute the resulting memory.  Without the field the validator
+    # dropped it and every reflect-derived memory landed under "system".
+    agent_name: Optional[str] = Field(None, max_length=200)
 
 
 # ── Onboarding ──

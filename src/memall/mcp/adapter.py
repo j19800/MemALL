@@ -20,6 +20,9 @@ def _intercept(tool_name: str, arguments: dict, result_str: str = "") -> None:
 from memall.mcp import tools  # noqa: F401
 # Import built-in hooks (side-effect registers them)
 from memall.mcp import hooks_builtin  # noqa: F401
+# Auto-capture hook (side-effect registers the post_tool_use extractor).
+# Without this import the hook never registers and auto-capture is dead code.
+from memall import auto_capture  # noqa: F401
 # Load plugins so lifecycle hooks (on_capture, on_pipeline, etc.) fire
 from memall.plugins.loader import load_all_plugins as _load_all_plugins
 _load_all_plugins()
@@ -100,7 +103,7 @@ def handle_call(tool_name: str, arguments: dict) -> str:
 
     # Inject session context for read-only tools (memall_read, memall_persona)
     if tool_name in {"memall_read", "memall_persona"}:
-        result = _inject_session_context(result)
+        result = _inject_session_context(result, arguments.get("agent_name", ""))
 
     return result
 
@@ -131,12 +134,15 @@ def _inject_hook_activity(result_str: str) -> str:
         return result_str
 
 
-def _inject_session_context(result_str: str) -> str:
+def _inject_session_context(result_str: str, agent_name: str = "") -> str:
     """Consume the pending session note and inject ``_meta.session_context``
     into the JSON response for read-only tools.
+
+    ``agent_name`` scopes delivery so a multi-agent process hands each agent
+    its own injected context instead of whichever note happened to be last.
     """
     try:
-        note = consume_session_note()
+        note = consume_session_note(agent_name)
         if not note:
             return result_str
 

@@ -4,7 +4,11 @@ logger = logging.getLogger(__name__)
 
 _AUTO_START_CACHE: dict[str, str] = {}
 _AUTO_START_COOLDOWN = 1800
-_PENDING_SESSION_NOTE: str | None = None
+# Per-agent pending session notes.  A single module-level string used to be
+# overwritten whenever a second agent started a session in the same process,
+# so one agent's injected context could be delivered to another.  Keyed by
+# agent name, each entry is consumed exactly once.
+_PENDING_SESSION_NOTES: dict[str, str] = {}
 
 # Actions that are read-only — no session auto-start needed
 _READ_ONLY_ACTIONS = frozenset({
@@ -32,7 +36,7 @@ _INTERCEPT_QUERY_ACTIONS = frozenset({
 
 def ensure_session_started(agent_name: str, auto_inject: bool = True) -> None:
     from memall.pipeline.session import session_start
-    global _PENDING_SESSION_NOTE
+    global _PENDING_SESSION_NOTES
     now = datetime.now(timezone.utc)
     last = _AUTO_START_CACHE.get(agent_name)
     if last:
@@ -45,16 +49,25 @@ def ensure_session_started(agent_name: str, auto_inject: bool = True) -> None:
         if auto_inject:
             injection = result.get("injection_formatted")
             if injection:
-                _PENDING_SESSION_NOTE = injection
+                _PENDING_SESSION_NOTES[agent_name] = injection
     except Exception:
         logger.warning("shared.py: silent error", exc_info=True)
 
 
-def consume_session_note() -> str | None:
-    global _PENDING_SESSION_NOTE
-    note = _PENDING_SESSION_NOTE
-    _PENDING_SESSION_NOTE = None
-    return note
+def consume_session_note(agent_name: str = "") -> str | None:
+    """Pop this agent's pending session note (delivered exactly once).
+
+    ``agent_name`` is optional for backwards compatibility: when omitted the
+    oldest pending note is returned.  Prefer passing the agent name so a
+    multi-agent process delivers each note to the right caller.
+    """
+    global _PENDING_SESSION_NOTES
+    if agent_name:
+        return _PENDING_SESSION_NOTES.pop(agent_name, None)
+    if not _PENDING_SESSION_NOTES:
+        return None
+    oldest = next(iter(_PENDING_SESSION_NOTES))
+    return _PENDING_SESSION_NOTES.pop(oldest, None)
 
 
 def write_intercept_log(tool_name: str, summary: str):

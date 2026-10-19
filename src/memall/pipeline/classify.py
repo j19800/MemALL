@@ -123,6 +123,13 @@ def _detect_layers(content: str, summary: str = "",
                    current_level: str | None = None) -> dict:
     """Detect layer for a memory using exclusion-based priority chain.
 
+    ``current_level`` is the level already stored on the row.  It acts as a
+    floor for the fallback case: classify's job is to assign a layer to
+    memories that have none, not to second-guess an explicit write.  Without
+    this, any caller-assigned L4/L5/L6/L7 whose text happened not to match a
+    marker pattern was silently demoted to P2 (the "just count raw captures"
+    default) — destroying intent classification and the L6 quality gate's work.
+
     Returns:
         {"primary": str, "secondary": list[str], "all_scores": dict[str, int]}
     """
@@ -153,7 +160,13 @@ def _detect_layers(content: str, summary: str = "",
                     return {"primary": layer, "secondary": [],
                             "all_scores": {layer: hits * 20}}
 
-    # 3. Fallback to P2 (raw capture) for unrecognized content
+    # 3. No marker matched.  Preserve a non-default level the caller already
+    #    assigned; only note-and-move-on for memories still at the P2 default.
+    if current_level and current_level != "P2":
+        return {"primary": current_level, "secondary": [],
+                "all_scores": {current_level: 0}}
+
+    # 4. Fallback to P2 (raw capture) for unrecognized content
     return {"primary": "P2", "secondary": [], "all_scores": {"P2": 0}}
 
 

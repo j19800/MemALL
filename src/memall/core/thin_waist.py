@@ -311,7 +311,12 @@ def _row_to_memory(row) -> Memory:
 _SPECIFICITY_RE = re.compile(r"\d{4}|v\d+\.\d+|[A-Z]{2,}\d*|#\d+")
 # Reasoning markers (pre-compiled)
 _REASONING_COMPILED: list[re.Pattern] = []
+# Both languages: ``_score_quality`` uses this to score the "reasoning"
+# dimension, and level L6 hard-rejects anything scoring < 2.  When the list
+# was Chinese-only, every English reflection scored 0 and was rejected — a
+# silent language bias that made L6 unusable for English content.
 _REASONING_MARKERS = [
+    # ── Chinese ──
     "因为",
     "所以",
     "根因",
@@ -336,8 +341,35 @@ _REASONING_MARKERS = [
     "用户说",
     "你的意思是",
     "确认",
+    # ── English equivalents ──
+    r"\bbecause\b",
+    r"\btherefore\b",
+    r"\bhence\b",
+    r"\broot\s+cause\b",
+    r"\bdepends?\s+on\b",
+    r"\bcompar(e|ed|ing|ison)\b",
+    r"\btrade[\s-]?off\b",
+    r"\bapproach\b",
+    r"\boption\b",
+    r"\bdecided?\b",
+    r"\bdecision\b",
+    r"\bconclusion\b",
+    r"\bdata\b",
+    r"\bevidence\b",
+    r"\banalys[ei]s\b",
+    r"\banalyz(e|ed|ing)\b",
+    r"\bresearch\b",
+    r"\bbenchmark\b",
+    r"\bmeasured?\b",
+    r"\bproblem\b",
+    r"\bbottleneck\b",
+    r"\bbug\b",
+    r"\blimitation\b",
+    r"\bimprove[ment]?\b",
+    r"\buser\s+said\b",
+    r"\bconfirm(ed)?\b",
 ]
-_REASONING_COMPILED = [re.compile(p) for p in _REASONING_MARKERS]
+_REASONING_COMPILED = [re.compile(p, re.IGNORECASE) for p in _REASONING_MARKERS]
 
 _QUALITY_DIMS = [
     "completeness",
@@ -619,17 +651,80 @@ def _capture_inject_quality(
     return data
 
 
+def _should_promote_level(
+    new: str, old: str,
+    priority: dict, lifecycle: dict,
+) -> bool:
+    """Decide whether a hash-hit re-capture may change the stored ``level``.
+
+    ``level`` has two incomparable bands (priority P0/P1/P2 vs lifecycle
+    L1..L11).  Crossing bands is a deliberate re-classification by the caller,
+    so the new value always wins.  Within a band we only move toward the more
+    significant end, so a stray lower value cannot demote a distilled memory.
+    """
+    if new == old:
+        return False
+    new_p, old_p = new in priority, old in priority
+    if new_p != old_p:
+        return True  # band change = re-classification
+    if new_p and old_p:
+        return priority[new] > priority[old]
+    return lifecycle.get(new, 0) > lifecycle.get(old, 0)
+
+
 def _capture_dedup_check(
     conn, data: MemoryInput, h: str, now: str, accumulate_key: str | None = None
 ) -> int | None:
     """Check for existing memories: content_hash, L7 accumulate, L5 dedup.
     Returns existing memory id on hit, None to proceed with insert."""
-    cur = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (h,))
+    cur = conn.execute(
+        "SELECT id, level, category, subject, project, summary, confidence "
+        "FROM memories WHERE content_hash = ?",
+        (h,),
+    )
     existing = cur.fetchone()
     if existing:
+        # ── Promote, don't just re-count ──
+        # A hash hit used to only bump access_count.  That silently swallowed
+        # the caller's intent when the same content is re-captured at a higher
+        # level (e.g. first noted as P2, later recognised as a decision worth
+        # L4): the row kept the old level and no signal was returned.
+        #
+        # ``level`` has TWO bands that are not comparable on one scale:
+        #   * priority  P0/P1/P2  — how urgent (P0 highest)
+        #   * lifecycle L1..L11   — what kind / how distilled (L11 highest)
+        # Re-capturing across bands is a *re-classification* (the caller has
+        # decided this content is really a decision, not a note), so the new
+        # value wins.  Within a band we only move toward the more significant
+        # end, so an accidental lower value cannot demote a distilled memory.
+        _PRIORITY = {"P0": 3, "P1": 2, "P2": 1}
+        _LIFECYCLE = {f"L{i}": i for i in range(1, 12)}
+        promotions: list[str] = []
+        params: list = []
+        if _should_promote_level(data.level, existing["level"], _PRIORITY, _LIFECYCLE):
+            promotions.append("level = ?")
+            params.append(data.level)
+        if data.category and data.category != existing["category"]:
+            promotions.append("category = ?")
+            params.append(data.category)
+        for field in ("subject", "project", "summary"):
+            if getattr(data, field, "") and not existing[field]:
+                promotions.append(f"{field} = ?")
+                params.append(getattr(data, field))
+        if promotions:
+            params.extend([now, existing["id"]])
+            conn.execute(
+                f"UPDATE memories SET {', '.join(promotions)}, "
+                f"updated_at = ? WHERE id = ?",
+                params,
+            )
+            logger.info(
+                "capture: hash hit on #%d promoted (%s)", existing["id"],
+                ", ".join(p.split(" =")[0] for p in promotions),
+            )
         conn.execute(
-            "UPDATE memories SET access_count = access_count + 1, updated_at = ? WHERE id = ?",
-            (now, existing["id"]),
+            "UPDATE memories SET access_count = access_count + 1 WHERE id = ?",
+            (existing["id"],),
         )
         conn.commit()
         return existing["id"]
