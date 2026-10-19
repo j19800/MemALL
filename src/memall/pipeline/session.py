@@ -776,6 +776,80 @@ def harvest_step() -> dict:
         conn.close()
 
 
+def idle_session_sweep(idle_minutes: int = 0) -> dict:
+    """End + harvest sessions gone quiet past the idle threshold.
+
+    Ported from dsh-meow-memory's "按窗口 dream" idea, adapted to MemALL's
+    harvest model.  The problem it fixes: an agent that abandons a session
+    (never calls ``session_end``, never returns) leaves the row ``active``
+    forever, and the periodic ``session_step`` keeps re-harvesting it with
+    ``started_at`` as the window — so the consolidation window grows without
+    bound and the L4 summary drifts toward "everything this agent ever did"
+    instead of "what happened in this sitting".
+
+    A session's real activity is the newest memory created under its agent
+    since it started.  When that is older than ``idle_minutes``, the session is
+    a finished sitting: harvest it (generate L4/L6) and mark it ended, so the
+    next capture opens a fresh, bounded window.
+
+    ``idle_minutes`` 0 falls back to ``scheduler.session_idle_minutes``
+    (default 120).  Sessions with no memories yet are skipped — nothing to
+    consolidate and they may still be warming up.
+    """
+    from memall.config import get_config
+
+    if idle_minutes <= 0:
+        idle_minutes = int(get_config("scheduler.session_idle_minutes", 120) or 120)
+    idle_minutes = max(1, idle_minutes)
+
+    conn = get_conn()
+    try:
+        _ensure_sessions_table(conn)
+        active = conn.execute(
+            "SELECT session_id, started_at, agent_name FROM sessions "
+            "WHERE status = 'active' AND agent_name != ''"
+        ).fetchall()
+
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=idle_minutes)).isoformat()
+        swept = 0
+        l4_count = 0
+        l6_count = 0
+        for row in active:
+            sid, started_at, agent_name = (
+                row["session_id"], row["started_at"], row["agent_name"]
+            )
+            # Newest memory for this agent since the session began = last real
+            # activity.  A session with no memories is left active (nothing to
+            # consolidate; it may still be warming up).
+            last = conn.execute(
+                "SELECT MAX(created_at) AS t FROM memories "
+                "WHERE agent_name = ? AND created_at >= ?",
+                (agent_name, started_at),
+            ).fetchone()["t"]
+            if not last or last > cutoff:
+                continue
+            result = _harvest_session(
+                conn, sid, started_at, agent_name, end_session=True
+            )
+            conn.commit()
+            swept += 1
+            l4_count += 1 if result.get("l4_created") else 0
+            l6_count += 1 if result.get("l6_created") else 0
+
+        return {
+            "scanned": len(active),
+            "swept": swept,
+            "l4_created": l4_count,
+            "l6_created": l6_count,
+            "idle_minutes": idle_minutes,
+        }
+    except sqlite3.Error:
+        logger.warning("idle_session_sweep failed", exc_info=True)
+        return {"scanned": 0, "swept": 0, "error": "sweep failed"}
+    finally:
+        conn.close()
+
+
 def session_summary(session_id: str = None, agent_name: str = None, limit: int = 5) -> dict:
     """Get session summary. If session_id given, return that session.
     Otherwise returns recent sessions for agent_name."""

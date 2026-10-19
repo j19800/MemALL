@@ -113,6 +113,16 @@ class Scheduler:
                 logger.info(f"agent round: {stats}")
             except Exception as e:
                 logger.warning(f"agent round error: {e}")
+            # Idle-session sweep: end + harvest sessions gone quiet past the
+            # idle threshold, so abandoned windows stop growing unbounded
+            # (dsh-meow-memory "按窗口 dream" idea, adapted to harvest model).
+            try:
+                from memall.pipeline.session import idle_session_sweep
+                swept = idle_session_sweep()
+                if swept.get("swept"):
+                    logger.info("idle session sweep: %s", swept)
+            except Exception as e:
+                logger.warning(f"idle session sweep error: {e}")
             self._last_agent_round = now
 
         if ENABLE_LIFECYCLE and now - self._last_lifecycle >= INTERVAL_LIFECYCLE:

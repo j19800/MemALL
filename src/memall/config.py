@@ -285,6 +285,12 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         # reminders reach them at all.  Without this key the interval was only
         # settable by editing code.
         "proxy_session_interval": 300,
+        # Idle-session sweep threshold (minutes).  A session whose newest
+        # memory is older than this is treated as a finished sitting: the
+        # scheduler harvests it (L4/L6) and marks it ended, so an abandoned
+        # session stops re-harvesting an ever-growing window.  Runs on the
+        # agent_round cadence.
+        "session_idle_minutes": 120,
         "missed_heartbeat_limit": 7,
         # Destructive maintenance passes owned by the single scheduler daemon
         # (see F-04).  Opt-in: OFF by default to avoid surprise data churn.
