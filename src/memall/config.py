@@ -91,6 +91,20 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
             "weight": 0.15,
             "window_days": 7,
         },
+        # Per-session "already returned" tracking.  A repeat query within one
+        # session gets the same top-k both times and teaches the agent nothing;
+        # this surfaces novelty on the second call instead.
+        # CRITICAL rule (learned from dsh-meow-memory): seen items are never
+        # *excluded*, only demoted below the protected top slice.  Hard
+        # exclusion makes the most relevant entries unreachable and search
+        # drifts further off with every query.
+        "seen_tracking": {
+            "enabled": False,
+            # Results in the first N positions are never reordered.
+            "protect_top": 5,
+            # Session seen-state TTL (in-process, not persisted).
+            "session_ttl_minutes": 60,
+        },
     },
     "dream": {
         "enabled": True,
@@ -149,6 +163,15 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         # Contextual recall: after storing a memory, check for related high-level
         # memories in the same project.  Enable to surface related L4/L6/L9+ memories.
         "contextual_recall_enabled": True,
+        # Auto-tagging: when a capture supplies no explicit tags, derive a small
+        # set of intent keywords from the content (entities + identifiers + CJK
+        # terms).  Tags are indexed in FTS5 as their own column, so a memory
+        # becomes findable by what it is *about*, not only by words that happen
+        # to appear in its text.  ON by default — it is deterministic, cheap,
+        # and never overrides caller-supplied tags.
+        "auto_tags_enabled": True,
+        # Upper bound on auto-derived tags per memory.
+        "auto_tags_max": 8,
     },
     # Heat-based level promotion configuration (M4)
     "promotion": {
@@ -189,6 +212,16 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         # roles that curate other agents' memories).  Names are normalized the
         # same way as memory owner names.
         "supervisor_agents": [],
+        # Write deny-list: captures whose ``project`` (case-insensitive) or
+        # ``agent_name`` (normalized) matches are rejected up front.  Motivation
+        # (borrowed from dsh-meow-memory's disabledWorkspaces): one-off task
+        # agents and test/audit identities otherwise pollute the long-term
+        # store — MemALL's own audit runs left rows under agents like
+        # "mcp_audit"/"probe*", indistinguishable from real history.
+        # Reads are NOT blocked (hiding data is a different concern from
+        # refusing to store it); background rounds skip disabled agents.
+        "disabled_projects": [],
+        "disabled_agents": [],
         # Gateway: unauthenticated (SPA) endpoints are only reachable from
         # loopback.  Requests from any other address must present a valid token.
         "open_api_loopback_only": True,
@@ -276,6 +309,80 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
 _config: Optional[Dict[str, Any]] = None
 _config_loaded: bool = False
 
+# ── Hot reload support ───────────────────────────────────────────────
+# (path, mtime_ns) for every file the loaders actually read.  get_config()
+# re-stats these at most every _RELOAD_CHECK_INTERVAL seconds and
+# transparently rebuilds the cache when any of them changed.  Motivation: the
+# MCP server is a long-lived process, and without this a config.json edit only
+# ever took effect after a restart — silently, because the process kept
+# serving the values it read at startup.  Throttling keeps the hot path cheap:
+# two stats every few seconds instead of one per get_config() call.
+#
+# NOTE: the paths tracked here must be exactly the paths load_json_config /
+# load_yaml_config resolve (~/.memall/<name>), not merely plausible ones —
+# tracking a file the loader never reads would re-trigger the change check on
+# every pass and reload in a loop without ever converging.
+_config_files: Dict[str, int] = {}
+_last_mtime_check: float = 0.0
+_RELOAD_CHECK_INTERVAL = 2.0  # seconds
+
+
+def _tracked_config_paths() -> list:
+    """The files the loaders actually resolve, in load order.
+
+    Must mirror load_json_config / load_yaml_config exactly: relative names
+    resolve under ~/.memall only.  Tracking a file the loaders never read
+    would make _config_changed fire on every check and reload in a loop.
+    """
+    home = Path.home() / ".memall"
+    return [home / "config.json", home / "memall.yaml"]
+
+
+def _stat_config_file(path: Path) -> int:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0  # sentinel for "absent" — appearance changes the value
+
+
+def _config_fingerprint() -> Dict[str, int]:
+    return {str(p): _stat_config_file(p) for p in _tracked_config_paths()}
+
+
+def _config_changed() -> bool:
+    """True when a tracked config file appeared, vanished, or changed."""
+    return _config_fingerprint() != _config_files
+
+
+def _maybe_reload() -> None:
+    """Rebuild the cached config if a file layer changed (throttled)."""
+    global _last_mtime_check
+    import time as _time
+
+    now = _time.monotonic()
+    if now - _last_mtime_check < _RELOAD_CHECK_INTERVAL:
+        return
+    _last_mtime_check = now
+    if _config_changed():
+        logger.info("config: file change detected — reloading")
+        reload_config()
+
+
+def reload_config() -> Optional[Dict[str, Any]]:
+    """Force a config rebuild now and return the fresh full config.
+
+    Used by the hot-reload check and available for callers that just wrote a
+    new config (e.g. a settings UI) and want it visible immediately.
+    """
+    global _config, _config_loaded, _last_mtime_check
+    import time as _time
+
+    _config = None
+    _config_loaded = False
+    cfg = get_config()
+    _last_mtime_check = _time.monotonic()
+    return cfg
+
 
 # ── YAML support (optional dependency) ─────────────────────────────────
 
@@ -291,7 +398,8 @@ def load_yaml_config(path: Union[str, Path] = "memall.yaml") -> Optional[Dict[st
     """Load configuration from a YAML file.
 
     Args:
-        path: Path to the YAML file. Resolves relative to CWD, then ~/.memall/.
+        path: Path to the YAML file. An absolute path is used as-is; a
+            relative name resolves under ``~/.memall/`` only.
 
     Returns:
         Parsed config dict, or None if the file doesn't exist or YAML unavailable.
@@ -299,19 +407,16 @@ def load_yaml_config(path: Union[str, Path] = "memall.yaml") -> Optional[Dict[st
     if not _HAS_YAML:
         return None
 
-    candidates = []
     p = Path(path)
-    if p.is_absolute():
-        candidates.append(p)
-    candidates.append(Path.home() / ".memall" / p.name)
+    candidates = [p] if p.is_absolute() else [Path.home() / ".memall" / p.name]
 
-    for p in candidates:
-        if p.exists():
+    for cand in candidates:
+        if cand.exists():
             try:
-                with open(p, "r", encoding="utf-8") as f:
+                with open(cand, "r", encoding="utf-8") as f:
                     return yaml.safe_load(f)
             except (OSError, yaml.YAMLError) as e:
-                logger.warning("Config YAML load error (%s): %s", p, e)
+                logger.warning("Config YAML load error (%s): %s", cand, e)
 
     return None
 
@@ -320,24 +425,22 @@ def load_json_config(path: Union[str, Path] = "config.json") -> Optional[Dict[st
     """Load configuration from a JSON file.
 
     Args:
-        path: Path to the JSON file. Resolves relative to CWD, then ~/.memall/.
+        path: Path to the JSON file. An absolute path is used as-is; a
+            relative name resolves under ``~/.memall/`` only.
 
     Returns:
         Parsed config dict, or None if the file doesn't exist.
     """
-    candidates = []
     p = Path(path)
-    if p.is_absolute():
-        candidates.append(p)
-    candidates.append(Path.home() / ".memall" / p.name)
+    candidates = [p] if p.is_absolute() else [Path.home() / ".memall" / p.name]
 
-    for p in candidates:
-        if p.exists():
+    for cand in candidates:
+        if cand.exists():
             try:
-                with open(p, "r", encoding="utf-8") as f:
+                with open(cand, "r", encoding="utf-8") as f:
                     return json.load(f)
             except (OSError, json.JSONDecodeError) as e:
-                logger.warning("Config JSON load error (%s): %s", p, e)
+                logger.warning("Config JSON load error (%s): %s", cand, e)
 
     return None
 
@@ -481,6 +584,30 @@ def _get_dot_path(d: Dict[str, Any], key: str, default: Any = None) -> Any:
     return current
 
 
+def _load_config_layers() -> Dict[str, Any]:
+    """Build the full config from all layers and record the files used.
+
+    Load order (last wins): defaults → config.json → memall.yaml → env.
+    Populates ``_config_files`` with the mtimes of exactly the paths the
+    loaders resolve (see ``_tracked_config_paths``) so ``_config_changed``
+    detects edits without ever chasing files the loaders never read.
+    """
+    global _config_files
+    cfg = copy.deepcopy(_DEFAULT_CONFIG)
+
+    json_cfg = load_json_config()
+    if json_cfg:
+        cfg = merge_config(cfg, json_cfg)
+
+    yaml_cfg = load_yaml_config()
+    if yaml_cfg:
+        cfg = merge_config(cfg, yaml_cfg)
+
+    cfg = _apply_env_overrides(cfg)
+    _config_files = _config_fingerprint()
+    return cfg
+
+
 def get_config(key: Optional[str] = None, default: Any = None) -> Any:
     """Get the full configuration or a specific key via dot-path.
 
@@ -489,6 +616,10 @@ def get_config(key: Optional[str] = None, default: Any = None) -> Any:
       2. config.json (if exists)
       3. memall.yaml (if exists, overrides JSON)
       4. MEMALL_* environment variables (highest priority)
+
+    Long-lived processes (the MCP server) hot-reload transparently: at most
+    every 2s the cached config's source files are re-statted and any change
+    rebuilds the cache before the value is returned.  See ``_maybe_reload``.
 
     Args:
         key: Dot-path key (e.g. 'db.path', 'gateway.port'). None for full config.
@@ -499,23 +630,12 @@ def get_config(key: Optional[str] = None, default: Any = None) -> Any:
     """
     global _config, _config_loaded
 
-    if not _config_loaded:
-        cfg = copy.deepcopy(_DEFAULT_CONFIG)
-
-        # Layer 2: JSON
-        json_cfg = load_json_config()
-        if json_cfg:
-            cfg = merge_config(cfg, json_cfg)
-
-        # Layer 3: YAML (higher priority than JSON)
-        yaml_cfg = load_yaml_config()
-        if yaml_cfg:
-            cfg = merge_config(cfg, yaml_cfg)
-
-        # Layer 4: Environment overrides
-        cfg = _apply_env_overrides(cfg)
-
-        _config = cfg
+    if _config_loaded:
+        # Throttled hot-reload.  Must run OUTSIDE the load branch to avoid
+        # re-entering get_config through reload_config() while loading.
+        _maybe_reload()
+    else:
+        _config = _load_config_layers()
         _config_loaded = True
 
     if key is None:
@@ -526,9 +646,11 @@ def get_config(key: Optional[str] = None, default: Any = None) -> Any:
 
 def reset_config() -> None:
     """Reset cached config (useful for testing)."""
-    global _config, _config_loaded
+    global _config, _config_loaded, _config_files, _last_mtime_check
     _config = None
     _config_loaded = False
+    _config_files = {}
+    _last_mtime_check = 0.0
 
 
 def save_config(config: Optional[Dict[str, Any]] = None, path: str = "config.json") -> None:

@@ -602,6 +602,66 @@ def _capture_normalize_and_validate(
     return data
 
 
+def _capture_check_disabled(data: MemoryInput) -> None:
+    """Reject writes from/into disabled identities (write deny-list).
+
+    ``security.disabled_projects`` / ``security.disabled_agents`` mirror
+    dsh-meow-memory's ``disabledWorkspaces``: one-off task agents and test
+    identities otherwise pollute the long-term store.  Only the *write* path
+    is gated — reads stay available so already-stored history remains
+    inspectable.  Raises ValueError with an actionable message naming the
+    offending value and the config key to edit.
+    """
+    disabled_projects = {
+        str(p).strip().lower()
+        for p in (get_config("security.disabled_projects", []) or [])
+        if str(p).strip()
+    }
+    if data.project and data.project.strip().lower() in disabled_projects:
+        raise ValueError(
+            f"capture: project {data.project!r} is disabled "
+            f"(security.disabled_projects) — memory not stored"
+        )
+    disabled_agents = {
+        str(a).strip().lower()
+        for a in (get_config("security.disabled_agents", []) or [])
+        if str(a).strip()
+    }
+    if data.agent_name and data.agent_name.strip().lower() in disabled_agents:
+        raise ValueError(
+            f"capture: agent {data.agent_name!r} is disabled "
+            f"(security.disabled_agents) — memory not stored"
+        )
+
+
+def _capture_assign_tags(data: MemoryInput) -> None:
+    """Fill ``data.tags`` with derived intent keywords when the caller left it empty.
+
+    Caller-supplied tags are always respected; this only fills the empty case.
+    Auto-derivation is gated by ``capture.auto_tags_enabled``.  Tags are indexed
+    as their own FTS5 column (see ``db.memall_tags_text``), so a memory becomes
+    findable by what it is *about* rather than only by words that happen to
+    appear in its text — the gap that left ``memories.tags`` written-but-unread.
+    """
+    from memall.core.tags import normalize_tags, extract_auto_tags
+
+    existing = normalize_tags(data.tags)
+    if existing:
+        # Normalise the caller's list even when we do not derive more, so the
+        # stored JSON is always canonical (deduped, length-bounded).
+        data.tags = json.dumps(existing, ensure_ascii=False)
+        return
+    if not get_config("capture.auto_tags_enabled", True):
+        data.tags = "[]"
+        return
+    max_tags = int(get_config("capture.auto_tags_max", 8) or 8)
+    derived = extract_auto_tags(
+        data.content, subject=data.subject, agent_name=data.agent_name,
+        max_tags=max_tags,
+    )
+    data.tags = json.dumps(derived, ensure_ascii=False)
+
+
 def _capture_inject_metadata(
     data: MemoryInput, accumulate_key: str | None = None
 ) -> MemoryInput:
@@ -1104,6 +1164,10 @@ def capture(
             content=data.content,
         )
 
+    # Write deny-list (security.disabled_projects / disabled_agents).  Runs
+    # AFTER project inference so an inferred project can also be blocked.
+    _capture_check_disabled(data)
+
     now = datetime.now(timezone.utc).isoformat()
     h = content_hash(data.content)
 
@@ -1146,6 +1210,9 @@ def capture(
 
     data = _capture_inject_metadata(data, accumulate_key)
     data = _capture_inject_quality(data, quality_result, now)
+    # Derive intent keywords when the caller supplied none (subject is now
+    # finalised, so the auto-tagger can use it as the highest-signal source).
+    _capture_assign_tags(data)
 
     with _pool_conn() as conn:
         existing_id = _capture_dedup_check(conn, data, h, now, accumulate_key)
@@ -1320,6 +1387,8 @@ def unified_search(arguments: dict) -> str:
       - ``personalize``: bool — per-agent affinity ranking.
       - ``context_boost``: bool — boost active project/category matches.
       - ``agent_name``: viewer identity for personalisation/context/trust.
+      - ``session_id``: enables per-session novelty demotion (see
+        ``memall.search.seen``; requires ``search.seen_tracking.enabled``).
     """
     import json
     query = arguments.get("query", "").strip()
@@ -1352,7 +1421,7 @@ def unified_search(arguments: dict) -> str:
             query=query,
             viewer=arguments.get("viewer"),
             agent_name=arguments.get("agent_name"),
-            limit=top_k,
+            limit=_seen_fetch_limit(arguments, top_k),
             facet_fields=facet_fields,
             expand_query=expand_query,
             suggest=suggest,
@@ -1383,6 +1452,7 @@ def unified_search(arguments: dict) -> str:
             }
             for m in result["results"]
         ]
+        items = _seen_postprocess(items, arguments, top_k=top_k)
         payload = {
             "query": query,
             "mode": mode,
@@ -1401,7 +1471,7 @@ def unified_search(arguments: dict) -> str:
         # We will do the same.
         retrieve_args = {
             "query": query,
-            "limit": top_k,
+            "limit": _seen_fetch_limit(arguments, top_k),
             "owner": arguments.get("owner"),
             "agent_name": arguments.get("agent_name"),
             "category": arguments.get("category"),
@@ -1423,13 +1493,14 @@ def unified_search(arguments: dict) -> str:
         else:
             items = [{"memory_id": result.id, "content": result.content[:200], "subject": result.subject,
                       "category": result.category, "level": result.level, "owner": result.owner, "agent_name": result.agent_name}]
+        items = _seen_postprocess(items, arguments, top_k=top_k)
         return json.dumps({"query": query, "mode": "direct", "results": items, "total": len(items)},
                            ensure_ascii=False)
 
     if mode == "fts5":
         retrieve_args = {
             "query": query,
-            "limit": top_k,
+            "limit": _seen_fetch_limit(arguments, top_k),
             "owner": arguments.get("owner"),
             "agent_name": arguments.get("agent_name"),
             "category": arguments.get("category"),
@@ -1451,6 +1522,7 @@ def unified_search(arguments: dict) -> str:
         else:
             items = [{"memory_id": result.id, "content": result.content[:200], "subject": result.subject,
                       "category": result.category, "level": result.level, "owner": result.owner, "agent_name": result.agent_name}]
+        items = _seen_postprocess(items, arguments, top_k=top_k)
         return json.dumps({"query": query, "mode": "fts5", "results": items, "total": len(items)},
                            ensure_ascii=False)
 
@@ -1458,7 +1530,7 @@ def unified_search(arguments: dict) -> str:
         # Vector search: only accepts query and top_k
         result = vector_search(
             query=query,
-            top_k=top_k,
+            top_k=_seen_fetch_limit(arguments, top_k),
         )
         if wants_enhancements:
             _apply_enhancements_inplace(
@@ -1466,12 +1538,14 @@ def unified_search(arguments: dict) -> str:
                 expand_query=expand_query, suggest=suggest, explain=explain,
                 cluster=cluster, personalize=personalize, context_boost=context_boost,
             )
+        if isinstance(result, dict) and isinstance(result.get("results"), list):
+            result["results"] = _seen_postprocess(result["results"], arguments, top_k=top_k)
         return json.dumps(result, ensure_ascii=False, default=str)
 
     # Default to hybrid search
     result = hybrid_search(
         query=query,
-        top_k=top_k,
+        top_k=_seen_fetch_limit(arguments, top_k),
         rrf_k=arguments.get("rrf_k", 60),
         category=arguments.get("category"),
         level=arguments.get("level"),
@@ -1485,8 +1559,73 @@ def unified_search(arguments: dict) -> str:
             expand_query=expand_query, suggest=suggest, explain=explain,
             cluster=cluster, personalize=personalize, context_boost=context_boost,
         )
+    if isinstance(result, dict) and isinstance(result.get("results"), list):
+        result["results"] = _seen_postprocess(result["results"], arguments, top_k=top_k)
     result["mode"] = mode if mode != "auto" else result.get("mode", "hybrid_rrf")
     return json.dumps(result, ensure_ascii=False, default=str)
+
+
+def _seen_state(arguments: dict) -> tuple:
+    """(enabled, agent_name, session_id) for seen tracking, or ("", "", "")."""
+    session_id = (arguments.get("session_id") or "").strip()
+    if not session_id:
+        return False, "", ""
+    try:
+        from memall.config import get_config
+        if not get_config("search.seen_tracking.enabled", False):
+            return False, "", ""
+        agent_name = arguments.get("agent_name") or arguments.get("viewer") or ""
+        return True, agent_name, session_id
+    except Exception:
+        return False, "", ""
+
+
+def _seen_fetch_limit(arguments: dict, base: int) -> int:
+    """Widen the candidate window when seen tracking is active.
+
+    Without over-fetching, demotion is cosmetic: the engine returns exactly
+    ``base`` rows, all of which were seen on the previous call, so there is no
+    novel item left to promote.  Asking for ``base + seen + protect_top``
+    (capped) lets the reorder actually surface *new* results.
+    """
+    enabled, agent_name, session_id = _seen_state(arguments)
+    if not enabled:
+        return base
+    try:
+        from memall.search import seen as _seen_mod
+        from memall.search.seen import _protect_top
+
+        n_seen = len(_seen_mod.seen_ids(agent_name, session_id))
+        return min(base + n_seen + _protect_top(), 500)
+    except Exception:
+        return base
+
+
+def _seen_postprocess(items: list, arguments: dict, top_k: int | None = None) -> list:
+    """Demote already-returned results below the protected top slice, then
+    record this call's ids as seen for the session.
+
+    No-op unless ``search.seen_tracking.enabled`` and a ``session_id`` are
+    present.  Relevance is never sacrificed: the first ``protect_top`` results
+    keep their position (see ``memall.search.seen`` for the anti-drift rule).
+    When *top_k* is given the (over-fetched) list is truncated after reordering.
+    """
+    enabled, agent_name, session_id = _seen_state(arguments)
+    if not enabled or not items:
+        return items[:top_k] if top_k and len(items) > top_k else items
+    try:
+        from memall.search import seen as _seen_mod
+
+        items = _seen_mod.reorder_novelty(items, agent_name, session_id)
+        if top_k is not None:
+            items = items[:top_k]
+        _seen_mod.record(
+            agent_name, session_id,
+            [it.get("memory_id") for it in items if it.get("memory_id") is not None],
+        )
+    except Exception:
+        logger.debug("seen postprocess failed (non-fatal)", exc_info=True)
+    return items
 
 
 def _apply_enhancements_inplace(result: dict, arguments: dict, **flags) -> None:
@@ -1714,6 +1853,18 @@ def _build_retrieve_where(conn, query, viewer, filters) -> tuple[list, list, boo
     if subject:
         where.append("memories.subject LIKE ?")
         params.append(f"%{subject}%")
+
+    # Explicit tag filter: exact match against the JSON array (json_each),
+    # NOT a text search — "检" must not match the tag "检索".  Complements
+    # the FTS tags column: FTS gives recall by topic, this gives precise
+    # "tagged exactly with X" narrowing.
+    tag_filter = filters.get("tags")
+    if tag_filter:
+        from memall.core.tags import tag_filter_sql
+
+        tsql, tparams = tag_filter_sql(tag_filter, match_all=bool(filters.get("tags_all")))
+        where.append(tsql)
+        params.extend(tparams)
 
     date_start = filters.get("date_start")
     if date_start:

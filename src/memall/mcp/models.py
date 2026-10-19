@@ -82,6 +82,22 @@ class RetrieveInput(BaseModel):
     project: Optional[str] = Field(None, max_length=500)
     level: Optional[str] = Field(None, max_length=20, pattern=r"^(P[0-2]|L(10|11|[1-9]))$")
     limit: int = Field(20, ge=1, le=500)
+    # Exact-match tag filter (json_each on the tags column).  tags_all=True
+    # requires every listed tag; default matches any.
+    tags: Optional[List[str]] = Field(None, max_length=32)
+    tags_all: bool = False
+    # Per-session novelty demotion (see UnifiedSearchInput.session_id).
+    session_id: Optional[str] = Field(None, max_length=200)
+    # Enhancement layer (same semantics as UnifiedSearchInput).
+    facet_fields: Optional[List[str]] = Field(None, max_length=8)
+    facet_fields_str: Optional[str] = Field(None, max_length=200)
+    expand_query: bool = False
+    suggest: bool = False
+    explain: bool = False
+    cluster: bool = False
+    personalize: bool = False
+    context_boost: bool = False
+    viewer: Optional[str] = Field(None, max_length=200)
 
 
 class ConnectInput(BaseModel):
@@ -266,6 +282,10 @@ class UnifiedSearchInput(BaseModel):
     cluster: bool = Field(False, description="Group results into topic clusters")
     personalize: bool = Field(False, description="Rank by per-agent interaction affinity")
     context_boost: bool = Field(False, description="Boost results matching the active project/category")
+    # Per-session novelty demotion (requires search.seen_tracking.enabled):
+    # repeat queries within one session surface unseen results lower down
+    # instead of returning the identical top-k twice.  Never excludes.
+    session_id: Optional[str] = Field(None, max_length=200)
 
     @field_validator("facet_fields")
     @classmethod
@@ -282,26 +302,6 @@ class UnifiedSearchInput(BaseModel):
                     f"unsupported facet field {f!r}; allowed: {sorted(allowed)}"
                 )
         return v
-
-
-class RetrieveInput(BaseModel):
-    query: Optional[str] = Field(None, max_length=5000)
-    owner: Optional[str] = Field(None, max_length=200)
-    agent_name: Optional[str] = Field(None, max_length=200)
-    category: Optional[str] = Field(None, max_length=100)
-    project: Optional[str] = Field(None, max_length=500)
-    level: Optional[str] = Field(None, max_length=20, pattern=r"^(P[0-2]|L(10|11|[1-9]))$")
-    limit: int = Field(20, ge=1, le=500)
-    # Enhancement layer (same semantics as UnifiedSearchInput).
-    facet_fields: Optional[List[str]] = Field(None, max_length=8)
-    facet_fields_str: Optional[str] = Field(None, max_length=200)
-    expand_query: bool = False
-    suggest: bool = False
-    explain: bool = False
-    cluster: bool = False
-    personalize: bool = False
-    context_boost: bool = False
-    viewer: Optional[str] = Field(None, max_length=200)
 
 
 # ── Session tools (Phase 8) ──
@@ -486,16 +486,18 @@ class DBInput(BaseModel):
     db_sub_action: Optional[str] = Field(
         None,
         pattern=r"^(optimize|stats|vacuum|archive_stats|archive_vacuum|"
-                r"backfill_thread|backfill_project|dedupe_l9|dedupe_l10)$",
+                r"backfill_thread|backfill_project|backfill_tags|dedupe_l9|dedupe_l10)$",
     )
     sub_action: Optional[str] = Field(
         None,
         pattern=r"^(optimize|stats|vacuum|archive_stats|archive_vacuum|"
-                r"backfill_thread|backfill_project|dedupe_l9|dedupe_l10)$",
+                r"backfill_thread|backfill_project|backfill_tags|dedupe_l9|dedupe_l10)$",
     )
     dry_run: bool = False
     confirm: bool = False
     archive_corrupt: bool = True
+    # Row cap for backfill_* preview/apply runs (0 = no cap).
+    limit: Optional[int] = Field(None, ge=0, le=100000)
 
 
 # ── Discussion tools (Phase 1.5) ──

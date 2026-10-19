@@ -26,12 +26,26 @@ _TASK_REMINDER_HOURS = 6
 
 
 def get_active_agents() -> list[str]:
-    """Return list of active agent names from the identities table."""
+    """Return list of active agent names from the identities table.
+
+    Agents on the ``security.disabled_agents`` write deny-list are excluded:
+    the background round would otherwise keep generating P2 reminder
+    memories for identities the deployment has explicitly opted out of
+    (test/audit agents, one-off task workers).
+    """
+    from memall.config import get_config
+
+    disabled = {
+        str(a).strip().lower()
+        for a in (get_config("security.disabled_agents", []) or [])
+        if str(a).strip()
+    }
     with pool_conn() as conn:
         rows = conn.execute(
             "SELECT agent_name FROM identities WHERE status = 'active'"
         ).fetchall()
-        return [r["agent_name"] for r in rows]
+        return [r["agent_name"] for r in rows
+                if str(r["agent_name"]).strip().lower() not in disabled]
 
 
 def notify_pending_tasks(agent_name: str) -> list[dict]:

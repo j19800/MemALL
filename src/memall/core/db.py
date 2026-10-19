@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS identities (
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-    content, subject, summary,
+    content, subject, summary, tags,
     tokenize="unicode61",
     content='memories', content_rowid='id'
 );
@@ -363,22 +363,26 @@ CREATE INDEX IF NOT EXISTS idx_shared_target ON shared_records(target_agent);
 CREATE INDEX IF NOT EXISTS idx_shared_source ON shared_records(source_agent);
 """.replace("__LEVEL_ENUM__", LEVEL_SQL_LIST)
 
+# The FTS ``tags`` column stores the JSON array flattened to space-separated
+# text (memall_tags_text) and then CJK-split (memall_split_cjk), so a tag like
+# "检索" becomes the token pair "检 索" — exactly what fts_query() emits for a
+# "检索" query, making tags matchable by the same phrase machinery as content.
 FTS5_TRIGGERS = """
 CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-    INSERT INTO memories_fts(rowid, content, subject, summary)
-    VALUES (new.id, memall_split_cjk(new.content), memall_split_cjk(new.subject), memall_split_cjk(new.summary));
+    INSERT INTO memories_fts(rowid, content, subject, summary, tags)
+    VALUES (new.id, memall_split_cjk(new.content), memall_split_cjk(new.subject), memall_split_cjk(new.summary), memall_split_cjk(memall_tags_text(new.tags)));
 END;
 
 CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, content, subject, summary)
-    VALUES ('delete', old.id, memall_split_cjk(old.content), memall_split_cjk(old.subject), memall_split_cjk(old.summary));
+    INSERT INTO memories_fts(memories_fts, rowid, content, subject, summary, tags)
+    VALUES ('delete', old.id, memall_split_cjk(old.content), memall_split_cjk(old.subject), memall_split_cjk(old.summary), memall_split_cjk(memall_tags_text(old.tags)));
 END;
 
 CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, content, subject, summary)
-    VALUES ('delete', old.id, memall_split_cjk(old.content), memall_split_cjk(old.subject), memall_split_cjk(old.summary));
-    INSERT INTO memories_fts(rowid, content, subject, summary)
-    VALUES (new.id, memall_split_cjk(new.content), memall_split_cjk(new.subject), memall_split_cjk(new.summary));
+    INSERT INTO memories_fts(memories_fts, rowid, content, subject, summary, tags)
+    VALUES ('delete', old.id, memall_split_cjk(old.content), memall_split_cjk(old.subject), memall_split_cjk(old.summary), memall_split_cjk(memall_tags_text(old.tags)));
+    INSERT INTO memories_fts(rowid, content, subject, summary, tags)
+    VALUES (new.id, memall_split_cjk(new.content), memall_split_cjk(new.subject), memall_split_cjk(new.summary), memall_split_cjk(memall_tags_text(new.tags)));
 END;
 """
 
@@ -442,12 +446,19 @@ def _register_sql_functions(conn) -> None:
     """Register MemALL's custom SQL functions on *conn*.
 
     Must run before ``init_db`` executes the FTS5 triggers (which call
-    ``memall_split_cjk``), and before any INSERT/UPDATE touches them.
+    ``memall_split_cjk`` / ``memall_tags_text``), and before any INSERT/UPDATE
+    touches them.
     """
     try:
         conn.create_function("memall_split_cjk", 1, memall_split_cjk, deterministic=True)
     except Exception:
         logger.debug("db.py: could not register memall_split_cjk", exc_info=True)
+    try:
+        from memall.core.tags import tags_to_text
+
+        conn.create_function("memall_tags_text", 1, tags_to_text, deterministic=True)
+    except Exception:
+        logger.debug("db.py: could not register memall_tags_text", exc_info=True)
 
 
 def get_conn(db_path=None) -> sqlite3.Connection:
@@ -622,9 +633,9 @@ def _backfill_fts_if_empty(conn) -> None:
             # Tokenise through memall_split_cjk so the index matches what the
             # sync triggers produce — a verbatim copy would index CJK runs as
             # single tokens and make Chinese keyword search miss them.
-            conn.execute("INSERT INTO memories_fts(rowid, content, subject, summary) "
+            conn.execute("INSERT INTO memories_fts(rowid, content, subject, summary, tags) "
                          "SELECT id, memall_split_cjk(content), memall_split_cjk(subject), "
-                         "memall_split_cjk(summary) FROM memories")
+                         "memall_split_cjk(summary), memall_split_cjk(memall_tags_text(tags)) FROM memories")
             conn.commit()
             logger.info(
                 "db.py: backfilled FTS index with %d memories", mem_count
@@ -644,9 +655,9 @@ def rebuild_fts(conn):
     _register_sql_functions(conn)
     conn.execute("DELETE FROM memories_fts")
     conn.execute(
-        "INSERT INTO memories_fts(rowid, content, subject, summary) "
+        "INSERT INTO memories_fts(rowid, content, subject, summary, tags) "
         "SELECT id, memall_split_cjk(content), memall_split_cjk(subject), "
-        "memall_split_cjk(summary) FROM memories"
+        "memall_split_cjk(summary), memall_split_cjk(memall_tags_text(tags)) FROM memories"
     )
     conn.commit()
 

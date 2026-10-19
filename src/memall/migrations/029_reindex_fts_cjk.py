@@ -14,17 +14,22 @@ and with any database created from scratch today).
 
 Fix
 ---
-Rewrite the triggers to call ``memall_split_cjk()`` (registered by
-``memall.core.db``) so each CJK character becomes its own token, then
-rebuild the whole index so existing rows are tokenised the same way.
+For databases whose FTS table is still the legacy 3-column shape (no
+``tags`` column): rewrite the triggers to call ``memall_split_cjk()`` so
+each CJK character becomes its own token, then rebuild the whole index so
+existing rows are tokenised the same way.
 
-The rebuild is a plain ``INSERT INTO memories_fts(memories_fts) VALUES
-('rebuild')`` — FTS5 handles the content-column mapping itself, so no data
-is copied by hand and ids stay stable (``mem_vec`` rowids and the child
-tables remain valid).
+The trigger SQL below is deliberately frozen at the 3-column shape: this
+migration is a point-in-time repair for old databases.  Databases created
+after the CJK fix already carry the canonical triggers (``db.FTS5_TRIGGERS``)
+and the 4-column FTS table — for them this migration is a no-op, and
+migration 030 owns any further index upgrade.  Re-creating the *current*
+canonical triggers from here would clobber a newer schema (the bug this
+comment documents).
 
-Idempotent: the trigger rewrite is ``CREATE TRIGGER IF NOT EXISTS`` on a
-name that is dropped first, and ``'rebuild'`` is safe to run repeatedly.
+FTS5's own ``'rebuild'`` command re-reads the content columns *without*
+applying our SQL function, so it cannot change the tokenisation — the
+rebuild below deletes and re-inserts through the split explicitly.
 """
 
 MIGRATION_ID = "029_reindex_fts_cjk"
@@ -32,12 +37,22 @@ DESCRIPTION = "Reindex FTS5 with per-character CJK tokens via memall_split_cjk"
 
 
 def apply(conn):
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='memories_fts'"
+    ).fetchone()
+    ddl = (row[0] if row and row[0] else "").lower()
+    if "tags" in ddl:
+        # Fresh database: SCHEMA_SQL + init_db already created the 4-column
+        # index and the canonical triggers.  Nothing to repair here.
+        return
+
     # 1. Make sure the SQL function the new triggers depend on exists.
     from memall.core.db import _register_sql_functions
 
     _register_sql_functions(conn)
 
-    # 2. Drop and recreate the sync triggers with CJK splitting.
+    # 2. Drop and recreate the sync triggers with CJK splitting (frozen
+    #    3-column shape — see module docstring).
     conn.execute("DROP TRIGGER IF EXISTS memories_ai")
     conn.execute("DROP TRIGGER IF EXISTS memories_ad")
     conn.execute("DROP TRIGGER IF EXISTS memories_au")
@@ -65,10 +80,6 @@ def apply(conn):
     )
 
     # 3. Rebuild the index so every existing row uses the new tokenisation.
-    # FTS5's own ``'rebuild'`` command re-reads the content columns *without*
-    # applying our SQL function, so it cannot change the tokenisation.  Delete
-    # and re-insert through the triggers' transformation instead — the
-    # ``memories_au`` trigger fires the split on the way back in.
     conn.execute("DELETE FROM memories_fts")
     conn.execute(
         "INSERT INTO memories_fts(rowid, content, subject, summary) "
