@@ -122,9 +122,14 @@ def handle_security(arguments: dict) -> str:
 
 
 def handle_ops(arguments: dict) -> str:
-    action = arguments.get("action", "")
+    # Canonical field is ``ops_sub_action``; ``sub_action`` stays as a
+    # deprecated alias.  ``action`` is already rewritten by the dispatcher.
+    action = arguments.get("action") or arguments.get("ops_sub_action") or ""
     if not action:
-        return json.dumps({"error": "sub_action is required (merge|split|tag|batch_tag|archive|restore|dedup|undo)"})
+        return json.dumps({
+            "error": "ops_sub_action is required "
+                     "(merge|split|tag|batch_tag|archive|restore|dedup|undo)"
+        })
 
     # merge / split / dedup rewrite or delete memories → gated.
     if action in ("merge", "split", "dedup"):
@@ -203,9 +208,13 @@ def handle_ops(arguments: dict) -> str:
 
 
 def handle_db(arguments: dict) -> str:
-    action = arguments.get("action", "")
+    action = arguments.get("action") or arguments.get("db_sub_action") or ""
     if not action:
-        return json.dumps({"error": "sub_action is required (optimize|stats|vacuum|...)"})
+        return json.dumps({
+            "error": "db_sub_action is required "
+                     "(optimize|stats|vacuum|archive_stats|archive_vacuum|"
+                     "backfill_thread|backfill_project|dedupe_l9|dedupe_l10)"
+        })
 
     # VACUUM rewrites the whole database file (long exclusive lock, not
     # undoable) → gated.  Backfills / L9-L10 de-dup are reversible-ish but still

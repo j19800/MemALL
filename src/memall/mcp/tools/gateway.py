@@ -12,7 +12,43 @@ _active_gateway: MemAllGateway | None = None
 
 def handle(arguments: dict) -> str:
     global _active_gateway
-    action = arguments.get("sub_action", "")
+    # Canonical field is ``gateway_sub_action``; ``sub_action`` stays as a
+    # deprecated alias.  ``action`` is already rewritten by the dispatcher.
+    action = (
+        arguments.get("action")
+        or arguments.get("gateway_sub_action")
+        or arguments.get("sub_action")
+        or ""
+    )
+    if not action:
+        return json.dumps({
+            "error": "gateway_sub_action is required "
+                     "(status|start|stop|export|import|discover|pair|peers|federated)"
+        })
+
+    if action == "status":
+        # Read-only view of the in-process gateway: whether one is running,
+        # which port, and how many peers are known.  Useful before start/stop
+        # so callers don't have to guess.
+        if _active_gateway is None:
+            return json.dumps({
+                "status": "stopped",
+                "running": False,
+                "peers": 0,
+                "message": "No gateway is running in this process.",
+            })
+        try:
+            peers = list_peers() or []
+        except Exception:
+            peers = []
+        return json.dumps({
+            "status": "running",
+            "running": True,
+            "port": getattr(_active_gateway, "port", None),
+            "host": getattr(_active_gateway, "host", "127.0.0.1"),
+            "peers": len(peers),
+            "peer_list": peers,
+        }, default=str)
 
     if action == "start":
         port = arguments.get("port", 9919)
@@ -82,4 +118,8 @@ def handle(arguments: dict) -> str:
         return json.dumps(result, default=str, ensure_ascii=False)
 
     else:
-        return json.dumps({"error": f"unknown action: {action}"})
+        return json.dumps({
+            "error": f"unknown gateway_sub_action: {action}",
+            "valid": ["status", "start", "stop", "export", "import",
+                      "discover", "pair", "peers", "federated"],
+        })

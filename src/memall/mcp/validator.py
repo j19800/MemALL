@@ -14,7 +14,7 @@
 #   FAIL with a structured error listing valid actions instead of silently
 #   passing through to an opaque handler ValueError.
 import json
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 from pydantic import BaseModel, ValidationError
 
@@ -47,6 +47,8 @@ _ACTION_MODELS: dict[tuple[str, str], type[BaseModel]] = {
     # memall_write — sub_action-driven (handler rewrites action=sub_action)
     ("memall_write", "forget"): ForgetInput,
     ("memall_write", "ops"): OpsInput,
+    # memall_write — search-interaction telemetry (writes to search_interactions)
+    ("memall_write", "record_interaction"): RecordInteractionInput,
     # memall_write — quick capture aliases
     ("memall_write", "quick"): CaptureInput,
     ("memall_write", "记一下"): CaptureInput,
@@ -151,10 +153,14 @@ def _pick_model(tool_name: str, params: Dict[str, Any]):
 
     # Sub-action-driven pairs: refine the model by sub_action where the
     # vocabulary differs per sub-action (distill list vs summarize).
+    # Accept both the canonical ``<action>_sub_action`` field and the
+    # deprecated ``sub_action`` alias.
     sub = params.get("sub_action")
-    if isinstance(sub, str) and sub:
-        if tool_name == "memall_system" and action == "distill":
-            return DistillSummarizeInput if sub == "summarize" else DistillListInput
+    if tool_name == "memall_system" and action == "distill":
+        canonical = params.get("distill_sub_action")
+        effective = canonical if isinstance(canonical, str) and canonical else sub
+        if isinstance(effective, str) and effective:
+            return DistillSummarizeInput if effective == "summarize" else DistillListInput
 
     return model_class
 
@@ -197,7 +203,49 @@ def validate_tool_input(
                 validated_data[key] = params[key]
         return True, validated_data, ""
     except ValidationError as e:
-        return False, None, str(e)
+        return False, None, _humanize_validation_error(e)
+
+
+def _humanize_validation_error(exc) -> str:
+    """Turn a Pydantic ValidationError into one actionable sentence.
+
+    Raw Pydantic output ("1 validation error for OpsInput / sub_action /
+    String should match pattern '^(merge|...)$' / type=string_pattern_mismatch,
+    input_value='stats'") is unreadable for an LLM caller and never says what
+    to do instead.  Rewrite it as ``field: what's wrong (got 'x') [expected: ...]``
+    so the caller can fix the call in one round trip.
+    """
+    lines: List[str] = []
+    try:
+        for err in exc.errors():
+            loc = ".".join(str(p) for p in err.get("loc", ())) or "input"
+            msg = str(err.get("msg", "invalid value"))
+            got = err.get("input", None)
+            # Pydantic's pattern errors carry the regex in ctx.pattern
+            ctx = err.get("ctx") or {}
+            expected = ctx.get("pattern")
+            if expected and msg.startswith("String should match pattern"):
+                allowed = expected.strip("^$()").replace("|", ", ")
+                msg = f"must be one of: {allowed}"
+            elif msg.startswith("Field required"):
+                msg = "is required"
+            elif msg.startswith("String should have at least"):
+                msg = f"must not be empty ({msg.split('at least ')[-1]})"
+            elif msg.startswith("String should have at most"):
+                msg = f"is too long ({msg.split('at most ')[-1]})"
+            elif msg.startswith("Input should be a valid"):
+                msg = msg.replace("Input should be a valid ", "must be a valid ")
+            suffix = ""
+            # For a *missing* required field Pydantic echoes the whole payload
+            # as "input", which is noise — only show the value when it was
+            # actually supplied (and is short enough to be readable).
+            if got not in (None, "") and not isinstance(got, dict):
+                shown = repr(got)
+                suffix = f" (got {shown[:60]})"
+            lines.append(f"{loc}: {msg}{suffix}")
+    except Exception:
+        return str(exc)[:500]
+    return "; ".join(lines)[:500] if lines else str(exc)[:500]
 
 
 def format_validation_error(tool_name: str, error_msg: str) -> str:

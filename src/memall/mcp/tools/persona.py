@@ -5,10 +5,30 @@ from memall.core.db import get_conn
 from datetime import datetime, timedelta, timezone
 
 
+def _resolve_agent(arguments: dict) -> str:
+    """Resolve the effective agent identity for persona-family actions.
+
+    Policy (uniform across every tool): ``agent_name`` is optional.  When it
+    is omitted or empty we fall back to the configured human owner
+    (``identity.human_owner``) — the same invariant the write path uses, where
+    owner is ALWAYS a human.  Returning ``""`` would instead query "all
+    unowned memories", which silently produced misleading personas; raising an
+    error forced callers to guess.  The fallback makes both outcomes
+    predictable.
+
+    Returns the resolved identity (never empty in practice — the config
+    default is "老陈").
+    """
+    agent = (arguments.get("agent_name") or "").strip()
+    if agent:
+        return agent
+    from memall.config import get_config
+
+    return str(get_config("identity.human_owner", "老陈") or "老陈")
+
+
 def handle_persona(arguments: dict) -> str:
-    agent = arguments.get("agent_name", "")
-    if not agent:
-        return json.dumps({"error": "agent_name is required"}, ensure_ascii=False)
+    agent = _resolve_agent(arguments)
     mode = arguments.get("mode", "static")
 
     if mode == "dual":
@@ -27,9 +47,7 @@ def handle_persona(arguments: dict) -> str:
 
 
 def handle_persona_profile(arguments: dict) -> str:
-    agent = arguments.get("agent_name", "")
-    if not agent:
-        return json.dumps({"error": "agent_name is required"}, ensure_ascii=False)
+    agent = _resolve_agent(arguments)
     layer = str(arguments.get("layer", "all"))
     profile = generate_profile_3layer(agent)
     if layer != "all":
@@ -41,7 +59,9 @@ def handle_persona_profile(arguments: dict) -> str:
 def handle_ask(arguments: dict) -> str:
     if not arguments.get("question"):
         return json.dumps({"error": "question is required"}, ensure_ascii=False)
-    subject = arguments.get("subject") or arguments.get("agent_name", "")
+    # ``subject`` is the persona to answer as; fall back to ``agent_name``,
+    # then to the configured human owner (uniform empty-identity policy).
+    subject = (arguments.get("subject") or "").strip() or _resolve_agent(arguments)
     result = ContextAssembler.ask(
         query=arguments["question"],
         subject=subject,
@@ -51,7 +71,7 @@ def handle_ask(arguments: dict) -> str:
 
 
 def handle_identity(arguments: dict) -> str:
-    agent = arguments.get("agent_name", "")
+    agent = _resolve_agent(arguments)
     conn = get_conn()
     try:
         row = conn.execute(
@@ -59,7 +79,9 @@ def handle_identity(arguments: dict) -> str:
             (agent,),
         ).fetchone()
         if not row:
-            return json.dumps({"agent_name": agent, "error": "not found"})
+            return json.dumps({"agent_name": agent, "error": "not found",
+                               "hint": "No identity record yet — run a pipeline pass or "
+                                       "session_start to create one."})
         id_profile = json.loads(row["identity_profile"]) if isinstance(row["identity_profile"], str) and row["identity_profile"] else {}
         pj = json.loads(row["profile_json"]) if isinstance(row["profile_json"], str) and row["profile_json"] else {}
         result = {
@@ -79,7 +101,7 @@ def handle_profile_preload(arguments: dict) -> str:
     """Preload user profile into a flat structure for fast retrieval.
     Implements Memobase-inspired profile caching.
     """
-    agent = arguments.get("agent_name", "")
+    agent = _resolve_agent(arguments)
     conn = get_conn()
     try:
         row = conn.execute(
@@ -157,7 +179,7 @@ def handle_foresight(arguments: dict) -> str:
     """Foresight memory — predict what information the user is likely to need next
     based on recent activity patterns.
     """
-    agent = arguments.get("agent_name", "")
+    agent = _resolve_agent(arguments)
     conn = get_conn()
     try:
         # Analyze recent category transitions to predict next likely query

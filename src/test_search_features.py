@@ -194,18 +194,26 @@ def main():
     check("MCP memall_read/search with facets", "facets" in payload or "results" in payload,
           str(payload)[:200])
 
-    mcp_rec = handle_call("memall_read", {
+    mcp_rec = handle_call("memall_write", {
         "action": "record_interaction", "query": "检索",
         "memory_id": ids[1], "interaction_type": "click", "agent_name": "workbuddy",
     })
-    check("MCP record_interaction works", json.loads(mcp_rec).get("status") == "ok", mcp_rec)
+    check("MCP record_interaction works (on memall_write)",
+          json.loads(mcp_rec).get("status") == "ok", mcp_rec)
 
-    mcp_imp = handle_call("memall_read", {
+    mcp_imp = handle_call("memall_write", {
         "action": "record_interaction", "query": "检索",
         "interaction_type": "impression", "agent_name": "workbuddy",
     })
     check("MCP record_interaction accepts query-only impression",
           json.loads(mcp_imp).get("status") == "ok", mcp_imp)
+
+    # record_interaction must NOT be reachable on the read-only tool
+    mcp_ro = handle_call("memall_read", {
+        "action": "record_interaction", "query": "检索", "memory_id": ids[1],
+    })
+    check("record_interaction rejected on read-only memall_read",
+          json.loads(mcp_ro).get("status") == "error", mcp_ro[:120])
 
     mcp_bad = handle_call("memall_read", {
         "action": "search", "query": "x", "facet_fields": ["nope"],

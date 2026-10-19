@@ -115,7 +115,9 @@ class TimelineInput(BaseModel):
 # ── Persona & Ask tools ──
 
 class PersonaInput(BaseModel):
-    agent_name: str = Field(..., min_length=1, max_length=200)
+    # Optional: an empty/missing agent_name falls back to the configured human
+    # owner (identity.human_owner) — the same invariant the write path uses.
+    agent_name: str = Field("", max_length=200)
     evolution: bool = False
     window_days: int = Field(30, ge=1, le=365)
     # Extra fields accepted by the persona handler beyond the enum'd schema.
@@ -124,7 +126,8 @@ class PersonaInput(BaseModel):
 
 
 class PersonaProfileInput(BaseModel):
-    agent_name: str = Field(..., min_length=1, max_length=200)
+    # Optional: empty falls back to identity.human_owner (see handle_persona).
+    agent_name: str = Field("", max_length=200)
     layer: str = Field("all", pattern=r"^([1-3]|all)$")
 
 
@@ -370,6 +373,11 @@ class FedDeliverInput(BaseModel):
 
 class ForgetInput(BaseModel):
     sub_action: str = Field("expired", pattern=r"^(expired|low_value|review|stats|all)$")
+    # Canonical field name (``sub_action`` is the deprecated alias kept for
+    # older callers; both are accepted and the handler prefers this one).
+    forget_sub_action: Optional[str] = Field(
+        None, pattern=r"^(expired|low_value|review|stats|all)$"
+    )
     days: int = Field(90, ge=1, le=3650)
     agent_name: Optional[str] = Field(None, max_length=200)
     # Explicit opt-in for irreversible deletion (see manage.handle_forget).
@@ -381,8 +389,13 @@ class ForgetInput(BaseModel):
 # → required, so bare calls fail with a structured error, not an opaque one).
 
 class SecurityInput(BaseModel):
-    sub_action: str = Field(
-        ..., pattern=r"^(audit|permit|check|score|list)$"
+    # Canonical field is ``security_sub_action``; ``sub_action`` is the
+    # deprecated alias (kept so older callers keep working).
+    security_sub_action: Optional[str] = Field(
+        None, pattern=r"^(audit|permit|check|score|list)$"
+    )
+    sub_action: Optional[str] = Field(
+        None, pattern=r"^(audit|permit|check|score|list)$"
     )
     agent_name: Optional[str] = Field(None, max_length=200)
     level: Optional[str] = Field(None, pattern=r"^(public|trusted|private)$")
@@ -394,8 +407,16 @@ class SecurityInput(BaseModel):
 # memall_write ops re-dispatches on sub_action (no handler default → required).
 
 class OpsInput(BaseModel):
-    sub_action: str = Field(
-        ..., pattern=r"^(merge|split|tag|batch_tag|archive|restore|dedup|undo)$"
+    # Either the canonical ``ops_sub_action`` or the deprecated ``sub_action``
+    # alias must be present; the handler enforces the "at least one" rule so
+    # the error message can name both spellings.
+    sub_action: Optional[str] = Field(
+        None, pattern=r"^(merge|split|tag|batch_tag|archive|restore|dedup|undo)$"
+    )
+    # Canonical field name (``sub_action`` is the deprecated alias kept for
+    # older callers; both are accepted and the handler prefers this one).
+    ops_sub_action: Optional[str] = Field(
+        None, pattern=r"^(merge|split|tag|batch_tag|archive|restore|dedup|undo)$"
     )
     source_id: Optional[int] = Field(None, ge=1)
     target_id: Optional[int] = Field(None, ge=1)
@@ -425,8 +446,13 @@ class OpsInput(BaseModel):
 # memall_system adaptive re-dispatches on sub_action (no handler default).
 
 class AdaptiveInput(BaseModel):
-    sub_action: str = Field(
-        ..., pattern=r"^(clean|index|distill|all|report)$"
+    # Canonical field is ``adaptive_sub_action``; ``sub_action`` is the
+    # deprecated alias (kept so older callers keep working).
+    adaptive_sub_action: Optional[str] = Field(
+        None, pattern=r"^(clean|index|distill|all|report)$"
+    )
+    sub_action: Optional[str] = Field(
+        None, pattern=r"^(clean|index|distill|all|report)$"
     )
     agent_name: Optional[str] = Field(None, max_length=200)
 
@@ -435,8 +461,13 @@ class AdaptiveInput(BaseModel):
 # memall_system gateway re-dispatches on sub_action (no handler default).
 
 class GatewayInput(BaseModel):
-    sub_action: str = Field(
-        ..., pattern=r"^(start|stop|export|import|discover|pair|peers|federated)$"
+    # Canonical field is ``gateway_sub_action``; ``sub_action`` is the
+    # deprecated alias (kept so older callers keep working).
+    gateway_sub_action: str = Field(
+        ..., pattern=r"^(status|start|stop|export|import|discover|pair|peers|federated)$"
+    )
+    sub_action: Optional[str] = Field(
+        None, pattern=r"^(status|start|stop|export|import|discover|pair|peers|federated)$"
     )
     port: Optional[int] = Field(None, ge=1024, le=65535)
     agent_name: Optional[str] = Field(None, max_length=200)
@@ -450,8 +481,15 @@ class GatewayInput(BaseModel):
 # memall_system db re-dispatches on sub_action (no handler default).
 
 class DBInput(BaseModel):
-    sub_action: str = Field(
-        ...,
+    # Canonical field is ``db_sub_action``; ``sub_action`` is the deprecated
+    # alias (kept so older callers keep working).
+    db_sub_action: Optional[str] = Field(
+        None,
+        pattern=r"^(optimize|stats|vacuum|archive_stats|archive_vacuum|"
+                r"backfill_thread|backfill_project|dedupe_l9|dedupe_l10)$",
+    )
+    sub_action: Optional[str] = Field(
+        None,
         pattern=r"^(optimize|stats|vacuum|archive_stats|archive_vacuum|"
                 r"backfill_thread|backfill_project|dedupe_l9|dedupe_l10)$",
     )
@@ -512,7 +550,8 @@ class TraceInput(BaseModel):
 
 
 class IdentityInput(BaseModel):
-    agent_name: str = Field(..., min_length=1, max_length=200)
+    # Optional: empty falls back to identity.human_owner (see handle_identity).
+    agent_name: str = Field("", max_length=200)
 
 
 # ── Reflection interaction ──
@@ -527,19 +566,31 @@ class ReflectInteractInput(BaseModel):
 class ReflectInteractMCPInput(BaseModel):
     """memall_system reflect — sub_action carries the interaction verb.
     Required: reflect.handle records the verb verbatim, so an empty one would
-    be silently persisted as a meaningless interaction."""
-    sub_action: str = Field(..., pattern=r"^(agree|disagree|probe)$")
+    be silently persisted as a meaningless interaction.
+
+    Canonical field is ``reflect_sub_action``; ``sub_action`` is the
+    deprecated alias (kept so older callers keep working)."""
+    reflect_sub_action: Optional[str] = Field(
+        None, pattern=r"^(agree|disagree|probe)$"
+    )
+    sub_action: Optional[str] = Field(
+        None, pattern=r"^(agree|disagree|probe)$"
+    )
     memory_id: int = Field(..., ge=1)
     context: str = ""
 
 
 # ── Onboarding ──
-# NOTE: the dispatch verb lives in sub_action (the schema's action pattern
-# with submit_step was dead — submit_step is carried by sub_action).
-# No handler default → required.
+# NOTE: the dispatch verb lives in onboarding_sub_action (``sub_action`` is a
+# deprecated alias).  No handler default → required.
 
 class OnboardingInput(BaseModel):
-    sub_action: str = Field(..., pattern=r"^(status|start|reset|submit_step|skip)$")
+    onboarding_sub_action: Optional[str] = Field(
+        None, pattern=r"^(status|start|reset|submit_step|skip)$"
+    )
+    sub_action: Optional[str] = Field(
+        None, pattern=r"^(status|start|reset|submit_step|skip)$"
+    )
     step: Optional[int] = Field(None, ge=1, le=5)
     input_data: Optional[dict] = None
     user_id: str = "default"
@@ -563,12 +614,14 @@ class RunPipelineInput(BaseModel):
 class DistillListInput(BaseModel):
     """memall_system distill sub_action=list — list groups needing summaries."""
     sub_action: str = Field("list", pattern=r"^list$")
+    distill_sub_action: Optional[str] = Field(None, pattern=r"^list$")
     limit: int = Field(10, ge=1, le=100)
 
 
 class DistillSummarizeInput(BaseModel):
     """memall_system distill sub_action=summarize — write narrative summary."""
     sub_action: str = Field("summarize", pattern=r"^summarize$")
+    distill_sub_action: Optional[str] = Field(None, pattern=r"^summarize$")
     group_id: int = Field(..., ge=1)
     summary: str = Field(..., min_length=10, max_length=4000)
     insight: Optional[str] = Field(None, max_length=2000)

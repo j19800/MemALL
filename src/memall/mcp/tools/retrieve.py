@@ -64,8 +64,8 @@ def handle_retrieve(arguments: dict) -> str:
 
 
 def handle_vector_search(arguments: dict) -> str:
-    if not arguments.get("query"):
-        return json.dumps({"error": "query is required"})
+    if not (arguments.get("query") or "").strip():
+        return json.dumps({"error": "query is required (non-empty string)"}, ensure_ascii=False)
     result = vector_search(
         query=arguments["query"],
         top_k=arguments.get("top_k", 10),
@@ -74,8 +74,8 @@ def handle_vector_search(arguments: dict) -> str:
 
 
 def handle_hybrid_search(arguments: dict) -> str:
-    if not arguments.get("query"):
-        return json.dumps({"error": "query is required"})
+    if not (arguments.get("query") or "").strip():
+        return json.dumps({"error": "query is required (non-empty string)"}, ensure_ascii=False)
     result = hybrid_search(
         query=arguments["query"],
         top_k=arguments.get("top_k", 10),
@@ -90,6 +90,8 @@ def handle_hybrid_search(arguments: dict) -> str:
 
 def handle_unified_search(arguments: dict) -> str:
     """Unified search — auto-routes between FTS5, vector, and hybrid engines."""
+    if not (arguments.get("query") or "").strip():
+        return json.dumps({"error": "query is required (non-empty string)"}, ensure_ascii=False)
     from memall.core.thin_waist import unified_search
     return unified_search(arguments)
 

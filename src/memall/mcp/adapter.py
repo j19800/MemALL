@@ -34,6 +34,21 @@ def handle_call(tool_name: str, arguments: dict) -> str:
     m.incr(f"tool_call.{tool_name}")
     _t0 = time.time()
 
+    # Unknown tool: name the real ones instead of falling through to the
+    # validator's "unknown action ... Valid actions: (empty)" message, which
+    # is misleading when the tool itself does not exist.
+    if registry.get(tool_name) is None:
+        m.incr("tool_call_unknown_tool")
+        m.record_latency(f"tool.{tool_name}", (time.time() - _t0) * 1000)
+        known = ", ".join(sorted(
+            d["name"] for d in registry.list_definitions() if isinstance(d, dict)
+        ))
+        return json.dumps({
+            "status": "error",
+            "error": f"unknown tool '{tool_name}'",
+            "valid_tools": known,
+        }, ensure_ascii=False)
+
     is_valid, validated_data, err_msg = validate_tool_input(tool_name, arguments)
     if not is_valid:
         m.incr("tool_call_validation_error")

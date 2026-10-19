@@ -244,7 +244,7 @@ result = handle_call('memall_read', {
 })
 
 # Feed the learning signal (clicks / dwells / impressions)
-result = handle_call('memall_read', {
+result = handle_call('memall_write', {
     'action': 'record_interaction',
     'query': '检索',
     'memory_id': 42,
@@ -299,6 +299,44 @@ result = handle_call('memall_read', {
     'queries': ['query1', 'query2', 'query3'],
     'limit': 5
 })
+```
+
+### Sub-action arguments
+
+Each action that needs a sub-action has its **own** field, so a value can
+never be valid for one action and rejected by another:
+
+```python
+handle_call('memall_write', {'action': 'forget', 'forget_sub_action': 'review'})
+handle_call('memall_write', {'action': 'ops', 'ops_sub_action': 'dedup', 'dry_run': True})
+handle_call('memall_system', {'action': 'db', 'db_sub_action': 'stats'})
+handle_call('memall_system', {'action': 'gateway', 'gateway_sub_action': 'status'})
+handle_call('memall_system', {'action': 'security', 'security_sub_action': 'score'})
+handle_call('memall_system', {'action': 'adaptive', 'adaptive_sub_action': 'report'})
+handle_call('memall_system', {'action': 'onboarding', 'onboarding_sub_action': 'status'})
+handle_call('memall_system', {'action': 'reflect', 'reflect_sub_action': 'probe',
+                              'memory_id': 42})
+handle_call('memall_system', {'action': 'distill', 'distill_sub_action': 'list'})
+```
+
+`sub_action` is still accepted as a **deprecated alias** for all of the above.
+
+Destructive operations (delete / merge / split / dedup / archive / VACUUM)
+require an explicit confirmation pass: inspect first (`dry_run=true` or the
+`review`/`stats` variant), then re-call with `confirm=true`.
+
+### Identity parameters
+
+`agent_name` is optional everywhere it appears. When omitted or empty it
+falls back to the configured human owner (`identity.human_owner`, default
+`老陈`) — the same invariant the write path uses, where owner is always a
+human. `fed_inject` is the deliberate exception: it needs to know *which*
+agent's profile to inject, so it requires an explicit name.
+
+Validation errors are phrased as one actionable sentence, e.g.
+
+```
+ops_sub_action: must be one of: merge, split, tag, batch_tag, archive, restore, dedup, undo (got 'expired')
 ```
 
 ## Architecture

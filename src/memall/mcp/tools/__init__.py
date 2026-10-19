@@ -40,10 +40,14 @@ def _handle_write(args: dict) -> str:
     elif action == "connect":
         return graph.handle_connect(args)
     elif action == "forget":
-        args["action"] = args.pop("sub_action", "expired")
+        # forget has its own sub_action vocabulary; ``sub_action`` is kept as a
+        # deprecated alias so older callers keep working.
+        sub = args.pop("forget_sub_action", None) or args.pop("sub_action", "expired")
+        args["action"] = sub
         return manage.handle_forget(args)
     elif action == "ops":
-        args["action"] = args.pop("sub_action", "")
+        sub = args.pop("ops_sub_action", None) or args.pop("sub_action", "")
+        args["action"] = sub
         return manage.handle_ops(args)
     elif action in ("quick", "记一下", "快速记", "随手记"):
         # Quick capture — auto-fill, just needs content
@@ -70,14 +74,19 @@ def _handle_write(args: dict) -> str:
         args.setdefault("subject", first_line)
         args["content"] = content
         return capture.handle(args)
+    elif action == "record_interaction":
+        # Search-interaction telemetry (clicks / dwells / impressions).
+        # Lives on memall_write — it WRITES a row to search_interactions, so it
+        # must not sit behind memall_read's readOnlyHint=true.
+        return retrieve.handle_record_interaction(args)
     raise ValueError(f"memall_write: unknown action '{action}'")
 
 
 registry.register(ToolDef(
     name="memall_write",
-    description="Write/capture/search/update memories, create connections, manage forgetting & ops. Actions: capture | smart_store | store_batch | batch_capture | update | connect | forget | ops | quick (快速记)",
+    description="Write/capture/search/update memories, create connections, manage forgetting & ops. Actions: capture | smart_store | store_batch | batch_capture | update | connect | forget | ops | record_interaction | quick (快速记)",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["capture", "smart_store", "store_batch", "batch_capture", "update", "connect", "forget", "ops", "quick", "记一下", "快速记", "随手记"]},
+        "action": {"type": "string", "enum": ["capture", "smart_store", "store_batch", "batch_capture", "update", "connect", "forget", "ops", "record_interaction", "quick", "记一下", "快速记", "随手记"]},
         "content": {"type": "string", "description": "Memory content"},
         "owner": {"type": "string"},
         "agent_name": {"type": "string"},
@@ -88,12 +97,14 @@ registry.register(ToolDef(
         "level": {"type": "string", "enum": ["P0", "P1", "P2", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9", "L10", "L11"]},
         "metadata": {"type": "string", "description": "JSON metadata string"},
         "thread_id": {"type": "integer", "description": "Parent memory ID for thread context"},
-        "memory_id": {"type": "integer", "description": "Memory ID (update/connect/forget)"},
+        "memory_id": {"type": "integer", "description": "Memory ID (update/connect/forget/record_interaction)"},
         "source_id": {"type": "integer"},
         "target_id": {"type": "integer"},
         "relation_type": {"type": "string", "enum": ["extends", "contradicts", "refines", "cites", "supersedes"]},
         "weight": {"type": "number"},
-        "sub_action": {"type": "string", "enum": ["expired", "low_value", "review", "stats", "all", "merge", "split", "tag", "batch_tag", "archive", "restore", "dedup", "undo"], "description": "Sub-action for forget/ops"},
+        "forget_sub_action": {"type": "string", "enum": ["expired", "low_value", "review", "stats", "all"], "description": "Sub-action for forget"},
+        "ops_sub_action": {"type": "string", "enum": ["merge", "split", "tag", "batch_tag", "archive", "restore", "dedup", "undo"], "description": "Sub-action for ops"},
+        "sub_action": {"type": "string", "description": "Deprecated alias — use forget_sub_action / ops_sub_action"},
         "days": {"type": "integer"},
         "confirm": {"type": "boolean", "description": "Required to execute destructive ops (forget expired/low_value/all, ops merge/split/dedup/archive)"},
         "dry_run": {"type": "boolean", "description": "Preview-only pass for ops archive/dedup"},
@@ -103,6 +114,11 @@ registry.register(ToolDef(
         "delimiter": {"type": "string"},
         "mode": {"type": "string", "enum": ["add", "set", "remove"]},
         "threshold": {"type": "number"},
+        # record_interaction — search telemetry that feeds personalisation
+        "interaction_type": {"type": "string", "enum": ["click", "dwell", "impression", "copy", "skip"], "description": "Kind of search interaction (record_interaction)"},
+        "dwell_ms": {"type": "integer", "description": "Dwell time in ms (record_interaction, interaction_type=dwell)"},
+        "rank_position": {"type": "integer", "description": "1-based rank of the clicked result (record_interaction)"},
+        "session_id": {"type": "string"},
     }, "required": ["action"]},
     handler=_handle_write,
     annotations={"readOnlyHint": False, "idempotentHint": False},
@@ -133,8 +149,6 @@ def _handle_read(args: dict) -> str:
         args["mode"] = "hybrid"
         args["top_k"] = args.get("top_k", 15)
         return retrieve.handle_unified_search(args)
-    elif action == "record_interaction":
-        return retrieve.handle_record_interaction(args)
     elif action == "trace":
         return retrieve.handle_trace(args)
     elif action == "traverse":
@@ -150,9 +164,9 @@ def _handle_read(args: dict) -> str:
 
 registry.register(ToolDef(
     name="memall_read",
-    description="Search/retrieve memories, trace provenance, explore graph, timeline, federated queries, natural language chat search. Actions: retrieve | search | unified_search | chat | vector_search | hybrid_search | batch_search | record_interaction | trace | traverse | timeline | fed_query | fed_conflicts",
+    description="Search/retrieve memories, trace provenance, explore graph, timeline, federated queries, natural language chat search. Actions: retrieve | search | unified_search | chat | vector_search | hybrid_search | batch_search | trace | traverse | timeline | fed_query | fed_conflicts",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["retrieve", "search", "unified_search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "batch_search", "record_interaction", "trace", "traverse", "timeline", "fed_query", "fed_conflicts"]},
+        "action": {"type": "string", "enum": ["retrieve", "search", "unified_search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "batch_search", "trace", "traverse", "timeline", "fed_query", "fed_conflicts"]},
         "query": {"type": "string", "description": "Search query"},
         "queries": {"type": "array", "items": {"type": "string"}, "description": "Queries for batch_search"},
         "mode": {"type": "string", "enum": ["auto", "direct", "fts5", "vector", "hybrid"]},
@@ -181,9 +195,6 @@ registry.register(ToolDef(
         "cluster": {"type": "boolean", "description": "Group results into topic clusters"},
         "personalize": {"type": "boolean", "description": "Rank results by per-agent interaction affinity"},
         "context_boost": {"type": "boolean", "description": "Boost results matching the active project / category"},
-        "memory_id": {"type": "integer", "description": "Memory ID for record_interaction / trace"},
-        "dwell_ms": {"type": "integer", "description": "Dwell time in ms for record_interaction (action=dwell)"},
-        "rank_position": {"type": "integer", "description": "1-based rank of the clicked result"},
     }, "required": ["action"]},
     handler=_handle_read,
     annotations={"readOnlyHint": True, "idempotentHint": True},
@@ -337,10 +348,12 @@ def _handle_system(args: dict) -> str:
     if action == "run_pipeline":
         return pipeline.handle(args)
     elif action == "distill":
-        args["action"] = args.pop("sub_action", "list")
+        sub = args.pop("distill_sub_action", None) or args.pop("sub_action", "list")
+        args["action"] = sub
         return distill.handle(args)
     elif action == "gateway":
-        args["action"] = args.pop("sub_action", "")
+        sub = args.pop("gateway_sub_action", None) or args.pop("sub_action", "")
+        args["action"] = sub
         return gateway.handle(args)
     elif action == "hub_connect":
         return hub.handle_connect(args)
@@ -353,19 +366,24 @@ def _handle_system(args: dict) -> str:
     elif action == "session_summary":
         return session.handle_session_summary(args)
     elif action == "db":
-        args["action"] = args.pop("sub_action", "")
+        sub = args.pop("db_sub_action", None) or args.pop("sub_action", "")
+        args["action"] = sub
         return manage.handle_db(args)
     elif action == "security":
-        args["action"] = args.pop("sub_action", "")
+        sub = args.pop("security_sub_action", None) or args.pop("sub_action", "")
+        args["action"] = sub
         return manage.handle_security(args)
     elif action == "adaptive":
-        args["action"] = args.pop("sub_action", "")
+        sub = args.pop("adaptive_sub_action", None) or args.pop("sub_action", "")
+        args["action"] = sub
         return manage.handle_adaptive(args)
     elif action == "onboarding":
-        args["action"] = args.pop("sub_action", "")
+        sub = args.pop("onboarding_sub_action", None) or args.pop("sub_action", "")
+        args["action"] = sub
         return onboarding.handle(args)
     elif action == "reflect":
-        args["action"] = args.pop("sub_action", "")
+        sub = args.pop("reflect_sub_action", None) or args.pop("sub_action", "")
+        args["action"] = sub
         return reflect.handle(args)
     elif action == "index_rebuild":
         return index.handle(args)
@@ -463,7 +481,18 @@ registry.register(ToolDef(
     description="Pipeline, sessions, gateway, hub sync, DB maintenance, security, adaptive, onboarding, reflection, index rebuild, daily digest, hot topics. Actions: run_pipeline | distill | gateway | hub_connect | hub_sync | session_start | session_end | session_summary | db | security | adaptive | onboarding | reflect | index_rebuild | digest (每日摘要/日报/总结) | hot (热门/热点/热榜)",
     input_schema={"type": "object", "properties": {
         "action": {"type": "string", "enum": ["run_pipeline", "distill", "gateway", "hub_connect", "hub_sync", "session_start", "session_end", "session_summary", "db", "security", "adaptive", "onboarding", "reflect", "index_rebuild", "digest", "每日摘要", "日报", "总结", "hot", "热门", "热点", "热榜"]},
-        "sub_action": {"type": "string", "enum": ["list", "summarize", "start", "stop", "export", "import", "discover", "pair", "peers", "federated", "status", "reset", "submit_step", "skip", "audit", "permit", "check", "score", "clean", "index", "distill", "all", "report", "optimize", "stats", "vacuum", "agree", "disagree", "probe", "expired", "archive_stats", "archive_vacuum", "backfill_thread", "backfill_project", "dedupe_l9", "dedupe_l10"], "description": "Sub-action for distill/gateway/security/adaptive/db/onboarding/reflect"},
+        # Per-action sub-action vocabularies.  Each action accepts ONLY its own
+        # field — a single shared ``sub_action`` enum used to mix seven
+        # vocabularies, so almost every declared value was invalid for almost
+        # every action.  ``sub_action`` is still accepted as a deprecated alias.
+        "distill_sub_action": {"type": "string", "enum": ["list", "summarize"], "description": "distill only"},
+        "gateway_sub_action": {"type": "string", "enum": ["status", "start", "stop", "export", "import", "discover", "pair", "peers", "federated"], "description": "gateway only"},
+        "db_sub_action": {"type": "string", "enum": ["optimize", "stats", "vacuum", "archive_stats", "archive_vacuum", "backfill_thread", "backfill_project", "dedupe_l9", "dedupe_l10"], "description": "db only"},
+        "security_sub_action": {"type": "string", "enum": ["audit", "permit", "check", "score", "list"], "description": "security only"},
+        "adaptive_sub_action": {"type": "string", "enum": ["clean", "index", "distill", "all", "report"], "description": "adaptive only"},
+        "onboarding_sub_action": {"type": "string", "enum": ["status", "start", "reset", "submit_step", "skip"], "description": "onboarding only"},
+        "reflect_sub_action": {"type": "string", "enum": ["agree", "disagree", "probe"], "description": "reflect only"},
+        "sub_action": {"type": "string", "description": "Deprecated alias — use the <action>_sub_action field that matches your action"},
         "confirm": {"type": "boolean", "description": "Required to execute destructive db ops (vacuum, archive_vacuum, backfill_*, dedupe_l9/l10)"},
         "dry_run": {"type": "boolean", "description": "Preview-only pass for db backfill_*/dedupe_*"},
         "session_id": {"type": "string", "description": "Session ID"},

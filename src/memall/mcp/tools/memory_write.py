@@ -6,8 +6,8 @@ from memall.core.models import MemoryInput
 
 
 def handle_smart_store(arguments: dict) -> str:
-    if not arguments.get("content"):
-        return json.dumps({"error": "content is required"}, ensure_ascii=False)
+    if not (arguments.get("content") or "").strip():
+        return json.dumps({"error": "content is required (non-empty string)"}, ensure_ascii=False)
     # Project inference is centralized in capture(); smart_store → capture() will
     # populate it automatically. Pass the caller's project through unchanged.
     project = arguments.get("project", "")
@@ -37,7 +37,6 @@ def handle_batch_capture(arguments: dict) -> str:
     items = arguments.get("items") or []
     if not items:
         return json.dumps({"error": "items is required (non-empty array)"}, ensure_ascii=False)
-    
     # Process each item
     results = []
     errors = []
