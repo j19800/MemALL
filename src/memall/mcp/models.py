@@ -349,6 +349,12 @@ class FedConflictsInput(BaseModel):
     limit: int = Field(20, ge=1, le=500)
 
 
+class RecapInput(BaseModel):
+    """memall_read action=recap — post-compaction context restore (read-only)."""
+    agent_name: Optional[str] = Field(None, max_length=200)
+    limit: int = Field(5, ge=1, le=50)
+
+
 class FedInjectInput(BaseModel):
     agent_name: str = Field(..., min_length=1, max_length=200)
 

@@ -96,6 +96,79 @@ def handle_unified_search(arguments: dict) -> str:
     return unified_search(arguments)
 
 
+def handle_recap(arguments: dict) -> str:
+    """Compaction recap — restore the essentials an agent loses after a host
+    context compaction (P1.10, ported from dsh-meow-memory's re-injection).
+
+    A MemALL MCP server cannot see the host's compaction event, so this is a
+    *pull* surface: the agent (or a hook) calls ``recap`` once after a
+    compaction and gets back the small set of things that must not be lost —
+    the last session summary and the recent decisions / open tasks — in one
+    cheap read.  Read-only; creates nothing.
+    """
+    from memall.core.db import get_conn
+
+    agent = (arguments.get("agent_name") or "").strip()
+    limit = max(1, min(int(arguments.get("limit") or 5), 50))
+    out: dict = {"agent_name": agent}
+
+    conn = get_conn()
+    try:
+        # Last ended (or current) session summary for this agent.  The sessions
+        # table is created lazily by session_start; on a DB that has never run
+        # one it may not exist yet, so this block is best-effort.
+        try:
+            where = "WHERE 1=1"
+            params: list = []
+            if agent:
+                where += " AND agent_name = ?"
+                params.append(agent)
+            sess = conn.execute(
+                f"SELECT session_id, agent_name, started_at, ended_at, memory_count, "
+                f"summary, status FROM sessions {where} "
+                f"ORDER BY COALESCE(ended_at, started_at) DESC LIMIT 1",
+                params,
+            ).fetchone()
+            if sess:
+                out["session"] = {
+                    "session_id": sess["session_id"],
+                    "started_at": sess["started_at"],
+                    "ended_at": sess["ended_at"],
+                    "memory_count": sess["memory_count"],
+                    "summary": sess["summary"],
+                    "status": sess["status"],
+                }
+        except Exception:
+            logger.debug("recap: sessions lookup skipped", exc_info=True)
+
+        # Recent decisions and open tasks (the working set an agent needs to
+        # resume).  Derived/distilled levels excluded so the recap is real
+        # observations, not the pipeline's own echoes.
+        recent: list = []
+        mwhere = "WHERE level IN ('L4','L5') "
+        mparams: list = []
+        if agent:
+            mwhere += "AND agent_name = ? "
+            mparams.append(agent)
+        rows = conn.execute(
+            f"SELECT id, level, category, subject, summary, occurred_at "
+            f"FROM memories {mwhere} ORDER BY occurred_at DESC LIMIT ?",
+            mparams + [limit],
+        ).fetchall()
+        for r in rows:
+            recent.append({
+                "id": r["id"], "level": r["level"], "category": r["category"],
+                "subject": r["subject"], "summary": r["summary"],
+                "occurred_at": r["occurred_at"],
+            })
+        out["recent"] = recent
+    finally:
+        conn.close()
+
+    out["note"] = "post-compaction recap; re-inject these and continue"
+    return json.dumps(out, ensure_ascii=False, default=str)
+
+
 def handle_record_interaction(arguments: dict) -> str:
     """Record a search interaction (click / dwell / impression / copy / skip).
 

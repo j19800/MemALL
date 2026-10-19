@@ -28,7 +28,7 @@ from memall.mcp.models import (
     IndexRebuildInput, OnboardingInput, OpsInput, PersonaForesightInput,
     PersonaInput, PersonaProfileInput, PersonaSearchInput,
     ProfilePreloadInput, ReflectInteractMCPInput, RetrieveInput,
-    RecordInteractionInput, RunPipelineInput, SecurityInput,
+    RecordInteractionInput, RecapInput, RunPipelineInput, SecurityInput,
     SessionEndInput, SessionStartInput,
     SessionSummaryInput, SmartStoreInput, StoreBatchInput, TimelineInput,
     TraceInput, TraverseInput, UnifiedSearchInput, UpdateInput,
@@ -71,6 +71,7 @@ _ACTION_MODELS: dict[tuple[str, str], type[BaseModel]] = {
     ("memall_read", "timeline"): TimelineInput,
     ("memall_read", "fed_query"): FedQueryInput,
     ("memall_read", "fed_conflicts"): FedConflictsInput,
+    ("memall_read", "recap"): RecapInput,
 
     # memall_persona
     ("memall_persona", "persona"): PersonaInput,
