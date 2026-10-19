@@ -4,6 +4,31 @@ All notable changes to MemALL are documented in this file.
 
 ## [Unreleased]
 
+### Added — proactive-memory improvements ported from dsh-meow-memory
+A deep review of [dsh-meow-memory](https://github.com/Phant0Meow/dsh-meow-memory) (a cross-session memory plugin for DeepSeek Harness) produced a prioritised list of design ideas; the P0/P1/P2 items were implemented here, adapted to MemALL's MCP-server architecture (the code itself is TypeScript/DSH-plugin and not reusable — these are ported *principles*).
+
+- **Tags activated (P0.1).** `memories.tags` existed in the schema and was writable via `ops:tag`, but was never FTS-indexed and never read — 0 of ~4.6k production rows carried a tag. Now a memory is findable by what it is *about*, not only by words that happen to appear in its text:
+  - `memall/core/tags.py` — `normalize_tags`, `tags_to_text` (FTS flattening), `extract_auto_tags` (entities + identifiers + jieba/bigram CJK terms), `merge_tags`, `tag_filter_sql` (exact `json_each` match).
+  - `memories_fts` gains a `tags` column; sync triggers + backfill/rebuild index `memall_split_cjk(memall_tags_text(tags))`. Migration `030_add_fts_tags_column.py` recreates the index for existing DBs.
+  - `capture()` auto-derives tags when the caller supplied none (`capture.auto_tags_enabled`); explicit tags always win.
+  - `retrieve()`/`enhanced_search()` gained `tags=[...]` + `tags_all` exact filters (in the shared WHERE builder, so facets honour them); exposed on `memall_read`.
+  - `db:backfill_tags` ops action retro-fits tags onto historical untagged rows (applied to production: 4572 rows tagged).
+  - Fixed a latent conflict: migration 029 re-created a stale 3-column trigger set that clobbered 030's 4-column triggers on fresh DBs; 029 is now a point-in-time repair that no-ops when the `tags` column already exists.
+- **Write deny-list (P0.2).** `security.disabled_projects` / `disabled_agents`: `capture()` rejects writes from disabled identities (mirrors meow-memory's `disabledWorkspaces`); `agent_round` skips them. Reads stay available — hiding stored history is a different concern from refusing to store it.
+- **Session seen-tracking (P0.3).** `memall/search/seen.py`: repeat queries within a session demote already-returned results below a protected top slice so novelty surfaces. The critical rule is inherited from meow-memory: seen items are **demoted, never excluded** — hard exclusion makes search drift further off with every query. `unified_search` over-fetches so the reorder has material. In-process bounded LRU with TTL; off by default; needs `session_id`.
+- **Config hot-reload (P0.4).** The MCP server is long-lived and silently served stale config until restart. `get_config()` re-stats the `~/.memall` config files at most every 2s and rebuilds transparently on change; `reload_config()` for immediate effect. Also fixed `load_json_config`/`load_yaml_config` docstrings that promised CWD resolution they never did (behaviour kept home-only; the reload tracker mirrors exactly what the loaders read, or it would reload-loop).
+- **KV-cache section order (P1.5).** `injection_formatted` now emits stable sections (PROFILE/CORRECTIONS/LESSONS/WORKFLOW/BEHAVIOR/OVERVIEW/DOMAIN) before volatile ones (DECISIONS/TODO/DISTILL/CONTINUITY/NARRATIVE). Previously the per-session `[NARRATIVE]` greeting sat at position 1 and cache-busted every stable section behind it.
+- **Pipeline failures are no longer silent (P1.6).** `run_pipeline` returned `status:"ok"` even with failed steps (meow-memory #41 lesson). A run with failed steps is now `status:"partial"` with `failed_steps` listed; quality-gated steps reported separately as `gated_steps`. `_finalize_pipeline_run` persists `partial`; the notifier and lightweight-pipeline consumer surface it.
+- **Idle-session sweep (P1.7).** `idle_session_sweep()` ends + harvests sessions whose newest memory is older than `scheduler.session_idle_minutes` (default 120), so an abandoned session stops re-harvesting an ever-growing window. Runs on the `agent_round` cadence.
+- **Injection-label localisation (P1.8).** `memall/i18n.py` (zh source-of-truth + en packs, `L(key, **fmt)`); the session-injection labels and greeting phrases — the text an agent re-reads every session — now follow `prompt.lang` (default zh). Scoped to labels; full prompt bodies intentionally left in place.
+- **Post-compaction recap (P1.10).** `memall_read action=recap`: a MemALL server cannot see the host's compaction event, so this is the pull surface — one cheap read returns the last session summary + recent L4/L5 decisions/tasks.
+- **Per-bug regression guards (P2.11).** `check_fixes.py` — one named guard per bug that was ever fixed silently (FTS5 CJK, dead auto-capture, classify demotion, English-L6 rejection, feedback loops, hash-hit promotion, MCP contract fields, config hot-reload, seen-never-drops, pipeline-partial, deny-list), runnable in one command. 14 guards + 4 suites.
+- **First-create notice (P2.13).** `session_start` on an empty store returns `first_create_notice` with the DB path, an unrecoverable-deletion warning, and the backup/doctor safety nets.
+
+### Changed
+- **Identity redirects are now logged (P2.12).** `normalize_agent_name()` maps any name containing a date or 10+ consecutive digits to `"system"` (a guard against parse artifacts). That redirect was silent — memories landed under the wrong agent and every later agent-scoped query missed them. Now warns once per distinct input, naming the reason.
+- P2.14 timer audit: all 16 `threading.Thread` sites in MemALL are `daemon=True`, so meow-memory's #60 class (a non-unref'd timer keeping the host process alive) cannot occur — documented, no change.
+
 ### Added
 - **Auto-capture is now wired up and functional.** `memall/auto_capture.py` registered its `post_tool_use` hook at module import, but no module ever imported it — the feature had never run in production. `mcp/adapter.py` now imports it.
 - **Auto-capture rewritten around explicit extractors.** The old condition read `arguments["content"]`, which only exists on capture-family calls — the same calls it then skipped, so it could never fire. Extraction now keys off `(tool, action)` with one extractor per source, reading `arguments` and `result` as appropriate:

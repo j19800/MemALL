@@ -11,6 +11,9 @@ MemALL is a sophisticated memory management system designed for AI agents, provi
   - Vector search using BGE embeddings
   - Hybrid search combining FTS5 and vector results
   - Unified search entrance that auto-routes between search modes based on query intent
+  - **Intent tags**: auto-derived keywords (entities + identifiers + CJK terms) indexed as their own FTS column, so a memory is findable by what it is *about*, not only by words in its text; exact-match `tags` filter for narrowing
+  - **Query enhancement layer**: faceted counts, synonym/history expansion, suggestions, topic clustering, score explanations, personalised ranking, context boosting (all opt-in)
+  - **Session novelty**: repeat queries within a session demote already-seen results (never exclude) so new material surfaces
 - **Configurable Quality Gates**: Adjustable quality thresholds and gate policies (strict/lenient) per memory level
 - **Contextual Recall**: Automatically surfaces related high-level memories after capturing new content
 - **Batch Operations**: Efficient batch memory capture and search
@@ -21,6 +24,8 @@ MemALL is a sophisticated memory management system designed for AI agents, provi
 - **MCP Server**: Full Model Context Protocol implementation for seamless integration with AI agents
 - **Lifecycle Management**: Automated distillation, forgetting, and maintenance operations
 - **Security & Access Control**: Agent-based ownership validation and visibility controls
+- **Write Deny-list**: `security.disabled_projects` / `disabled_agents` reject captures from test/audit/one-off identities before they pollute the store (reads stay available)
+- **Localisable Injection**: session-injection labels follow `prompt.lang` (`zh` / `en`)
 - **Extensible Architecture**: Plugin system and lifecycle hooks for customization
 
 ## Installation
@@ -408,18 +413,51 @@ Guardrails, so the system's own output cannot become its own evidence:
 - Repeated identical conclusions are de-duplicated per process.
 - Pure reads and the capture family never trigger auto-capture.
 
+### Post-compaction recap
+
+MemALL cannot see the host's context-compaction event, so `recap` is the pull
+surface for it — one cheap read-only call that restores what must not be lost:
+
+```python
+handle_call('memall_read', {'action': 'recap', 'agent_name': 'claude', 'limit': 5})
+# -> {"session": {...last summary...}, "recent": [L4/L5 decisions & tasks], "note": ...}
+```
+
+### Tags (intent keywords)
+
+Every capture without explicit tags gets a small derived keyword set (entities,
+identifiers like `FTS5`/`memory_update`, CJK words via jieba or bigrams). Tags
+are indexed in FTS5 as their own column, so `retrieve("Python")` finds memories
+*about* Python even when the body never says the word:
+
+```python
+# auto-derived on capture; explicit tags always win
+handle_call('memall_write', {'action': 'capture', 'content': '...', 'tags': ["检索", "FTS5"]})
+
+# exact-match filter (any / all)
+handle_call('memall_read', {'action': 'retrieve', 'tags': ["检索"], "tags_all": False})
+
+# retro-fit tags onto historical untagged rows (one-off maintenance)
+handle_call('memall_system', {'action': 'db', 'db_sub_action': 'backfill_tags',
+                              'dry_run': True})
+```
+
 ## Architecture
 
 MemALL follows a modular architecture with clearly separated concerns:
 
 - **Core**: Database models, memory capture, quality scoring
+  - `core/tags.py` — intent-keyword normalisation, extraction, SQL filtering
+  - `i18n.py` — session-injection label packs (`zh`/`en`)
 - **Search**: FTS5, vector, and hybrid search implementations
   - `search/enhancements.py` — the query enhancement layer (facets, expansion,
     suggestions, clustering, explainability, personalisation, context boosting)
+  - `search/seen.py` — per-session novelty demotion (demote, never exclude)
 - **MCP Layer**: Model Context Protocol implementation for agent integration
 - **Proactive**: `mcp/federation_tools.auto_inject` (session injection),
   `mcp/shared.ensure_session_started` (zero-cost delivery),
-  `scheduler/agent_round` (background rounds), `auto_capture` (auto-capture)
+  `scheduler/agent_round` (background rounds), `auto_capture` (auto-capture),
+  `pipeline.session.idle_session_sweep` (idle consolidation)
 - **Pipeline**: Intelligent capture, distillation, and maintenance workflows
 - **Pipeline Steps**: 
   - Standard steps: event_processor, enrich, cleanup, classify, procedure, time_slice, arc_status, echo, epoch, convergence, link, decay, backup, session, extract, entity_extraction, embed_index, reflect, distill_l7, distill, integrate, improve, observation, identity, reasoning, auto_summarize, discover_assoc, cross_agent, adaptive_ttl, archive
@@ -431,13 +469,22 @@ MemALL follows a modular architecture with clearly separated concerns:
 
 ### Running Tests
 
-```bash
-# Run unit tests
-python -m pytest tests/
+The regression suite is plain scripts at the repo root (no pytest required):
 
-# Run specific test modules
-python -m pytest tests/test_thin_waist.py
+```bash
+python check_fixes.py            # 14 per-bug guards + the 4 suites, one command
+python check_fixes.py --list     # the guard manifest
+python check_fixes.py fts_cjk    # run selected guards
+
+python test_search_features.py   # query enhancement layer (34 assertions)
+python test_auto_capture.py      # auto-capture + feedback-loop guards (19)
+python test_match_consistency.py # multi-value match semantics + recap (8)
+python test_m2_m3_m4.py          # thread inference / source_ids / promotion
 ```
+
+Each guard in `check_fixes.py` pins a bug that was once fixed *silently* (no
+error, wrong results). Add a guard whenever you fix such a bug — that is the
+practice ported from dsh-meow-memory's `check-fixes.mjs`.
 
 ### Adding New Features
 
@@ -445,6 +492,7 @@ python -m pytest tests/test_thin_waist.py
 2. Add appropriate tests for new functionality
 3. Update documentation as needed
 4. Ensure backward compatibility is maintained
+5. Config-gate anything that changes retrieval behaviour; default off
 
 ## License
 
