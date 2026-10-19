@@ -490,13 +490,25 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 except Exception:
                     logger.warning("session.py: silent error", exc_info=True)
 
-            # ── Formatted injection (4 sections, ~800 chars) ──
-            fmt_parts = [
-                "[CONTEXT] 会话上下文（首段先概括以下信息）：",
-            ]
+            # ── Formatted injection (~800 chars) ──
+            # KV-cache discipline (ported from dsh-meow-memory's design): the
+            # provider caches the longest identical token prefix, so sections
+            # that repeat verbatim across sessions must come FIRST and sections
+            # that change every session must come LAST.  The previous order
+            # inserted the volatile [NARRATIVE] greeting at position 1, which
+            # cache-busted every stable section behind it.
+            #
+            # Two buckets, joined header + stable + volatile.  Keep it that
+            # way: a new section belongs in `stable` only if its text is
+            # byte-identical across sessions when the underlying memories do
+            # not change.
+            stable_parts: list[str] = []
+            volatile_parts: list[str] = []
 
-            # [PROFILE]
             l5_todos = injection.get("pending_tasks", [])[:5]
+
+            # ── STABLE: identity, distilled knowledge, routines ──
+            # [PROFILE]
             id_traits = injection.get("identity_traits", {})
             l1_list = id_traits.get("l1_identity", [])
             l7_list = id_traits.get("l7_preferences", [])
@@ -506,12 +518,76 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                     parts.append("L1=" + "·".join(t["snippet"] for t in l1_list[:3] if t.get("snippet")))
                 if l7_list:
                     parts.append("L7=" + "·".join(t["snippet"] for t in l7_list[:3] if t.get("snippet")))
-                fmt_parts.append(" ".join(parts))
+                stable_parts.append(" ".join(parts))
+
+            # [CORRECTIONS] L6 reflections — lessons learned
+            reflections = injection.get("recent_reflections", [])
+            if reflections:
+                tips = " · ".join(r.get("summary", "")[:60] for r in reflections[:3] if r.get("summary"))
+                if not tips:
+                    tips = " · ".join(r.get("category", "") for r in reflections[:3])
+                stable_parts.append(f"[CORRECTIONS] {tips}")
+
+            # [LESSONS] L7 learned patterns (from L6 reflection distill)
+            l7_lessons = injection.get("l7_lessons", [])
+            if l7_lessons:
+                def _fmt_lesson(l):
+                    txt = l["lesson"][:80]
+                    w = l.get("weight", 1)
+                    return f"{txt}[x{w}]" if w > 1 else txt
+                lessons_tips = " · ".join(_fmt_lesson(l) for l in l7_lessons[:3])
+                stable_parts.append(f"[LESSONS] {lessons_tips}")
+
+            # [WORKFLOW] L3 workflow skills — available tools/routines
+            skills = injection.get("workflow_skills", [])
+            if skills:
+                names = " · ".join(s["subject"] for s in skills[:3])
+                stable_parts.append(f"[WORKFLOW] {names}")
+
+            # [BEHAVIOR] L3 behavioral stage patterns (from auto_inject cache)
+            bhv_lines = injection.get("behavior_patterns", [])
+            if bhv_lines:
+                stable_parts.append(f"[BEHAVIOR] {bhv_lines[0]}")
+
+            # [OVERVIEW] L10 terminal-level panoramic
+            overview = injection.get("panoramic_overview", [])
+            if overview:
+                tops = " · ".join(o["subject"] for o in overview[:2] if o.get("subject"))
+                stable_parts.append(f"[OVERVIEW] {tops}")
+
+            # [DOMAIN] L11 domain strategy knowledge
+            domain = injection.get("domain_knowledge", [])
+            if domain:
+                tops = " · ".join(d["subject"] for d in domain[:2] if d.get("subject"))
+                stable_parts.append(f"[DOMAIN] {tops}")
+
+            # ── VOLATILE: counts and state that change every session ──
+            # [DECISIONS] L4 decision arcs
+            darcs = injection.get("decision_arcs", {})
+            open_dec = darcs.get("open", [])
+            in_prog = darcs.get("in_progress", [])
+            if open_dec or in_prog:
+                parts = ["[DECISIONS]"]
+                if open_dec:
+                    parts.append(f"待决({len(open_dec)})")
+                if in_prog:
+                    parts.append(f"进行中({len(in_prog)})")
+                volatile_parts.append(" ".join(parts))
 
             # [TODO]
             if l5_todos:
                 items = " | ".join(t["subject"][:40] for t in l5_todos[:5])
-                fmt_parts.append(f"[TODO] {items}")
+                volatile_parts.append(f"[TODO] {items}")
+
+            # [DISTILL] pending groups
+            try:
+                from memall.mcp.tools.distill import handle as _distill_handle
+                _distill_result = json.loads(_distill_handle({"action": "list", "limit": 5}))
+                _pending = _distill_result.get("pending", [])
+                if _pending:
+                    volatile_parts.append(f"[DISTILL] {len(_pending)} 组待写摘要，调 memall_system action=distill 查看")
+            except (ImportError, json.JSONDecodeError) as e:
+                logger.warning(f"Failed to query pending distill items: {e}")
 
             # [CONTINUITY]
             if agent_name:
@@ -529,81 +605,20 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                             ).fetchone()[0]
                             if nd > 0:
                                 cont += f" {nd}dec"
-                        fmt_parts.append(cont)
+                        volatile_parts.append(cont)
                 except Exception as e:
                     logger.warning(f"Failed to build CONTINUITY narrative line: {e}")
 
-            # [NARRATIVE] greeting
+            # [NARRATIVE] greeting — last, it differs every session
             narrative_line = _build_narrative_greeting(narrative_data, agent_name)
             if narrative_line:
-                fmt_parts.insert(1, "")
-                fmt_parts.insert(1, narrative_line)
+                volatile_parts.append(narrative_line)
 
-            # [CORRECTIONS] L6 reflections — lessons learned
-            reflections = injection.get("recent_reflections", [])
-            if reflections:
-                tips = " · ".join(r.get("summary", "")[:60] for r in reflections[:3] if r.get("summary"))
-                if not tips:
-                    tips = " · ".join(r.get("category", "") for r in reflections[:3])
-                fmt_parts.append(f"[CORRECTIONS] {tips}")
-
-            
-            # [LESSONS] L7 learned patterns (from L6 reflection distill)
-            l7_lessons = injection.get("l7_lessons", [])
-            if l7_lessons:
-                def _fmt_lesson(l):
-                    txt = l["lesson"][:80]
-                    w = l.get("weight", 1)
-                    return f"{txt}[x{w}]" if w > 1 else txt
-                lessons_tips = " · ".join(_fmt_lesson(l) for l in l7_lessons[:3])
-                fmt_parts.append(f"[LESSONS] {lessons_tips}")
-
-# [WORKFLOW] L3 workflow skills — available tools/routines
-            skills = injection.get("workflow_skills", [])
-            if skills:
-                names = " · ".join(s["subject"] for s in skills[:3])
-                fmt_parts.append(f"[WORKFLOW] {names}")
-
-            # [BEHAVIOR] L3 behavioral stage patterns (from auto_inject cache)
-            bhv_lines = injection.get("behavior_patterns", [])
-            if bhv_lines:
-                fmt_parts.append(f"[BEHAVIOR] {bhv_lines[0]}")
-
-            # [DECISIONS] L4 decision arcs
-            darcs = injection.get("decision_arcs", {})
-            open_dec = darcs.get("open", [])
-            in_prog = darcs.get("in_progress", [])
-            if open_dec or in_prog:
-                parts = ["[DECISIONS]"]
-                if open_dec:
-                    parts.append(f"待决({len(open_dec)})")
-                if in_prog:
-                    parts.append(f"进行中({len(in_prog)})")
-                fmt_parts.append(" ".join(parts))
-
-            # [OVERVIEW] L10 terminal-level panoramic
-            overview = injection.get("panoramic_overview", [])
-            if overview:
-                tops = " · ".join(o["subject"] for o in overview[:2] if o.get("subject"))
-                fmt_parts.append(f"[OVERVIEW] {tops}")
-
-            # [DOMAIN] L11 domain strategy knowledge
-            domain = injection.get("domain_knowledge", [])
-            if domain:
-                tops = " · ".join(d["subject"] for d in domain[:2] if d.get("subject"))
-                fmt_parts.append(f"[DOMAIN] {tops}")
-
-            # [DISTILL] pending groups
-            try:
-                from memall.mcp.tools.distill import handle as _distill_handle
-                _distill_result = json.loads(_distill_handle({"action": "list", "limit": 5}))
-                _pending = _distill_result.get("pending", [])
-                if _pending:
-                    fmt_parts.append(f"[DISTILL] {len(_pending)} 组待写摘要，调 memall_system action=distill 查看")
-            except (ImportError, json.JSONDecodeError) as e:
-                logger.warning(f"Failed to query pending distill items: {e}")
-
-            result["injection_formatted"] = chr(10).join(fmt_parts)
+            result["injection_formatted"] = chr(10).join(
+                ["[CONTEXT] 会话上下文（首段先概括以下信息）："]
+                + stable_parts
+                + volatile_parts
+            )
 
         return result
     finally:

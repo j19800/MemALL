@@ -437,7 +437,9 @@ def _run_capture_pipeline() -> None:
         logger.info("on_capture: lightweight pipeline %s in %.2fs", status, elapsed)
 
         step_counts = {}
-        if status == "ok":
+        # "partial" = at least one step failed; still worth logging the step
+        # counts so the failure is visible alongside what did succeed.
+        if status in ("ok", "partial"):
             for step_name, step_result in result.get("results", {}).items():
                 if isinstance(step_result, int):
                     step_counts[step_name] = step_result
@@ -449,9 +451,15 @@ def _run_capture_pipeline() -> None:
         # Record event
         oks = sum(1 for v in step_counts.values() if v > 0)
         total = sum(step_counts.values())
+        failed_steps = result.get("failed_steps") or []
+        desc = (
+            f"Lightweight pipeline {status} ({elapsed:.1f}s, {oks} steps, {total} items)"
+        )
+        if failed_steps:
+            desc += f" — failed: {', '.join(failed_steps)}"
         _record_plugin_event(
-            "on_capture",
-            f"Lightweight pipeline {status} ({elapsed:.1f}s, {oks} steps, {total} items)",
+            "on_capture", desc,
+            status="failed" if failed_steps else "ok",
         )
     except Exception:
         logger.warning("on_capture lightweight pipeline failed", exc_info=True)

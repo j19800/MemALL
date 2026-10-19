@@ -314,9 +314,17 @@ def _update_pipeline_run(run_id: int, entries: list[dict]) -> None:
 
 def _finalize_pipeline_run(run_id: int, entries: list[dict],
                             results: dict, error: str | None = None) -> None:
-    """Mark a pipeline run as completed or failed, with final stats."""
+    """Mark a pipeline run as completed, partial, or failed, with final stats."""
     elapsed_ms = int((time.time() - _pipeline_start_time) * 1000) if _pipeline_start_time else 0
-    status = "failed" if error else "completed"
+    if error:
+        status = "failed"
+    elif any(e.get("status") == "failed" for e in entries):
+        # Whole run did not raise, but at least one step failed → "partial",
+        # so `pipeline status` / doctor surface dropped work instead of a
+        # misleading "completed" (dsh-meow-memory #41 lesson).
+        status = "partial"
+    else:
+        status = "completed"
     conn = get_conn()
     try:
         now = datetime.now(timezone.utc).isoformat()
@@ -642,9 +650,34 @@ def run_pipeline(
             logger.warning(f"Failed to close pipeline_conn in finally: {e}")
 
     elapsed = time.time() - _pipeline_start_time
-    dispatch_lifecycle(HOOK_POST_PIPELINE, status="completed", results=results, elapsed=elapsed)
+    # ── Surface step failures in the run status ──
+    # Returning "ok" when individual steps failed is the "silent consolidation"
+    # antipattern (dsh-meow-memory issue #41): a run that looked green had
+    # actually dropped work.  The steps array always recorded the failures, but
+    # callers only inspect the top-level status, so the signal was lost.
+    #
+    # A hard failure is status="failed"; a quality-gate miss keeps status="ok"
+    # but sets quality.passed=False (the step ran, its output just looked
+    # degenerate) — a different severity, reported separately.
+    failed_steps = [e["step"] for e in entries if e.get("status") == "failed"]
+    gated_steps = [
+        e["step"] for e in entries
+        if e.get("status") == "ok" and (e.get("quality") or {}).get("passed") is False
+    ]
+    run_status = "partial" if failed_steps else "completed"
+    dispatch_lifecycle(HOOK_POST_PIPELINE, status=run_status, results=results, elapsed=elapsed)
     HookRegistry.dispatch(HOOK_STOP, arguments={"results": results, "elapsed": elapsed})
-    return {"status": "ok", "results": results, "elapsed": elapsed}
+    out = {"status": "ok", "results": results, "elapsed": elapsed}
+    if failed_steps:
+        out["status"] = "partial"
+        out["failed_steps"] = failed_steps
+        logger.warning(
+            "Pipeline finished with %d failed step(s): %s",
+            len(failed_steps), ", ".join(failed_steps),
+        )
+    if gated_steps:
+        out["gated_steps"] = gated_steps
+    return out
 
 
 def run_lightweight_pipeline(
