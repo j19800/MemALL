@@ -410,6 +410,24 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
 
         result = {"session_id": sid, "agent_name": agent_name, "started_at": now, "status": "active"}
 
+        # ── First-create notice (P2.13, from dsh-meow-memory #37) ──
+        # A brand-new store is invisible: the agent never learns where its
+        # memories live or that deletion is unrecoverable.  One notice per
+        # empty-store session start, pointing at the file and the two safety
+        # nets (backups dir + doctor).  Cheap: one COUNT, short-circuits once
+        # any memory exists.
+        try:
+            total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+            if total == 0:
+                from memall.core.db import DB_PATH
+
+                result["first_create_notice"] = (
+                    f"记忆库为空。位置：{DB_PATH}（删除不可恢复，请勿手工删文件）。"
+                    "系统每日自动备份到同目录 backups/，memall doctor 可查备份状态。"
+                )
+        except sqlite3.Error:
+            logger.debug("first-create notice skipped", exc_info=True)
+
         # Phase 8: auto-inject if agent_name given
         if auto_inject and agent_name:
             from memall.mcp.federation_tools import auto_inject as _auto_inject
