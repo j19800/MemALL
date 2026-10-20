@@ -246,9 +246,10 @@ def _aggregate_l6(conn, upgraded_ids: list, now: str) -> int:
         l6_project = proj_row["project"] if proj_row else ""
 
         conn.execute(
-            "INSERT INTO memories (content, content_hash, level, agent_name, category, project, summary, occurred_at, created_at, updated_at, metadata) "
-            "VALUES (?, ?, 'L6', ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO memories (content, content_hash, level, agent_name, category, project, subject, summary, occurred_at, created_at, updated_at, metadata) "
+            "VALUES (?, ?, 'L6', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (content, ch, normalize_agent_name(agent_label), cat, l6_project,
+             f"[L6 聚合] {agent_label}：{len(mids)} 条反思聚合"[:120],
              f"{len(mids)} 条反思聚合", now, now, now,
              json.dumps({"l6_source": "aggregate", "source_ids": mids, "quality": "aggregated"})),
         )

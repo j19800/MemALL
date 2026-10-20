@@ -181,7 +181,7 @@ def cross_agent_bridge_step() -> dict:
             conn.execute(
                 "INSERT OR IGNORE INTO memories (content, content_hash, level, agent_name, category, subject, occurred_at, created_at, updated_at) "
                 "VALUES (?, ?, 'L9', 'system', 'bridge', ?, ?, ?, ?)",
-                (content, h, f"Bridge: {a1} ↔ {a2} ({project})", now, now, now),
+                (content, h, f"[L9 桥接] {a1} 与 {a2} 在「{project}」项目平行工作"[:120], now, now, now),
             )
             bridges_created += 1
 

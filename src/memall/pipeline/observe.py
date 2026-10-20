@@ -273,9 +273,10 @@ def _update_weekly_monthly(conn) -> dict:
             if cur:
                 continue
             conn.execute(
-                "INSERT INTO memories (content, content_hash, level, agent_name, category, project, summary, occurred_at, created_at, updated_at, metadata) "
-                "VALUES (?, ?, 'L6', ?, 'reflection', ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO memories (content, content_hash, level, agent_name, category, project, subject, summary, occurred_at, created_at, updated_at, metadata) "
+                "VALUES (?, ?, 'L6', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?)",
                 (content, ch, normalize_agent_name(agent), "",
+                 f"[L6 周反思] {agent} {wk}：共 {len(wk_mems)} 条"[:120],
                  f"📅 周反思 {wk}", now, now, now,
                  json.dumps({"l6_source": "weekly_aggregate", "source_count": len(wk_mems)})),
             )
@@ -298,9 +299,10 @@ def _update_weekly_monthly(conn) -> dict:
             if conn.execute("SELECT id FROM memories WHERE content_hash = ?", (ch,)).fetchone():
                 continue
             conn.execute(
-                "INSERT INTO memories (content, content_hash, level, agent_name, category, project, summary, occurred_at, created_at, updated_at, metadata) "
-                "VALUES (?, ?, 'L6', ?, 'reflection', ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO memories (content, content_hash, level, agent_name, category, project, subject, summary, occurred_at, created_at, updated_at, metadata) "
+                "VALUES (?, ?, 'L6', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?)",
                 (content, ch, normalize_agent_name(agent), "",
+                 f"[L6 月反思] {agent} {mk}：共 {len(mo_mems)} 条"[:120],
                  f"📅 月反思 {mk}", now, now, now,
                  json.dumps({"l6_source": "monthly_aggregate", "source_count": len(mo_mems)})),
             )
@@ -353,9 +355,10 @@ def _update_growth_log(conn, report: dict) -> dict:
         content = today_entry + "\n\n*反思时间线始于 " + today + "*"
         ch = hashlib.sha256(content.encode()).hexdigest()
         conn.execute(
-            "INSERT INTO memories (content, content_hash, level, agent_name, category, project, summary, occurred_at, created_at, updated_at, metadata) "
-            "VALUES (?, ?, 'L6', 'system', 'reflection', ?, ?, ?, ?, ?, ?)",
-            (content, ch, "", "📅 反思时间线", now, now, now, json.dumps({"l6_source": "growth_log"})),
+            "INSERT INTO memories (content, content_hash, level, agent_name, category, project, subject, summary, occurred_at, created_at, updated_at, metadata) "
+            "VALUES (?, ?, 'L6', 'system', 'reflection', ?, ?, ?, ?, ?, ?, ?)",
+            (content, ch, "", f"[L6 反思] 反思时间线（始于 {today}）",
+             "📅 反思时间线", now, now, now, json.dumps({"l6_source": "growth_log"})),
         )
         new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         return {"updated": True, "created": True, "id": new_id}

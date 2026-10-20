@@ -152,13 +152,29 @@ def _import_memories(conn, memories: list, agent_name: str) -> tuple:
                 old_id_to_new[m["id"]] = row["id"]
             continue
 
+        subj = (m.get("subject") or "").strip()
+        if not subj:
+            # Remote payload arrived without a title: derive a readable one
+            # locally. The store invariant is "every memory has a
+            # human-readable subject" — sync must not smuggle blanks past
+            # the capture() funnel it mirrors.
+            from memall.core.thin_waist import _make_subject
+
+            subj = _make_subject(
+                m.get("content", ""),
+                m.get("category", "general"),
+                normalize_level(m.get("level", "P2")),
+                agent_name,
+                m.get("owner", ""),
+            )
+
         fields = {
             "content": m.get("content", ""),
             "content_hash": h,
             "level": normalize_level(m.get("level", "P2")),
             "owner": m.get("owner", ""),
             "agent_name": agent_name,
-            "subject": m.get("subject", ""),
+            "subject": subj,
             "project": m.get("project", ""),
             "category": m.get("category", "general"),
             "summary": m.get("summary", ""),

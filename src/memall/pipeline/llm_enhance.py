@@ -118,7 +118,7 @@ def auto_summarize_step() -> dict:
                 "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, occurred_at, created_at, updated_at) "
                 "VALUES (?, ?, 'L9', ?, ?, ?, ?, ?, ?)",
                 (summary, h, agent, category,
-                 f"Auto-summary: {category} ({len(ids)} items)",
+                 f"[L9 摘要] {agent} 近期活动：{category}类 {len(ids)} 条记录"[:120],
                  now, now, now),
             )
             l9_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]

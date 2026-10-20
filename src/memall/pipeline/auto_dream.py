@@ -133,7 +133,9 @@ def _extract_patterns(conn) -> dict:
                 conn.execute(
                     "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, occurred_at, created_at, updated_at) "
                     "VALUES (?, ?, 'L9', ?, 'pattern', ?, ?, ?, ?)",
-                    (pattern_content, h, agent, f"Pattern: {agent}", now, now, now),
+                    (pattern_content, h, agent,
+                     f"[L9 模式] {agent} 的重复主题：{', '.join(top[:5])}"[:120],
+                     now, now, now),
                 )
                 found += 1
 
@@ -179,7 +181,7 @@ def _distill_knowledge(conn) -> dict:
             conn.execute(
                 "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, weight, occurred_at, created_at, updated_at) "
                 "VALUES (?, ?, 'L10', 'system', 'knowledge', ?, ?, ?, ?, ?)",
-                (content, h, f"Knowledge: {topic}", len(members), now, now, now),
+                (content, h, f"[L10 知识] 主题：{topic}"[:120], len(members), now, now, now),
             )
             created += 1
 
