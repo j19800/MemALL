@@ -849,7 +849,33 @@ def _serve_with_watch() -> None:
     import memall
 
     pkg_dir = Path(memall.__file__).parent
+
+    # ── stdout belongs to the MCP transport ──────────────────────────────
+    # The CLI calls log_setup.configure(), which installs a StreamHandler on
+    # *sys.stdout*.  In watch mode stdout carries the child's JSON-RPC
+    # frames, so a single log line corrupts the protocol (verified: the
+    # watcher's first "watch mode: server pid=…" line landed on stdout).
+    # Re-point every stdout handler at stderr, and give this module its own
+    # stderr handler that does not propagate back to the root.
+    _stdout_handlers = [
+        h for h in logging.getLogger().handlers
+        if isinstance(h, logging.StreamHandler)
+        and getattr(h, "stream", None) is sys.stdout
+    ]
+    for h in _stdout_handlers:
+        try:
+            h.setStream(sys.stderr)
+        except Exception:
+            logging.getLogger().removeHandler(h)
+
     _log = logging.getLogger("memall.serve.watch")
+    _log.propagate = False
+    if not any(isinstance(h, logging.StreamHandler) for h in _log.handlers):
+        _wh = logging.StreamHandler(sys.stderr)
+        _wh.setFormatter(logging.Formatter(
+            "[memall watch] %(asctime)s %(message)s", datefmt="%H:%M:%S"))
+        _log.addHandler(_wh)
+    _log.setLevel(logging.INFO)
 
     def _snapshot() -> dict:
         out = {}

@@ -78,4 +78,18 @@ auto_inject 会自动返回分配给自己的 `pending_tasks`（id/content/subje
 
 ---
 
+## 七、实时通讯总线（realtime bus，解决 agent 之间「即时」通讯）
+
+> 背景：原推模式 scheduler 死 4 个月（OpenBLAS/DLL 初始化失败 0xC0000142），agent 间无实时通道，只能靠 session_start 拉取。
+> 方案与实证报告（**所有 agent 接手前必读**）：
+> `D:\Agent项目\Claw\memall-bus\技术报告-多Agent即时通讯总线-供Agent调研学习.md`
+> 代码：`D:\Agent项目\Claw\memall-bus\`（纯标准库 asyncio+sqlite3，**零外部依赖**，**8/8 精确测试通过**）。
+
+- **当前状态**：原型已实证可用（在线延迟 p50≈6ms/p99≈13ms、1000 条全送达 154msg/s、离线 mailbox 不丢、1MB 完整），**尚未接回主库 MCP server（P1 待做）**。
+- **协议**：TCP 行分隔 JSON（127.0.0.1:8770）；op 含 hello/publish/inbox/ack；响应用 req_id 三队列路由（实时推送 / inbox 历史 / 请求回包）。
+- **三条修复底线（改代码前必跑 test_suite.py）**：① 单连接禁止多协程抢读 reader；② inbox 响应必须带 req_id 与实时推送区分；③ asyncio readline 默认 64KB 行限制，大 payload 须设 limit=16MB。
+- **接回主库设计**：MCP 新增 `memall_msg_send` / `memall_msg_inbox`；AGENTS 派单改为 publish 实时推；与 auto_inject 拉取共读 mailbox，去重靠 status/read。
+- **开放调研项**：安全鉴权与 agent 隔离（当前无 auth）、常驻封装、跨机后端（Redis/NATS）、A2A 互通桥接——详见报告第 8 节。
+
+
 _本协议自身也是记忆：level=L4, category=decision, project=memall。修改须走 memall_discussion 收敛 + 老陈批准。_
