@@ -1,5 +1,25 @@
+"""M2 / M3 / M4 regression checks (thread inference, source_ids, promotion).
+
+Isolation: runs against a THROWAWAY database.  This suite writes memories
+(deleting its own rows by project prefix) — running it against the
+production store is what left 22 stray "test_agent" rows there.
+"""
+import os
 import sys
+import tempfile
+
 sys.path.insert(0, '.')
+
+# Isolate BEFORE importing memall (DB_PATH resolves at import time).
+_TMP = tempfile.mkdtemp(prefix="memall_m2m3m4_")
+os.environ["MEMALL_DB_PATH"] = os.path.join(_TMP, "test.db")
+
+import memall.config as _mc  # noqa: E402
+_mc.reset_config()
+_sec = dict(_mc.get_config("security") or {})
+_sec["disabled_agents"] = []
+_sec["disabled_projects"] = []
+_mc._config["security"] = _sec
 
 from memall.core.thin_waist import _infer_thread_root, MemoryInput
 from memall.core.models import Memory

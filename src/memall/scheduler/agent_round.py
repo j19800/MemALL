@@ -31,21 +31,17 @@ def get_active_agents() -> list[str]:
     Agents on the ``security.disabled_agents`` write deny-list are excluded:
     the background round would otherwise keep generating P2 reminder
     memories for identities the deployment has explicitly opted out of
-    (test/audit agents, one-off task workers).
+    (test/audit agents, one-off task workers).  Patterns (``autocap*``) are
+    supported — see ``memall.core.denylist``.
     """
-    from memall.config import get_config
+    from memall.core.denylist import is_disabled_agent
 
-    disabled = {
-        str(a).strip().lower()
-        for a in (get_config("security.disabled_agents", []) or [])
-        if str(a).strip()
-    }
     with pool_conn() as conn:
         rows = conn.execute(
             "SELECT agent_name FROM identities WHERE status = 'active'"
         ).fetchall()
         return [r["agent_name"] for r in rows
-                if str(r["agent_name"]).strip().lower() not in disabled]
+                if not is_disabled_agent(r["agent_name"])]
 
 
 def notify_pending_tasks(agent_name: str) -> list[dict]:

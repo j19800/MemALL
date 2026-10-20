@@ -9,6 +9,10 @@ loss.
 MemALL's equivalent multi-value fields are ``tags`` (JSON array) and
 ``metadata.participants`` (JSON array).  This test locks in that every path
 matches them with the SAME semantics, so a future edit cannot reintroduce #61.
+
+Isolation: runs against a throwaway database with the write deny-list
+neutralised — the deployment's ban patterns target the *production* store and
+must not disable the suite's own writes.
 """
 import json
 import os
@@ -19,6 +23,13 @@ sys.path.insert(0, r"E:\MemALL\src")
 
 tmp = tempfile.mkdtemp(prefix="memall_p19_")
 os.environ["MEMALL_DB_PATH"] = os.path.join(tmp, "test.db")
+
+import memall.config as _mc  # noqa: E402
+_mc.reset_config()
+_sec = dict(_mc.get_config("security") or {})
+_sec["disabled_agents"] = []
+_sec["disabled_projects"] = []
+_mc._config["security"] = _sec
 
 from memall.core.db import init_db, get_conn  # noqa: E402
 from memall.core.thin_waist import capture, retrieve  # noqa: E402

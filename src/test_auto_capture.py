@@ -1,9 +1,17 @@
-"""Auto-capture and proactive-memory verification.
+"""
+Auto-capture and proactive-memory verification.
 
 Run:  E:\\MemALL\\.venv\\Scripts\\python.exe test_auto_capture.py
 
 Covers the auto-capture feature end to end plus the guardrails that keep the
 system's own output from becoming its own evidence.
+
+Isolation
+---------
+Runs against a THROWAWAY database and neutralises the write deny-list.
+Both matter: the deployment's ``security.disabled_agents`` patterns exist to
+keep test identities out of the *production* store, and running this suite
+against the production DB is exactly how it polluted it in the first place.
 
 NOTE on agent names: ``normalize_agent_name`` maps any name containing a date
 or 10+ consecutive digits to ``system``, so this test uses a letter-only suffix.
@@ -11,11 +19,25 @@ A timestamp suffix would silently redirect every probe row and make the
 assertions look like failures.
 """
 import json
+import os
 import random
 import string
 import sys
+import tempfile
 
 sys.path.insert(0, r"E:\MemALL\src")
+
+# Isolate BEFORE importing memall (DB_PATH is resolved at import time).
+_TMP = tempfile.mkdtemp(prefix="memall_autocap_test_")
+os.environ["MEMALL_DB_PATH"] = os.path.join(_TMP, "test.db")
+
+import memall.config as _mc  # noqa: E402
+_mc.reset_config()
+_sec = dict(_mc.get_config("security") or {})
+_sec["disabled_agents"] = []
+_sec["disabled_projects"] = []
+_mc._config["security"] = _sec
+
 from memall.mcp import adapter  # noqa: E402,F401
 from memall.mcp.adapter import handle_call  # noqa: E402
 from memall.core.db import get_conn  # noqa: E402

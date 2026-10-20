@@ -637,27 +637,21 @@ def _capture_check_disabled(data: MemoryInput) -> None:
 
     ``security.disabled_projects`` / ``security.disabled_agents`` mirror
     dsh-meow-memory's ``disabledWorkspaces``: one-off task agents and test
-    identities otherwise pollute the long-term store.  Only the *write* path
-    is gated — reads stay available so already-stored history remains
-    inspectable.  Raises ValueError with an actionable message naming the
-    offending value and the config key to edit.
+    identities otherwise pollute the long-term store.  Patterns support globs
+    (``autocap*``) — per-run suffixed identities cannot be enumerated by hand,
+    which is exactly the case this gate exists for.  Only the *write* path is
+    gated; reads stay available so already-stored history remains inspectable.
+
+    Raises ValueError naming the offending value and the config key to edit.
     """
-    disabled_projects = {
-        str(p).strip().lower()
-        for p in (get_config("security.disabled_projects", []) or [])
-        if str(p).strip()
-    }
-    if data.project and data.project.strip().lower() in disabled_projects:
+    from memall.core.denylist import is_disabled_agent, is_disabled_project
+
+    if data.project and is_disabled_project(data.project):
         raise ValueError(
             f"capture: project {data.project!r} is disabled "
             f"(security.disabled_projects) — memory not stored"
         )
-    disabled_agents = {
-        str(a).strip().lower()
-        for a in (get_config("security.disabled_agents", []) or [])
-        if str(a).strip()
-    }
-    if data.agent_name and data.agent_name.strip().lower() in disabled_agents:
+    if data.agent_name and is_disabled_agent(data.agent_name):
         raise ValueError(
             f"capture: agent {data.agent_name!r} is disabled "
             f"(security.disabled_agents) — memory not stored"

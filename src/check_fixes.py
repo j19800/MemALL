@@ -25,13 +25,25 @@ sys.path.insert(0, SRC)
 
 
 def _fresh_db() -> str:
-    """Point MemALL at a throwaway DB and return its path."""
+    """Point MemALL at a throwaway DB and return its path.
+
+    Also isolates the deny-list: the deployment's
+    ``security.disabled_agents`` patterns (which exist to keep test/audit
+    identities out of the *production* store) must not disable the guards
+    themselves — the guards write under agents like "guard" and would be
+    rejected by their own ban list.  The ban lists are neutralised for the
+    duration of the guard.
+    """
     tmp = tempfile.mkdtemp(prefix="memall_guard_")
     path = os.path.join(tmp, "guard.db")
     os.environ["MEMALL_DB_PATH"] = path
     # Reset cached singletons so the next import-time DB_PATH resolves fresh.
     import memall.config as mc
     mc.reset_config()
+    sec = dict(mc.get_config("security") or {})
+    sec["disabled_agents"] = []
+    sec["disabled_projects"] = []
+    mc._config["security"] = sec
     import memall.core.db as mdb
     mdb.DB_PATH = __import__("pathlib").Path(path)
     mdb._auto_init_done = False
@@ -292,6 +304,51 @@ def guard_disabled_write_denylist() -> Tuple[bool, str]:
         mc.reset_config()
 
 
+def guard_tests_use_isolated_db() -> Tuple[bool, str]:
+    """No test script may write the production store.
+
+    The suites used to run against the live DB — test_auto_capture.py and
+    test_m2_m3_m4.py each left rows behind (22 "test_agent" rows and ~7
+    random-suffixed "autocap*" batches), indistinguishable from real
+    history.  They now pin MEMALL_DB_PATH to a temp dir and neutralise the
+    deny-list.  This guard keeps them that way.
+    """
+    import re as _re
+
+    required = {
+        "test_auto_capture.py": ["MEMALL_DB_PATH", "disabled_agents"],
+        "test_match_consistency.py": ["MEMALL_DB_PATH", "disabled_agents"],
+        "test_m2_m3_m4.py": ["MEMALL_DB_PATH", "disabled_agents"],
+        "test_search_features.py": ["MEMALL_DB_PATH"],
+    }
+    problems = []
+    for fname, needles in required.items():
+        path = os.path.join(SRC, fname)
+        if not os.path.exists(path):
+            problems.append(f"{fname}: missing")
+            continue
+        src = open(path, encoding="utf-8").read()
+        for needle in needles:
+            if needle not in src:
+                problems.append(f"{fname}: no {needle}")
+        # The temp DB must be set BEFORE the memall import.
+        if src.find("MEMALL_DB_PATH") > src.find("from memall"):
+            problems.append(f"{fname}: MEMALL_DB_PATH set after the memall import")
+    return not problems, "; ".join(problems) or "all suites isolated"
+
+
+def guard_denylist_supports_globs() -> Tuple[bool, str]:
+    """The deny-list matches globs (autocap*), because per-run suffixed
+    identities cannot be enumerated by hand."""
+    from memall.core.denylist import matches_any
+
+    ok = (matches_any("autocapdimtsxcg", ["autocap*"])
+          and not matches_any("workbuddy", ["autocap*"])
+          and matches_any("mcp_audit", ["mcp_audit"])
+          and matches_any("probe6", ["probe?"]))
+    return ok, "glob/exact matching"
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -307,6 +364,8 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "seen_never_drops": guard_seen_never_drops,
     "pipeline_partial": guard_pipeline_partial,
     "disabled_write_denylist": guard_disabled_write_denylist,
+    "tests_use_isolated_db": guard_tests_use_isolated_db,
+    "denylist_supports_globs": guard_denylist_supports_globs,
 }
 
 # Full test files run as subprocesses when no guard name is given.
