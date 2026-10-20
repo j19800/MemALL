@@ -1015,6 +1015,101 @@ def guard_session_note_acknowledged() -> Tuple[bool, str]:
                 f"acked={acked} dropped={gone}")
 
 
+def guard_fallback_produces_self_evolution() -> Tuple[bool, str]:
+    """The in-process fallback must be ABLE to produce L9/L10.
+
+    Audit P0-1: run_lightweight_pipeline skips distill/integrate and the
+    only periodic full run lived in the daemon, so a serve-only deployment
+    never produced an L9 (distilled) or L10 (cross-domain) memory — the
+    11-layer model stopped at L7.  This checks the fallback's plumbing
+    (pending-work detection + claim) without running the expensive steps.
+    """
+    _fresh_db()
+    from memall.core.db import get_conn, init_db
+    from memall.core.thin_waist import capture
+    from memall.pipeline import fallback
+
+    init_db()
+    capture("兜底定时器验证：这条知识记忆应当被识别为可蒸馏输入，"
+            "让进程内的自进化兜底有活可干。",
+            level="L4", category="decision", project="g", agent_name="fb", owner="老陈")
+
+    work = fallback.has_distillable_input()
+    events = fallback.pending_event_count()
+    # claim must succeed on a quiet DB with no recent run
+    claimed = fallback.claim_run(min_age_seconds=0)
+    # and a second claim must be refused while the first one is "running"
+    second = fallback.claim_run(min_age_seconds=0)
+
+    conn = get_conn()
+    running = conn.execute(
+        "SELECT COUNT(*) FROM pipeline_runs WHERE status='running'").fetchone()[0]
+    # Do not leave a phantom "running" row behind: it would block the real
+    # fallback (and the next run of this guard) for the rest of the process.
+    conn.execute("UPDATE pipeline_runs SET status='completed', "
+                 "ended_at=datetime('now') WHERE status='running'")
+    conn.commit()
+    conn.close()
+    ok = work and events >= 1 and claimed and (not second) and running >= 1
+    return ok, (f"work={work} events={events} claimed={claimed} "
+                f"second_refused={not second} running_rows={running}")
+
+
+def guard_busy_timeout_survives_concurrency() -> Tuple[bool, str]:
+    """Concurrent writers must not fail with 'database is locked'.
+
+    Audit P0-3: a 200-write burst raced the background pipeline.  Two
+    causes, both fixed: (a) a 5s busy_timeout was too short, and
+    (b) pipeline steps opened DEFERRED transactions (BEGIN), whose
+    read->write lock upgrade returns SQLITE_BUSY immediately and ignores
+    busy_timeout entirely.  This guard pins both.
+    """
+    _fresh_db()
+    import sqlite3
+    import threading
+    from memall.core.db import get_conn, init_db
+
+    init_db()
+    # A deferred BEGIN must not appear in the pipeline package any more.
+    import re
+    from pathlib import Path
+
+    bad = []
+    for p in sorted(Path(r"E:\MemALL\src\memall\pipeline").glob("*.py")):
+        src = p.read_text(encoding="utf-8", errors="replace")
+        if re.search(r'execute\(\s*"BEGIN"\s*\)', src):
+            bad.append(p.name)
+
+    # Two concurrent writers, one holding the lock briefly.
+    errors: list[str] = []
+
+    def writer(n: int) -> None:
+        try:
+            conn = get_conn()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "INSERT INTO memories (content, content_hash, level, owner, "
+                    "agent_name, category, occurred_at, created_at, updated_at) "
+                    "VALUES (?,?,'P2','o','conc','testing',datetime('now'),"
+                    "datetime('now'),datetime('now'))",
+                    (f"并发写入 {n}", f"conchash{n}-{id(conn)}"))
+                conn.commit()
+            finally:
+                conn.close()
+        except sqlite3.Error as e:
+            errors.append(f"{type(e).__name__}: {e}")
+
+    threads = [threading.Thread(target=writer, args=(i,)) for i in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    ok = not bad and not errors
+    return ok, (f"deferred_BEGIN_files={bad or 'none'} "
+                f"concurrent_errors={errors[:2] or 'none'}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -1052,6 +1147,8 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "capture_ignores_foreign_fields": guard_capture_ignores_foreign_fields,
     "session_cooldown_persisted": guard_session_cooldown_persisted,
     "session_note_acknowledged": guard_session_note_acknowledged,
+    "fallback_produces_self_evolution": guard_fallback_produces_self_evolution,
+    "busy_timeout_survives_concurrency": guard_busy_timeout_survives_concurrency,
 }
 
 # Full test files run as subprocesses when no guard name is given.

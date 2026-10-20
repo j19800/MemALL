@@ -215,6 +215,9 @@ class UpdateInput(BaseModel):
 class VectorSearchInput(BaseModel):
     query: str = Field(..., min_length=1, max_length=5000)
     top_k: int = Field(10, ge=1, le=500)
+    category: Optional[str] = Field(None, description="Filter by category")
+    level: Optional[str] = Field(None, description="Filter by level")
+    project: Optional[str] = Field(None, description="Filter by project")
 
 
 class RecordInteractionInput(BaseModel):
@@ -259,6 +262,7 @@ class UnifiedSearchInput(BaseModel):
     category: Optional[str] = Field(None, max_length=100)
     level: Optional[str] = Field(None, pattern=r"^(P[0-2]|L(10|11|[1-9]))$")
     owner: Optional[str] = Field(None, max_length=200)
+    project: Optional[str] = Field(None, description="Filter by project")
     rerank: bool = False
     # Viewer identity — used for trust filtering, personalisation and
     # context-aware boosting.

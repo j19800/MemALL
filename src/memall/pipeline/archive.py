@@ -34,7 +34,11 @@ def archive_step(days: int = _ARCHIVE_STEP_SCALE) -> dict:
 
     try:
         conn.execute("ATTACH DATABASE ? AS archive_db", (str(ARCHIVE_DB_PATH),))
-        conn.execute("BEGIN")
+        # BEGIN IMMEDIATE: a deferred BEGIN takes a READ lock first and
+        # upgrades at the first write — lock upgrades return SQLITE_BUSY
+        # immediately (busy_timeout does not apply), so concurrent
+        # writers made this step fail with "database is locked".
+        conn.execute("BEGIN IMMEDIATE")
 
         archived_memories = 0
         archived_edges = 0

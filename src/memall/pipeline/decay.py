@@ -81,7 +81,14 @@ def decay_step() -> dict:
 
     conn = get_conn()
     try:
-        conn.execute("BEGIN")
+        # BEGIN IMMEDIATE, not BEGIN: a deferred transaction takes a READ
+        # lock on the first SELECT and only upgrades to WRITE at the first
+        # UPDATE.  If another connection wrote in between, SQLite returns
+        # SQLITE_BUSY *immediately* for the upgrade — busy_timeout does NOT
+        # apply to lock upgrades, so this step failed with "database is
+        # locked" after 141ms during a 200-write burst (acceptance item 3).
+        # Taking the write lock up front makes busy_timeout do its job.
+        conn.execute("BEGIN IMMEDIATE")
 
         # P0 — delete when confidence too low, regardless of access_count
         # (previously required access_count=0, which let P0 accumulate forever)

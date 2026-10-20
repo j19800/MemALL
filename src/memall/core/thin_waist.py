@@ -957,6 +957,17 @@ def _capture_inject_metadata(
                 existing_meta = {}
             existing_meta["accumulate_key"] = accumulate_key
             data.metadata = existing_meta
+
+    # An L5 task is ACTIVE until someone marks it done.  Without this the
+    # task chain could not see tasks created through the generic capture
+    # path: notify_pending_tasks() selects
+    # json_extract(metadata,'$.status')='active', and a capture(level='L5',
+    # category='task') never set it — the reminder chain returned zero for
+    # every task written that way (audit P1-16, second half).
+    if isinstance(data.metadata, dict):
+        if (data.level == "L5" and data.category == "task"
+                and not data.metadata.get("status")):
+            data.metadata["status"] = "active"
     return data
 
 

@@ -33,7 +33,11 @@ def lifecycle_step() -> dict:
 
     conn = get_conn()
     try:
-        conn.execute("BEGIN")
+        # BEGIN IMMEDIATE: a deferred BEGIN takes a READ lock first and
+        # upgrades at the first write — lock upgrades return SQLITE_BUSY
+        # immediately (busy_timeout does not apply), so concurrent
+        # writers made this step fail with "database is locked".
+        conn.execute("BEGIN IMMEDIATE")
         clusters = _cluster_by_embedding(conn)
         distilled = _distill_clusters(conn, clusters)
         superseded = _mark_superseded(conn, clusters)

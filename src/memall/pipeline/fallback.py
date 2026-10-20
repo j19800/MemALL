@@ -110,16 +110,26 @@ def claim_run(min_age_seconds: int = 900) -> bool:
         if running:
             logger.debug("fallback: a pipeline run is in progress — skipping")
             return False
-        # A recent run (daemon tick) already covered the work.
-        recent = conn.execute(
-            "SELECT COUNT(*) FROM pipeline_runs WHERE status IN ('ok','partial') "
-            "AND started_at > datetime('now', ?)",
-            (f"-{int(min_age_seconds)} seconds",),
-        ).fetchone()[0]
-        if recent:
-            logger.debug("fallback: a pipeline ran %ds ago — skipping",
-                         min_age_seconds)
-            return False
+        # A recent run (daemon tick) already covered the work.  Compare in
+        # Python against a UTC ISO cutoff: started_at rows mix the canonical
+        # ISO format with SQLite's datetime() output, and comparing them
+        # lexicographically in SQL produced false positives (every row
+        # looked "recent", so the fallback never claimed).
+        if min_age_seconds > 0:
+            from datetime import datetime, timedelta, timezone
+
+            cutoff = (datetime.now(timezone.utc)
+                      - timedelta(seconds=int(min_age_seconds))).isoformat()
+            recent = conn.execute(
+                "SELECT COUNT(*) FROM pipeline_runs "
+                "WHERE status IN ('ok','partial','completed') "
+                "AND started_at > ?", (cutoff,)
+            ).fetchone()[0]
+            if recent:
+                logger.debug(
+                    "fallback: a pipeline ran within %ds — skipping",
+                    min_age_seconds)
+                return False
         conn.close()
         conn = None
         _create_pipeline_run()
@@ -141,7 +151,10 @@ def run_fallback_once(force: bool = False) -> dict:
     distillable = has_distillable_input()
     if not force and not events and not distillable:
         return {"ran": False, "reason": "no work", "events": events}
-    if not claim_run():
+    # ``force`` also bypasses the "a pipeline ran recently" guard (used by
+    # the acceptance check and by manual ops); it still never runs
+    # concurrently with another live run.
+    if not claim_run(min_age_seconds=0 if force else 900):
         return {"ran": False, "reason": "not claimed", "events": events}
     try:
         from memall.pipeline.pipeline import run_pipeline

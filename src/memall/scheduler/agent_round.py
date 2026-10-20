@@ -87,8 +87,13 @@ def notify_pending_tasks(agent_name: str) -> list[dict]:
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (content, h, "P2", agent_name, agent_name,
                  f"待办: {t['subject']}", "task_pending", "", "",
+                 # supersedes is NOT NULL DEFAULT '[]'; passing None here
+                 # raised IntegrityError, so the reminder INSERT never
+                 # succeeded and notify_pending_tasks always returned an
+                 # empty list (or crashed) — the task chain was broken at
+                 # the last step even after category stayed 'task'.
                  now.isoformat(), now.isoformat(), now.isoformat(),
-                 None, 0.5, "private", json.dumps(rem_meta, ensure_ascii=False), "open"),
+                 "[]", 0.5, "private", json.dumps(rem_meta, ensure_ascii=False), "open"),
             )
             reminders.append({"task_id": t["id"], "subject": t["subject"]})
 

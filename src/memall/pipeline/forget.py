@@ -97,7 +97,11 @@ def forget_expired(days: int = 90, agent_name: Optional[str] = None) -> Dict[str
     scale = days / 90.0
     conn = get_conn()
     try:
-        conn.execute("BEGIN")
+        # BEGIN IMMEDIATE: a deferred BEGIN takes a READ lock first and
+        # upgrades at the first write — lock upgrades return SQLITE_BUSY
+        # immediately (busy_timeout does not apply), so concurrent
+        # writers made this step fail with "database is locked".
+        conn.execute("BEGIN IMMEDIATE")
 
         expired_ids: List[int] = []
         for level, ttl in _LEVEL_TTL.items():
@@ -169,7 +173,11 @@ def forget_low_value(agent_name: Optional[str] = None) -> Dict[str, Any]:
     cutoff = _ttl_cutoff(7)
     conn = get_conn()
     try:
-        conn.execute("BEGIN")
+        # BEGIN IMMEDIATE: a deferred BEGIN takes a READ lock first and
+        # upgrades at the first write — lock upgrades return SQLITE_BUSY
+        # immediately (busy_timeout does not apply), so concurrent
+        # writers made this step fail with "database is locked".
+        conn.execute("BEGIN IMMEDIATE")
 
         base_sql = (
             "SELECT id FROM memories "
@@ -330,7 +338,11 @@ def forget_l5_archive(days: int = 30, limit: int = None) -> Dict[str, Any]:
             (l5_limit,),
         ).fetchall()
         archived = 0
-        conn.execute("BEGIN")
+        # BEGIN IMMEDIATE: a deferred BEGIN takes a READ lock first and
+        # upgrades at the first write — lock upgrades return SQLITE_BUSY
+        # immediately (busy_timeout does not apply), so concurrent
+        # writers made this step fail with "database is locked".
+        conn.execute("BEGIN IMMEDIATE")
         for r in rows:
             meta = {}
             try:

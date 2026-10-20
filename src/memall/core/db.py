@@ -491,7 +491,17 @@ def get_conn(db_path=None) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA cache_size=-8000")
     conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
+    # Audit P0-3: a 200-write burst races the background pipeline for the
+    # write lock; the old 5s timeout let the DECAY step fail with
+    # "database is locked" while the captures themselves succeeded.
+    # 30s covers a burst; still bounded so a genuinely stuck lock surfaces.
+    try:
+        from memall.config import get_config as _gc
+
+        _busy_ms = int(_gc("db.busy_timeout_ms", 30000) or 30000)
+    except Exception:
+        _busy_ms = 30000
+    conn.execute(f"PRAGMA busy_timeout={_busy_ms}")
 
     # Custom SQL functions must exist before init_db runs the FTS5 triggers
     # (which call memall_split_cjk) and before any write touches them.
@@ -729,7 +739,13 @@ class ConnectionPool:
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA cache_size=-8000")
         conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA busy_timeout=5000")
+        try:
+            from memall.config import get_config as _gc
+
+            _busy_ms = int(_gc("db.busy_timeout_ms", 30000) or 30000)
+        except Exception:
+            _busy_ms = 30000
+        conn.execute(f"PRAGMA busy_timeout={_busy_ms}")
         # Custom SQL functions must exist before init_db runs the FTS5
         # triggers (which call memall_split_cjk) and before any write.
         _register_sql_functions(conn)

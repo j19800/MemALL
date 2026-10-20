@@ -69,6 +69,14 @@ def handle_vector_search(arguments: dict) -> str:
     result = vector_search(
         query=arguments["query"],
         top_k=arguments.get("top_k", 10),
+        # Audit P1-6: semantic search could not be isolated at the MCP
+        # surface either — the filters existed in the core but were never
+        # passed through.
+        category=arguments.get("category"),
+        level=arguments.get("level"),
+        owner=arguments.get("owner"),
+        project=arguments.get("project"),
+        agent_name=arguments.get("agent_name"),
     )
     return json.dumps(result, ensure_ascii=False, default=str)
 
@@ -83,6 +91,11 @@ def handle_hybrid_search(arguments: dict) -> str:
         category=arguments.get("category"),
         level=arguments.get("level"),
         owner=arguments.get("owner"),
+        # Audit P1-5: project/agent_name were missing here too, so the MCP
+        # surface could not isolate by project even after the core gained
+        # the parameter.
+        project=arguments.get("project"),
+        agent_name=arguments.get("agent_name"),
         rerank=arguments.get("rerank", False),
     )
     return json.dumps(result, ensure_ascii=False, default=str)
