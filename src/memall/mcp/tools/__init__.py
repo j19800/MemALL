@@ -462,7 +462,19 @@ def _handle_system(args: dict) -> str:
                     {"subject": s[0], "summary": (s[1] or s[2])[:80] if s[2] else ""}
                     for s in samples
                 ]
-        return json.dumps({"date": today_date.isoformat(), "total": total, "categories": categories}, ensure_ascii=False, default=str)
+        # Audit P0-1: the pipeline backlog was invisible — events piled up
+        # silently when the lightweight pipeline could not keep up (or was
+        # not running at all).  Surface it in the daily report.
+        try:
+            from memall.pipeline.fallback import backlog_report
+            backlog = backlog_report()
+        except Exception:
+            backlog = {"unconsumed_events": None, "warning": False, "message": ""}
+        return json.dumps({
+            "date": today_date.isoformat(), "total": total,
+            "categories": categories,
+            "pipeline_backlog": backlog,
+        }, ensure_ascii=False, default=str)
     elif action in ("hot", "热门", "热点", "热榜"):
         # Hot topics — most accessed or recently active memories
         from memall.core.db import get_conn

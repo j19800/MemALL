@@ -42,18 +42,32 @@ def process_events() -> dict:
         now = datetime.now(timezone.utc).isoformat()
         event_ids = [r["id"] for r in rows]
 
+        # Audit P2-15: claim the events BEFORE processing them.  The daemon
+        # and the MCP process can both run the pipeline; without a claim
+        # both read the same unprocessed rows and process them twice
+        # (duplicate reflect/distill output).  The UPDATE ... WHERE
+        # processed_at IS NULL is the lock: only the writer that actually
+        # flips the rows owns them, and a concurrent runner gets 0 rows
+        # back.
+        ph = ",".join("?" * len(event_ids))
+        conn.execute(
+            f"UPDATE pipeline_events SET processed_at = ? "
+            f"WHERE id IN ({ph}) AND processed_at IS NULL",
+            (now, *event_ids),
+        )
+        conn.commit()
+        owned = {
+            r[0] for r in conn.execute(
+                f"SELECT id FROM pipeline_events WHERE id IN ({ph}) "
+                f"AND processed_at = ?", (*event_ids, now)).fetchall()
+        }
+        rows = [r for r in rows if r["id"] in owned]
+
         dispatch_count = 0
         for r in rows:
             if r["event_type"] == "new_memory":
                 _dispatch_new_memory(conn, r["memory_id"])
                 dispatch_count += 1
-
-        ph = ",".join("?" * len(event_ids))
-        conn.execute(
-            f"UPDATE pipeline_events SET processed_at = ? WHERE id IN ({ph})",
-            (now, *event_ids),
-        )
-        conn.commit()
 
         remaining = conn.execute(
             "SELECT COUNT(*) FROM pipeline_events WHERE processed_at IS NULL"

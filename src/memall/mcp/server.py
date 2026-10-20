@@ -126,6 +126,18 @@ def serve():
         pass  # Python < 3.7 or non-TTY streams that don't support reconfigure
     _ensure_logging()
     _start_polling_consumers()
+    # Audit P0-1: the capture-triggered lightweight pipeline skips distill
+    # and integrate, and the only periodic full run lived in the daemon —
+    # so a serve-only deployment (the normal MCP client setup) never
+    # produced L9/L10 memories and the "self-evolving" model stopped at L7.
+    # This watchdog runs distill+integrate when there is work, and skips
+    # itself when the daemon is already covering it.
+    try:
+        from memall.pipeline.fallback import start_fallback_timer
+
+        start_fallback_timer(interval=300)
+    except Exception:
+        _log.warning("fallback timer failed to start (non-fatal)", exc_info=True)
     global _initialized, _client_name, _client_version
 
     _log.info("MCP server starting (protocol 2025-03-26)")

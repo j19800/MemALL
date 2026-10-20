@@ -753,6 +753,79 @@ def guard_caller_pins_classification() -> Tuple[bool, str]:
     return ok, f"level={row['level'] if row else '?'} category={row['category'] if row else '?'}"
 
 
+def guard_capture_audit_hook_fires() -> Tuple[bool, str]:
+    """The capture audit hook must actually fire.
+
+    Audit P2-9: the hook's matcher was "capture" (the core function name)
+    while the adapter dispatches the MCP tool name "memall_write" — so the
+    audit trail was believed to exist and did not.  The matcher now names
+    the dispatched tool, and the handler logs only real writes.
+    """
+    _fresh_db()
+    import memall.mcp.hooks_builtin  # noqa: F401  (registers the hooks)
+    from memall.core.lifecycle import _match_tool
+    from memall.mcp.adapter import handle_call
+
+    matchers = [h.matcher for h in
+                getattr(__import__("memall.mcp.hooks", fromlist=["HookRegistry"]),
+                        "HookRegistry")._hooks
+                if "audit" in (getattr(h, "description", "") or "").lower()]
+    fires = any(_match_tool(m, "memall_write") for m in matchers)
+
+    seen = []
+    import memall.mcp.hooks_builtin as hb
+    orig = hb._hook_capture_audit
+
+    def spy(tool_name, arguments, result="", **kw):
+        seen.append((arguments or {}).get("action", ""))
+        return orig(tool_name, arguments, result, **kw)
+
+    # the registry holds the function object registered at import time
+    from memall.mcp.hooks import HookRegistry
+    for h in HookRegistry._hooks:
+        if "audit" in (getattr(h, "description", "") or "").lower():
+            h.handler = spy
+    try:
+        handle_call("memall_write", {
+            "action": "capture",
+            "content": "审计钩子验证：这条真实写入应当让 capture 审计钩子被触发并记录。",
+            "agent_name": "auditbot", "owner": "老陈", "project": "g"})
+    finally:
+        for h in HookRegistry._hooks:
+            if "audit" in (getattr(h, "description", "") or "").lower():
+                h.handler = orig
+    return (fires and "capture" in seen), f"matchers={matchers} fired_actions={seen}"
+
+
+def guard_background_threads_bounded() -> Tuple[bool, str]:
+    """Background work must run on a BOUNDED pool, not one thread per call.
+
+    Audit P0-3: every capture spawned bare threads (embedding, dream_scan,
+    lightweight pipeline, discussion check) — writing 100 memories meant
+    100+ threads each loading the ONNX model and contending for the SQLite
+    write lock.  Acceptance: peak threads <= resident + 4.
+    """
+    _fresh_db()
+    import threading
+    from memall.core import bg_registry
+
+    before = threading.active_count()
+    bg_registry.set_max_workers(3)
+
+    done = []
+    for i in range(20):
+        bg_registry.spawn(lambda i=i: done.append(i))
+    # give the pool a moment to pick up the burst
+    import time as _t
+    _t.sleep(0.4)
+    peak = threading.active_count()
+    bg_registry.wait_for_background(timeout=10.0)
+
+    limit = before + 4
+    ok = peak <= limit and len(done) == 20
+    return ok, f"before={before} peak={peak} limit={limit} completed={len(done)}"
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -781,6 +854,8 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "retrieve_excludes_archived": guard_retrieve_excludes_archived,
     "subjects_human_readable": guard_subjects_human_readable,
     "caller_pins_classification": guard_caller_pins_classification,
+    "capture_audit_hook_fires": guard_capture_audit_hook_fires,
+    "background_threads_bounded": guard_background_threads_bounded,
 }
 
 # Full test files run as subprocesses when no guard name is given.

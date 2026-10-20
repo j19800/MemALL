@@ -360,12 +360,9 @@ def on_capture(**kwargs) -> None:
 
     # ── 1. Discussion auto-convergence (inline, fast DB check) ──
     if isinstance(memory_id, int):
-        from memall.core.bg_registry import register as _bg_register
-        _bg_register(threading.Thread(
-            target=_check_capture_discussion,
-            args=(memory_id,),
-            daemon=True,
-        )).start()
+        # Audit P0-3: bare threads per capture -> bounded pool.
+        from memall.core.bg_registry import spawn as _bg_spawn
+        _bg_spawn(_check_capture_discussion, args=(memory_id,))
 
     # ── 2. Lightweight pipeline (debounced background thread) ──
     global _last_light_pipeline
@@ -381,8 +378,9 @@ def on_capture(**kwargs) -> None:
     _record_plugin_event(
         "on_capture", "Lightweight pipeline triggered (debounce-coalesced)", memory_id=memory_id,
     )
-    from memall.core.bg_registry import register as _bg_register
-    _bg_register(threading.Thread(target=_run_capture_pipeline, daemon=True)).start()
+    # Audit P0-3: bare threads per capture -> bounded pool.
+    from memall.core.bg_registry import spawn as _bg_spawn
+    _bg_spawn(_run_capture_pipeline)
 
 
 def on_pre_retrieve(**kwargs) -> None:
