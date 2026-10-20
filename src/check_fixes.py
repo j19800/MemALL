@@ -589,12 +589,23 @@ def guard_fts_query_survives_syntax() -> Tuple[bool, str]:
     """
     import sqlite3
 
-    from memall.core.db import pool_conn
-    from memall.core.thin_waist import fts_query
-
     nasty = ['tools/call: {"meth', 'quote " inside', 'search"]', "{brace}",
             '"unclosed', "a AND b OR c", "NOT 存在", "NEAR/3 靠近"]
     bad = []
+    _fresh_db()
+    from memall.core.db import init_db, pool_conn
+    from memall.core.thin_waist import capture, fts_query
+
+    init_db()
+    # one row with the chars ADJACENT as tokens, one with other CJK tokens
+    # BETWEEN them: the phrase form must find only the first, the
+    # implicit-AND form finds both.  (Spacing the chars apart in raw text
+    # does NOT help — CJK indexing already emits single-char tokens, so the
+    # real test is other tokens between them.)
+    capture("验收测试相邻性语料：这里验收两个字符相邻出现，用于区分短语与 AND 语义。",
+            level="P2", category="testing", project="g", agent_name="syn", owner="老陈")
+    capture("验证明天收工：字符验和收之间隔着其他单字 token，短语查询不应命中这条。",
+            level="P2", category="testing", project="g", agent_name="syn", owner="老陈")
     with pool_conn() as conn:
         for q in nasty:
             try:

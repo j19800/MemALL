@@ -688,6 +688,32 @@ def batch_archive(
             )
             archived += 1
 
+        # Soft-deleted rows must leave the ANN index: mem_vec rowids are
+        # reused by nothing (sqlite INTEGER PK), and a stale vector makes
+        # the hybrid path recall deleted memories the FTS path now
+        # correctly hides — i.e. the same query answering differently per
+        # mode.  Run AFTER commit: vec0 is a C-extension module whose
+        # writes do not join SQLite transactions — if an UPDATE below
+        # aborted, a rolled-back DELETE against the outer transaction
+        # would silently keep (or delete) the wrong set; after commit we
+        # operate on a stable rowid list and re-check what is actually
+        # archived before deleting.  batch_restore re-embeds on the way
+        # back.
+        if all_ids:
+            try:
+                ph = ",".join("?" * len(all_ids))
+                still = conn.execute(
+                    f"SELECT id FROM memories WHERE id IN ({ph}) "
+                    "AND memory_status = 'archived'", all_ids).fetchall()
+                if still:
+                    sid = [r["id"] for r in still]
+                    conn.execute(
+                        f"DELETE FROM mem_vec WHERE rowid IN ({','.join('?' * len(sid))})",
+                        sid)
+                    conn.commit()
+            except sqlite3.Error:
+                logger.debug("batch_archive: mem_vec cleanup skipped", exc_info=True)
+
         _record_ops_entry(
             conn,
             "batch_archive",
@@ -798,6 +824,31 @@ def batch_restore(
             {"fallback_p2": fallback_p2},
         )
         conn.commit()
+
+        # batch_archive purges mem_vec rows of the deleted set; restored
+        # rows must come back re-embedded or they are permanently invisible
+        # to vector/hybrid recall while fully visible to FTS.  Outside the
+        # transaction (see the batch_archive comment), and best-effort:
+        # embeddings may be unavailable in this install.
+        if all_ids:
+            try:
+                from memall.graph.embeddings import _auto_embed
+
+                ph = ",".join("?" * len(all_ids))
+                live = conn.execute(
+                    f"SELECT id, content, content_hash FROM memories "
+                    f"WHERE id IN ({ph}) AND COALESCE(memory_status,'') != 'archived'",
+                    all_ids,
+                ).fetchall()
+                for r in live:
+                    try:
+                        _auto_embed(conn, r["id"], r["content"], r["content_hash"])
+                    except Exception:
+                        logger.debug("batch_restore: re-embed failed for %s", r["id"],
+                                     exc_info=True)
+                conn.commit()
+            except Exception:
+                logger.debug("batch_restore: mem_vec re-embed skipped", exc_info=True)
 
         return {
             "matched": matched,

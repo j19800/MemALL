@@ -95,15 +95,34 @@ def _query_embed(query: str) -> np.ndarray | None:
 
 
 def _vec0_knn(conn, query_vec: np.ndarray, top_k: int) -> list[dict]:
-    """KNN search via vec0 virtual table."""
+    """KNN search via vec0 virtual table.
+
+    Archived (soft-deleted) rows are filtered here — the single funnel all
+    four vector readers share.  vec0 cannot join the memories table inside
+    the ANN scan and stale vectors outlive their rows through several write
+    paths (direct status updates, older archives before batch_archive
+    learned to purge), so the KNN fetches headroom and drops deleted hits
+    afterwards; a small over-fetch (x4) keeps recall near the same for
+    archives in the tail while making the vector mode honour the same
+    soft-delete semantics as FTS.
+    """
     vec_bytes = np.array(query_vec, dtype=np.float32).tobytes()
     try:
         rows = conn.execute(
             "SELECT rowid, distance FROM mem_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
-            (vec_bytes, top_k),
+            (vec_bytes, max(top_k * 4, top_k + 20)),
         ).fetchall()
+        if not rows:
+            return []
+        ids = [r["rowid"] for r in rows]
+        ph = ",".join("?" * len(ids))
+        live = {r[0] for r in conn.execute(
+            f"SELECT id FROM memories WHERE id IN ({ph}) "
+            "AND COALESCE(memory_status, '') != 'archived'", ids).fetchall()}
         results = []
         for r in rows:
+            if r["rowid"] not in live:
+                continue
             score = 1.0 / (1.0 + r["distance"])
             results.append(
                 {
@@ -112,6 +131,8 @@ def _vec0_knn(conn, query_vec: np.ndarray, top_k: int) -> list[dict]:
                     "score": round(score, 4),
                 }
             )
+            if len(results) >= top_k:
+                break
         return results
     except sqlite3.Error:
         return []
