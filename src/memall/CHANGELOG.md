@@ -19,6 +19,16 @@ All of the following were found by **driving the real MCP protocol** (client too
 - **fts5 enhancement inertness**: `enhanced_search` carried `rrf_score=None` into the enhancement dicts, so personalisation/context-boost computed `0.0 × anything = 0.0` on that path. Position is now carried as an RRF-form score.
 - A deny-list/quality-gate refusal in `distill_l7` is now a per-item skip, not a step failure.
 
+### Fixed — performance & recall evaluation (bench_latency.py / bench_recall.py)
+The two committed benchmarks drive the real `handle_call` MCP path against production and surfaced four more defects:
+
+- **`fts_query()` raised `sqlite3.OperationalError` on ~5% of real content slices** — pasted code/JSON (quotes, braces) parses as FTS5 MATCH syntax. Emitted strings now escape inner quotes (FTS5 doubling) and map braces to spaces *inside* the outer phrase, preserving adjacency semantics (the first fix attempt degraded phrases to implicit-AND: 394 vs 284 candidates — caught by the benchmark, fixed, and now guarded).
+- **Archived rows leaked into live retrieval** — the shared WHERE builder had no status predicate, so plain fts5/direct returned soft-deleted rows while hybrid/vector hid them (an archived-test-row sweep left "Promotion test" answering with three archived rows as its top-3). Archived excluded by default; `include_archived=True` for deliberate history reads.
+- **The ANN index ignored soft-delete entirely** — 910/4447 vectors (20%) described archived rows; vec0 cannot see `memory_status`. Three layers: `batch_archive` purges vectors of archived rows, `_vec0_knn` (the single funnel all four vector readers share) filters archived rowids with 4× over-fetch, `batch_restore` re-embeds on restore. Production purged (4447 → 3537, all live-backed).
+- **Two new guards (25 total):** `fts_query_survives_syntax`, `retrieve_excludes_archived`.
+
+Measured (3802 live memories): latency fts5 7ms warm / hybrid 102ms / unified 109ms p95 (cold first-call 563ms = model load). Recall@10 (72 stratified rows × 3 query kinds × 3 modes): exact-phrase fts5 58–76%, subject-head 51–53%, short-paraphrase 18–19%; vector mode strictly weaker than FTS on every query kind (backend verified `bge-onnx-sse42`); hybrid lands between. The FTS candidate-rate probe separates index loss from ranking loss: at 64–82% candidate rate the residual recall gap is tokenisation (unicode61 whole-word ASCII tokens vs the CJK single-char scheme — long ASCII runs like "memall serve" in subjects are not phrase-reachable), not ranking.
+
 ### Added
 - Four new regression guards (23 total): `denylist_before_normalize`, `search_ranks_by_bm25`, `facets_match_population`, `hot_topics_functional` (drives the real `handle_call` MCP path), plus `digest_excludes_archived`.
 - `check_fixes.py` closes the previous connection pool before switching databases — dropping the reference left open handles on the production file and made the next guard fail with "database is locked".
