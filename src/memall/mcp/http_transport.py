@@ -73,6 +73,7 @@ _log.info("USER_HOME = %s, MEMALL_DB_PATH = %s", _user_home, _fixed_path)
 os.environ.setdefault("MEMALL_DB_PATH", _fixed_path)
 
 from memall.mcp.adapter import TOOL_DEFINITIONS, handle_call, _intercept, consume_session_note
+from memall.mcp.shared import ack_session_note
 from memall.core.db import init_db
 from memall.core.rate_limiter import get_rate_limiter
 
@@ -244,6 +245,8 @@ async def handle_mcp_post(request: web.Request) -> web.Response:
             session_note = consume_session_note()
             if session_note:
                 content.append({"type": "text", "text": session_note})
+                # delivered -> acknowledge (audit P2-12)
+                ack_session_note()
             return content
 
         try:

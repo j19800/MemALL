@@ -1,23 +1,25 @@
+import json
 import logging
+import time
 from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
-_AUTO_START_CACHE: dict[str, str] = {}
+# Auto-start cooldown state.  Lives in the DB (not process memory): the MCP
+# server is long-lived, but a restart used to reset the cooldown and let
+# every agent re-open a session immediately, piling duplicate sessions into
+# the sessions table (audit P2-13).
 _AUTO_START_COOLDOWN = 1800
+
 # Per-agent pending session notes.  A single module-level string used to be
 # overwritten whenever a second agent started a session in the same process,
 # so one agent's injected context could be delivered to another.  Keyed by
 # agent name, each entry is consumed exactly once.
 _PENDING_SESSION_NOTES: dict[str, str] = {}
-
-# Actions that are read-only — no session auto-start needed
-_READ_ONLY_ACTIONS = frozenset({
-    "retrieve", "vector_search", "hybrid_search", "search", "trace",
-    "traverse", "timeline", "fed_query", "fed_conflicts",
-    "persona", "persona_profile", "identity", "ask",
-    "discussion_status", "hub_connect", "db", "index_rebuild",
-    "session_summary",
-})
+# Unacked notes (audit P2-12): consume_session_note() used to pop the note
+# and lose it if the response never reached the client.  A note now stays
+# pending until it is explicitly acknowledged, so a timed-out call does not
+# permanently drop the session context.
+_NOTE_ACKED: set[str] = set()
 
 # Tools/actions that skip intercept logging entirely
 _INTERCEPT_SKIP_TOOLS = frozenset()
@@ -34,40 +36,103 @@ _INTERCEPT_QUERY_ACTIONS = frozenset({
 })
 
 
+def _cooldown_table(conn) -> None:
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS session_cooldowns ("
+        "agent_name TEXT PRIMARY KEY, last_start TEXT NOT NULL)"
+    )
+
+
+def _last_start(agent_name: str) -> str | None:
+    """Last auto-start timestamp for an agent, from the DB (fallback: memory)."""
+    try:
+        from memall.core.db import pool_conn
+        with pool_conn() as conn:
+            _cooldown_table(conn)
+            row = conn.execute(
+                "SELECT last_start FROM session_cooldowns WHERE agent_name = ?",
+                (agent_name,),
+            ).fetchone()
+            return row["last_start"] if row else None
+    except Exception:
+        return _AUTO_START_CACHE.get(agent_name)
+
+
+def _record_start(agent_name: str, ts: str) -> None:
+    _AUTO_START_CACHE[agent_name] = ts
+    try:
+        from memall.core.db import pool_conn
+        with pool_conn() as conn:
+            _cooldown_table(conn)
+            conn.execute(
+                "INSERT INTO session_cooldowns (agent_name, last_start) VALUES (?, ?) "
+                "ON CONFLICT(agent_name) DO UPDATE SET last_start = excluded.last_start",
+                (agent_name, ts),
+            )
+            conn.commit()
+    except Exception:
+        logger.debug("shared.py: cooldown persist failed", exc_info=True)
+
+
 def ensure_session_started(agent_name: str, auto_inject: bool = True) -> None:
     from memall.pipeline.session import session_start
     global _PENDING_SESSION_NOTES
     now = datetime.now(timezone.utc)
-    last = _AUTO_START_CACHE.get(agent_name)
+    last = _last_start(agent_name)
     if last:
-        last_dt = datetime.fromisoformat(last)
-        if (now - last_dt).total_seconds() < _AUTO_START_COOLDOWN:
-            return
+        try:
+            last_dt = datetime.fromisoformat(last)
+            if (now - last_dt).total_seconds() < _AUTO_START_COOLDOWN:
+                return
+        except ValueError:
+            pass
     try:
         result = session_start(agent_name=agent_name, auto_inject=auto_inject)
-        _AUTO_START_CACHE[agent_name] = now.isoformat()
+        _record_start(agent_name, now.isoformat())
         if auto_inject:
             injection = result.get("injection_formatted")
             if injection:
                 _PENDING_SESSION_NOTES[agent_name] = injection
+                _NOTE_ACKED.discard(agent_name)
     except Exception:
         logger.warning("shared.py: silent error", exc_info=True)
 
 
 def consume_session_note(agent_name: str = "") -> str | None:
-    """Pop this agent's pending session note (delivered exactly once).
+    """Return this agent's pending session note WITHOUT consuming it.
 
-    ``agent_name`` is optional for backwards compatibility: when omitted the
-    oldest pending note is returned.  Prefer passing the agent name so a
-    multi-agent process delivers each note to the right caller.
+    The note stays pending until :func:`ack_session_note` is called, so a
+    client that times out mid-response can retry and still receive the
+    context (audit P2-12: "consume-and-drop without ACK" lost the session
+    note permanently on a timeout).  ``agent_name`` is optional for
+    backwards compatibility: when omitted the oldest pending note is
+    returned.
     """
-    global _PENDING_SESSION_NOTES
     if agent_name:
-        return _PENDING_SESSION_NOTES.pop(agent_name, None)
+        return _PENDING_SESSION_NOTES.get(agent_name)
     if not _PENDING_SESSION_NOTES:
         return None
     oldest = next(iter(_PENDING_SESSION_NOTES))
-    return _PENDING_SESSION_NOTES.pop(oldest, None)
+    return _PENDING_SESSION_NOTES[oldest]
+
+
+def ack_session_note(agent_name: str = "") -> bool:
+    """Acknowledge delivery of a session note (drops it)."""
+    if agent_name:
+        popped = _PENDING_SESSION_NOTES.pop(agent_name, None) is not None
+        _NOTE_ACKED.add(agent_name)
+        return popped
+    if not _PENDING_SESSION_NOTES:
+        return False
+    oldest = next(iter(_PENDING_SESSION_NOTES))
+    _PENDING_SESSION_NOTES.pop(oldest, None)
+    _NOTE_ACKED.add(oldest)
+    return True
+
+
+def pending_session_notes() -> dict:
+    """Diagnostics: notes waiting for acknowledgement."""
+    return {k: len(v) for k, v in _PENDING_SESSION_NOTES.items()}
 
 
 def write_intercept_log(tool_name: str, summary: str):

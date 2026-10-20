@@ -13,6 +13,8 @@ import os
 
 from aiohttp import web
 
+from memall.mcp.shared import ack_session_note
+
 logger = logging.getLogger("memall.gateway.mcp")
 
 # Thread pool for synchronous MCP tool calls (keeps event loop responsive)
@@ -145,6 +147,7 @@ class McpHandlersMixin:
                         logger.warning("MCP tool notification error", exc_info=True)
                 session_note = consume_session_note()
                 if session_note:
+                    ack_session_note()
                     content.append({"type": "text", "text": session_note})
                 return content
 

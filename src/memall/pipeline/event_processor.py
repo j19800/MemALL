@@ -163,10 +163,18 @@ def _inline_classify(conn, row: dict, meta: dict) -> None:
 
     sets: list[str] = []
     params: list = []
-    if detected != current_level:
+    # Honour the writer's contract (audit P1-16): a caller-set category/level
+    # is pinned in metadata.pinned_fields by capture(), and contract values
+    # like category='task' are pinned by definition.  Rewriting them here
+    # silently killed notify_pending_tasks (task -> fix/testing within 60s of
+    # every capture) and demoted L10 reports to L6 — reproduced live twice.
+    from memall.core.pins import is_field_pinned
+
+    if detected != current_level and not is_field_pinned(meta, "level"):
         sets.append("level = ?")
         params.append(detected)
-    if best_cat is not None and best_cat != row["category"]:
+    if (best_cat is not None and best_cat != row["category"]
+            and not is_field_pinned(meta, "category", row["category"])):
         sets.append("category = ?")
         params.append(best_cat)
     if sets:

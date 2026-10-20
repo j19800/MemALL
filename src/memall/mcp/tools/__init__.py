@@ -468,21 +468,25 @@ def _handle_system(args: dict) -> str:
         from memall.core.db import get_conn
         import json, datetime
         conn = get_conn()
-        now_utc = datetime.datetime.now(datetime.timezone.utc)
-        # The cutoff variable is named week_ago but was set to now(), so
-        # "created_at > week_ago" matched nothing and hot_topics was always
-        # empty in production.  Subtract the window it claims to cover.
-        week_ago = (now_utc - datetime.timedelta(days=7)).isoformat()
-        rows = conn.execute(
-            "SELECT id, subject, category, level, access_count, summary FROM memories "
-            "WHERE created_at > ? AND access_count > 0 "
-            # Archived rows are soft-deleted — they must not resurface as
-            # "hot topics" (a run of archived test rows did exactly that).
-            "AND COALESCE(memory_status, '') != 'archived' "
-            "ORDER BY access_count DESC, created_at DESC LIMIT 10",
-            (week_ago,)
-        ).fetchall()
-        conn.close()
+        try:
+            now_utc = datetime.datetime.now(datetime.timezone.utc)
+            # The cutoff variable is named week_ago but was set to now(), so
+            # "created_at > week_ago" matched nothing and hot_topics was always
+            # empty in production.  Subtract the window it claims to cover.
+            week_ago = (now_utc - datetime.timedelta(days=7)).isoformat()
+            rows = conn.execute(
+                "SELECT id, subject, category, level, access_count, summary FROM memories "
+                "WHERE created_at > ? AND access_count > 0 "
+                # Archived rows are soft-deleted — they must not resurface as
+                # "hot topics" (a run of archived test rows did exactly that).
+                "AND COALESCE(memory_status, '') != 'archived' "
+                "ORDER BY access_count DESC, created_at DESC LIMIT 10",
+                (week_ago,)
+            ).fetchall()
+        finally:
+            # audit P2-11: without try/finally an exception here leaked the
+            # connection (and its WAL handle) for the life of the process.
+            conn.close()
         hot = [{"id": r[0], "subject": r[1], "category": r[2], "level": r[3], "views": r[4], "summary": (r[5] or "")[:80]} for r in rows]
         return json.dumps({"period": "7天", "total": len(hot), "hot_topics": hot}, ensure_ascii=False)
     raise ValueError(f"memall_system: unknown action '{action}'")

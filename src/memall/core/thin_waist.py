@@ -754,6 +754,24 @@ def _capture_normalize_and_validate(
     data: MemoryInput | dict | str, **overrides
 ) -> MemoryInput:
     """Normalize input type, apply overrides, validate content, set agent/owner defaults."""
+    # Which fields the CALLER explicitly provided (dict keys + overrides).
+    # The classifier must not overwrite explicitly-chosen category/level:
+    # rule-based reclassification silently breaks consumer contracts —
+    # notify_pending_tasks() only sees category='task', and a task written
+    # as such was flipped to fix/testing by a keyword rule, so the whole
+    # reminder chain returned zero (audit P1-16, reproduced live).
+    explicit = set(overrides)
+    if isinstance(data, dict):
+        explicit |= {k for k, v in data.items() if v not in (None, "")}
+    elif isinstance(data, MemoryInput):
+        # A constructed MemoryInput carries no provenance of "explicit vs
+        # default"; fall back to value comparison — a non-default
+        # category/level was set deliberately by someone.
+        if data.category and data.category != "general":
+            explicit |= {"category"}
+        if data.level and data.level != "P2":
+            explicit |= {"level"}
+
     if isinstance(data, str):
         data = MemoryInput(content=data)
     elif isinstance(data, dict):
@@ -761,6 +779,13 @@ def _capture_normalize_and_validate(
     for k, v in overrides.items():
         if hasattr(data, k):
             setattr(data, k, v)
+
+    # Carry the explicit-field provenance to the metadata injector (kept on
+    # the dataclass so it survives without a second parameter everywhere).
+    try:
+        data._pinned = ",".join(sorted(f for f in explicit if f in ("category", "level")))
+    except (AttributeError, TypeError):
+        pass
 
     if not data.content.strip():
         raise ValueError("content cannot be empty")
@@ -883,9 +908,12 @@ def _capture_assign_tags(data: MemoryInput) -> None:
 
 
 def _capture_inject_metadata(
-    data: MemoryInput, accumulate_key: str | None = None
+    data: MemoryInput, accumulate_key: str | None = None,
+    explicit_fields: set | None = None,
 ) -> MemoryInput:
     """Inject provenance source and optional accumulate_key into metadata."""
+    from memall.core.pins import CONTRACT_CATEGORIES
+
     if isinstance(data.metadata, dict):
         if "source" not in data.metadata:
             data.metadata["source"] = "capture_api"
@@ -897,6 +925,27 @@ def _capture_inject_metadata(
         if "source" not in existing_meta:
             existing_meta["source"] = "capture_api"
         data.metadata = existing_meta
+
+    # Record which classification fields the caller set deliberately so the
+    # rule-based classifiers (event_processor._inline_classify on every
+    # new-memory event, and classify_step on batch runs) never rewrite them.
+    # Values the caller chose are the caller's contract; keyword rules are a
+    # fallback for fields nobody chose, not an authority over chosen ones.
+    if isinstance(data.metadata, dict):
+        pinned = sorted(
+            {f for f in (explicit_fields or ()) if f in ("category", "level")}
+            | {f for f in (getattr(data, "_pinned", "") or "").split(",") if f}
+        )
+        # Contract categories are pinned by definition even when provenance
+        # was unreadable (a post-construction mutation of a default
+        # MemoryInput): anything in CONTRACT_CATEGORIES is chosen, never a
+        # default.
+        if data.category in CONTRACT_CATEGORIES and "category" not in pinned:
+            pinned.append("category")
+        if pinned:
+            data.metadata["pinned_fields"] = pinned
+        else:
+            data.metadata.pop("pinned_fields", None)
 
     if accumulate_key:
         if isinstance(data.metadata, dict):

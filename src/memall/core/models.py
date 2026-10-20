@@ -54,3 +54,8 @@ class MemoryInput:
     # Source IDs for provenance tracking (M3): specify which source memories this memory is derived from
     # Particularly useful when creating distilled memories (L9+) from multiple sources
     source_ids: str = "[]"
+    # Pinned classification fields (filled by capture() from caller intent,
+    # not passed by callers): a comma list like "category,level".  The
+    # rule-based classifiers honour it and never overwrite pinned values —
+    # see memall.pipeline.classify.is_field_pinned.
+    _pinned: str = ""

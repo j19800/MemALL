@@ -2,6 +2,7 @@ import json
 import logging
 import sys
 from memall.mcp.adapter import TOOL_DEFINITIONS, handle_call, _intercept, consume_session_note
+from memall.mcp.shared import ack_session_note
 
 _initialized = False
 _client_name = ""
@@ -324,6 +325,9 @@ def serve():
                         session_note = consume_session_note()
                         if session_note:
                             content.append({"type": "text", "text": session_note})
+                            # delivered -> acknowledge (audit P2-12: a note
+                            # dropped on read is lost on timeout)
+                            ack_session_note()
                         _respond({
                             "jsonrpc": "2.0", "id": req_id,
                             "result": {"content": content},

@@ -711,6 +711,48 @@ def guard_subjects_human_readable() -> Tuple[bool, str]:
     return clean and json_title_ok, f"clean={clean} subj={subj[:44]!r} json={json_title_ok}"
 
 
+def guard_caller_pins_classification() -> Tuple[bool, str]:
+    """A caller-chosen category/level must survive BOTH classifier paths.
+
+    Audit P1-16: the keyword-rule classifiers rewrote explicitly-chosen
+    values — every task written through capture() became fix/testing within
+    60s (notify_pending_tasks then returned zero) and L10 reports were
+    demoted to L6.  Both the per-event path (_inline_classify) and the
+    batch path (classify_step) must honour metadata.pinned_fields.
+    """
+    _fresh_db()
+    from memall.core.db import get_conn, init_db
+    from memall.core.thin_waist import capture
+    from memall.pipeline.event_processor import process_events
+    from memall.pipeline.classify import classify_step
+
+    init_db()
+    mid = capture("契约类别验证：这条记忆显式声明 category=task 与 level=L5，"
+                  "两条分类器路径跑完后必须原样保留，不得被关键词规则改写。",
+                  level="L5", category="task", project="g", agent_name="pinbot",
+                  owner="老陈")
+    # pipeline_cursors is created by classify_step itself; run it once to
+    # create the table, then rewind the cursor so the batch pass covers the
+    # row under test.
+    classify_step()
+    conn = get_conn()
+    conn.execute("UPDATE pipeline_cursors SET cursor_id = ? WHERE step='classify'",
+                 (mid + 1,))
+    conn.commit()
+    conn.close()
+
+    process_events()          # the per-write path
+    classify_step()           # the batch path
+
+    conn = get_conn()
+    row = conn.execute("SELECT level, category FROM memories WHERE id=?", (mid,)).fetchone()
+    conn.execute("UPDATE pipeline_cursors SET cursor_id = 0 WHERE step='classify'")
+    conn.commit()
+    conn.close()
+    ok = bool(row) and row["level"] == "L5" and row["category"] == "task"
+    return ok, f"level={row['level'] if row else '?'} category={row['category'] if row else '?'}"
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -738,6 +780,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_query_survives_syntax": guard_fts_query_survives_syntax,
     "retrieve_excludes_archived": guard_retrieve_excludes_archived,
     "subjects_human_readable": guard_subjects_human_readable,
+    "caller_pins_classification": guard_caller_pins_classification,
 }
 
 # Full test files run as subprocesses when no guard name is given.

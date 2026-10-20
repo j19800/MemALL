@@ -3,7 +3,9 @@ import logging
 import time
 
 from memall.mcp.validator import validate_tool_input, format_validation_error
-from memall.mcp.shared import ensure_session_started, consume_session_note, run_intercept
+from memall.mcp.shared import (
+    ensure_session_started, consume_session_note, ack_session_note, run_intercept,
+)
 from memall.mcp.registry import registry
 from memall.mcp.hooks import HookRegistry, HOOK_PRE_TOOL_USE, HOOK_POST_TOOL_USE, HOOK_POST_TOOL_USE_FAILURE
 from memall.core.metrics import get_metrics
@@ -135,11 +137,13 @@ def _inject_hook_activity(result_str: str) -> str:
 
 
 def _inject_session_context(result_str: str, agent_name: str = "") -> str:
-    """Consume the pending session note and inject ``_meta.session_context``
-    into the JSON response for read-only tools.
+    """Inject ``_meta.session_context`` for read-only tools.
 
-    ``agent_name`` scopes delivery so a multi-agent process hands each agent
-    its own injected context instead of whichever note happened to be last.
+    The pending note is only dropped when it was ACTUALLY delivered (the
+    acknowledgement follows the injection).  Previously the note was popped
+    on read, so a response that never reached the client (timeout, crash
+    between read and write) lost the session context permanently — the MCP
+    protocol has no way to ask for it again (audit P2-12).
     """
     try:
         note = consume_session_note(agent_name)
@@ -151,6 +155,8 @@ def _inject_session_context(result_str: str, agent_name: str = "") -> str:
             return result_str
 
         parsed.setdefault("_meta", {})["session_context"] = note
+        # Delivered — acknowledge (drop) it now.
+        ack_session_note(agent_name)
         return json.dumps(parsed, ensure_ascii=False)
     except Exception:
         logger.debug("session_context injection failed (non-fatal)", exc_info=True)

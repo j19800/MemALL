@@ -294,13 +294,31 @@ def classify_step() -> dict:
 
             # Update level, category, metadata
             old_level = row["level"]
+            # Writer contracts are pinned (see memall.core.pins / audit P1-16):
+            # the batch classifier fills fields nobody chose, never ones they
+            # did.  Without this, a full re-scan rewrites every
+            # category='task' row by keyword and demotes L10 reports to L6 —
+            # reproduced live on the four dsh task rows.
+            from memall.core.pins import is_field_pinned
+
+            level_pinned = is_field_pinned(meta, "level")
+            cat_pinned = is_field_pinned(meta, "category", row["category"])
+            if level_pinned:
+                # keep the chosen level; the layer fields must not drift from
+                # it or primary_layer would contradict memories.level
+                primary = old_level
+            final_cat = (
+                row["category"]
+                if (cat_pinned or best_cat == "general")
+                else best_cat
+            )
             conn.execute(
                 "UPDATE memories SET level = ?, primary_layer = ?, "
                 "secondary_layers = ?, metadata = ?, category = ? WHERE id = ?",
                 (primary, primary,
                  json.dumps(result.get("secondary", []), ensure_ascii=False),
                  json.dumps(meta, ensure_ascii=False),
-                 best_cat if best_cat != "general" else row["category"],
+                 final_cat,
                  row["id"]),
             )
             if primary != old_level:
