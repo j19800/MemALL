@@ -578,6 +578,73 @@ def guard_digest_excludes_archived() -> Tuple[bool, str]:
     return in1 and gone, f"mid={mid} present={in1} archived_gone={gone}"
 
 
+def guard_fts_query_survives_syntax() -> Tuple[bool, str]:
+    """fts_query() output must be valid MATCH syntax for ANY user text.
+
+    Pasted code/JSON (quotes, braces) was parsed as FTS5 query syntax and
+    raised "unterminated string" on ~5% of real production content slices.
+    AND: the escaped form must keep phrase adjacency — per-char quoted
+    terms without an outer phrase are implicit-AND (measured: 394 candidates
+    vs 284 for the phrase form), which silently floods results with noise.
+    """
+    import sqlite3
+
+    from memall.core.db import pool_conn
+    from memall.core.thin_waist import fts_query
+
+    nasty = ['tools/call: {"meth', 'quote " inside', 'search"]', "{brace}",
+            '"unclosed', "a AND b OR c", "NOT 存在", "NEAR/3 靠近"]
+    bad = []
+    with pool_conn() as conn:
+        for q in nasty:
+            try:
+                fts = fts_query(q)
+                conn.execute(
+                    "SELECT 1 FROM memories_fts WHERE memories_fts MATCH ? LIMIT 1",
+                    (fts,)).fetchone()
+            except sqlite3.OperationalError as e:
+                bad.append(f"{q!r}: {e}")
+        # adjacency: 验 收 as outer-phrase vs bare implicit-AND
+        n_phrase = conn.execute(
+            "SELECT COUNT(*) FROM memories_fts WHERE memories_fts MATCH ?",
+            ('"验 收"',)).fetchone()[0]
+        n_implicit = conn.execute(
+            "SELECT COUNT(*) FROM memories_fts WHERE memories_fts MATCH ?",
+            ('"验" "收"',)).fetchone()[0]
+        # a 2-char query must come back as ONE outer-quoted phrase
+        phrase_form = fts_query("验收") == '"验 收"'
+    ok = not bad and (n_phrase < n_implicit) and phrase_form
+    return ok, ("; ".join(bad[:2]) or
+                f"phrase={n_phrase} implicit={n_implicit} phrase_form={phrase_form}")
+
+
+def guard_retrieve_excludes_archived() -> Tuple[bool, str]:
+    """Live retrieval must never surface archived (soft-deleted) rows.
+
+    The shared WHERE builder lacked the status predicate, so fts5/direct
+    returned archived test rows while hybrid/vector did not — the same
+    query gave different answers depending on mode (measured in production:
+    three archived rows as the top-3 for "Promotion test").
+    """
+    _fresh_db()
+    from memall.core.db import get_conn, init_db
+    from memall.core.thin_waist import capture, retrieve
+
+    init_db()
+    mid = capture("归档不可见验证：这条记忆归档后绝不能再出现在任何检索模式中，"
+                  "软删除对所有检索通路语义必须一致。",
+                  level="P2", category="testing", project="g", agent_name="archg",
+                  owner="老陈")
+    conn = get_conn()
+    conn.execute("UPDATE memories SET memory_status='archived' WHERE id=?", (mid,))
+    conn.commit()
+    conn.close()
+    leak = any(m.id == mid for m in retrieve("归档不可见验证", limit=10))
+    can_see = any(m.id == mid for m in retrieve(
+        "归档不可见验证", limit=10, include_archived=True))
+    return (not leak) and can_see, f"leak={leak} explicit_opt_in_visible={can_see}"
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -602,6 +669,8 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "facets_match_population": guard_facets_match_population,
     "hot_topics_functional": guard_hot_topics_functional,
     "digest_excludes_archived": guard_digest_excludes_archived,
+    "fts_query_survives_syntax": guard_fts_query_survives_syntax,
+    "retrieve_excludes_archived": guard_retrieve_excludes_archived,
 }
 
 # Full test files run as subprocesses when no guard name is given.

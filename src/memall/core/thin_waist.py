@@ -1887,9 +1887,24 @@ def _build_retrieve_where(conn, query, viewer, filters) -> tuple[list, list, boo
     :func:`enhanced_search` can reuse the *identical* filter semantics for
     its facet aggregates (facets must count the same population the results
     come from, just without LIMIT).
+
+    Archived rows are excluded by default: ``memory_status='archived'`` is
+    the soft-delete marker (ops.batch_archive / the dedup archivers), and
+    the hybrid/vector paths already honour it — the plain retrieve path
+    leaking archived rows into results was an inconsistency between modes
+    (verified: an fts5 query returned three archived test rows in its
+    top-3).  Pass ``include_archived=True`` in filters to deliberately
+    inspect deleted history (a history read, not a live recall).
     """
     where = ["1=1"]
     params = []
+
+    # Soft-delete marker. Archived rows are excluded unless the caller
+    # deliberately asks to inspect deleted history. This lives here (not only
+    # in the scanning pipeline steps) so every mode of retrieve() /
+    # enhanced_search() / unified_search shares one definition.
+    if not filters.get("include_archived"):
+        where.append("COALESCE(memories.memory_status, '') != 'archived'")
 
     for key in ("owner", "agent_name", "category", "project", "level"):
         val = filters.get(key)
@@ -2329,28 +2344,48 @@ def fts_query(raw: str) -> str:
 
     Non-CJK words use exact match.  Multiple whitespace-separated terms are
     AND-ed together.
+
+    Every emitted string neutralises FTS5 query syntax: an inner double
+    quote is doubled (the FTS5 escape rule) and braces map to spaces.
+    Without this, pasted code or JSON — e.g. the literal substring
+    ``tools/call: {"meth`` found in production content — is parsed as MATCH
+    syntax and raises ``sqlite3.OperationalError: unterminated string``;
+    verified against production slices, ~5% of real substring queries hit
+    this.  Escaping happens *inside* the phrase quotes so adjacency
+    semantics are unchanged (measured: per-char unquoted terms silently
+    degrade a phrase to implicit-AND — 394 candidates vs 284).
     """
     terms = raw.strip().split()
     if not terms:
         return ""
+
+    def _esc(inner: str) -> str:
+        return inner.replace('"', '""').replace("{", " ").replace("}", " ")
+
+    def _phrase(inner: str) -> str:
+        # One outer-quoted FTS5 phrase whose content is already split into
+        # single-char CJK tokens; quoting the whole phrase keeps adjacency.
+        return '"' + _esc(inner) + '"'
+
     tokenized: list[str] = []
     for t in terms:
         if _CJK_RE.search(t):
             # Phrase of individually-indexed CJK characters.
-            cjk_options = [f'"{_split_cjk(t)}"']
+            cjk_options = [_phrase(_split_cjk(t))]
             # Adjacent 2-char sub-phrases for broader recall on long runs.
             if len(t) >= 3:
                 for i in range(len(t) - 1):
                     sub = t[i : i + 2]
-                    tok = f'"{_split_cjk(sub)}"'
-                    if tok not in cjk_options:
-                        cjk_options.append(tok)
+                    if _CJK_RE.search(sub):
+                        tok = _phrase(_split_cjk(sub))
+                        if tok not in cjk_options:
+                            cjk_options.append(tok)
             if len(cjk_options) > 1:
                 tokenized.append(f"({' OR '.join(cjk_options)})")
             else:
                 tokenized.append(cjk_options[0])
         else:
-            tokenized.append(f'"{t}"')
+            tokenized.append(_phrase(t))
     if len(tokenized) > 1:
         return " AND ".join(tokenized)
     return tokenized[0] if tokenized else ""
