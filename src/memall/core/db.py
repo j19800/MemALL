@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS memories (
 	    supersedes TEXT NOT NULL DEFAULT '[]',
 	    trust_level REAL NOT NULL DEFAULT 1.0,
     access_count INTEGER NOT NULL DEFAULT 0,
+    dedup_hits INTEGER NOT NULL DEFAULT 0,
     visibility TEXT NOT NULL DEFAULT 'private',
     confidence REAL NOT NULL DEFAULT 0.5,
     weight INTEGER NOT NULL DEFAULT 1,

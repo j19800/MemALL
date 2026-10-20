@@ -7,8 +7,10 @@ logger = logging.getLogger(__name__)
 # Auto-start cooldown state.  Lives in the DB (not process memory): the MCP
 # server is long-lived, but a restart used to reset the cooldown and let
 # every agent re-open a session immediately, piling duplicate sessions into
-# the sessions table (audit P2-13).
+# the sessions table (audit P2-13).  The in-memory map stays as a fallback
+# for the case where the DB is not reachable.
 _AUTO_START_COOLDOWN = 1800
+_AUTO_START_CACHE: dict[str, str] = {}
 
 # Per-agent pending session notes.  A single module-level string used to be
 # overwritten whenever a second agent started a session in the same process,

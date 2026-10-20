@@ -59,7 +59,19 @@ def handle_call(tool_name: str, arguments: dict) -> str:
         m.incr("tool_call_validation_error")
         m.record_latency(f"tool.{tool_name}", (time.time() - _t0) * 1000)
         return format_validation_error(tool_name, err_msg)
+    # Keep the ORIGINAL parameters: the validator drops fields the action's
+    # model does not declare, so a handler could not tell that the client
+    # passed e.g. dedup_threshold to action=capture and that it silently
+    # did nothing (audit P0-2).  The original keys are handed to the
+    # handler as "__extra_args__" for that reporting.
+    _original_args = dict(arguments) if isinstance(arguments, dict) else {}
     arguments = validated_data
+    if _original_args:
+        extra = {k: v for k, v in _original_args.items()
+                 if k not in arguments and k != "action"}
+        if extra:
+            arguments = dict(arguments)
+            arguments["__extra_args__"] = extra
 
     # Session-based tools (memall_system actions) that should not auto-start sessions
     _SESSION_SKIP_TOOLS = frozenset({"ping"})

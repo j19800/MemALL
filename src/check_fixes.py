@@ -826,6 +826,195 @@ def guard_background_threads_bounded() -> Tuple[bool, str]:
     return ok, f"before={before} peak={peak} limit={limit} completed={len(done)}"
 
 
+def guard_search_filters_pushed_to_sql() -> Tuple[bool, str]:
+    """Hybrid/vector search must filter in SQL and support project.
+
+    Audit P1-5/P1-6: hybrid filtered candidates IN MEMORY after cutting the
+    pool to 2x top_k (a category filter usually left 0 rows) and had no
+    project parameter at all; vector_search could not isolate by project,
+    category, level or agent — cross-project content leaked into every
+    answer.
+    """
+    _fresh_db()
+    from memall.core.db import init_db
+    from memall.core.thin_waist import capture
+    from memall.core.thin_waist_search import hybrid_search, vector_search
+
+    init_db()
+    for i in range(3):
+        capture(f"过滤下推验证条目 alpha{i}：这条记忆属于 projA 项目，用于验证检索过滤是下推到 SQL 的。",
+                level="P2", category="testing", project="projA",
+                agent_name="agentA", owner="老陈")
+    capture("过滤下推验证条目 beta：这条记忆属于 projB 项目，用于验证项目隔离确实生效。",
+            level="P2", category="decision", project="projB",
+            agent_name="agentB", owner="老陈")
+
+    r = hybrid_search(query="过滤下推验证", top_k=10, project="projA")
+    projs = {x.get("project") for x in r.get("results", [])}
+    ok_a = bool(r.get("results")) and projs == {"projA"}
+
+    r2 = hybrid_search(query="过滤下推验证", top_k=10, category="decision")
+    cats = {x.get("category") for x in r2.get("results", [])}
+    ok_b = bool(r2.get("results")) and cats == {"decision"}
+
+    r3 = vector_search(query="过滤下推验证", top_k=8, project="projA")
+    v_projs = {x.get("project") for x in r3.get("results", [])}
+    ok_c = (not r3.get("results")) or v_projs == {"projA"}
+
+    return (ok_a and ok_b and ok_c), (
+        f"project_filter={ok_a}({projs}) category_filter={ok_b}({cats}) "
+        f"vector_project={ok_c}({v_projs})")
+
+
+def guard_intent_reaches_semantic() -> Tuple[bool, str]:
+    """A long Chinese question must be able to reach the SEMANTIC branch.
+
+    Audit P1-8: the "cjk >= 3 -> HYBRID" check came first, so every
+    Chinese query returned HYBRID and the pure-vector path was dead code
+    in production.
+    """
+    from memall.search.intent_router import classify, resolve_mode
+    from memall.search.intent_router import SearchIntent
+
+    long_cn = "验收测试标记记忆的分面检索候选集统计与排序实现细节"
+    intent = classify(long_cn)
+    ok = intent is SearchIntent.SEMANTIC_SEARCH
+    short_cn = classify("验收测试")
+    ok2 = short_cn is SearchIntent.HYBRID_SEARCH
+    return ok and ok2, (f"long_cn->{resolve_mode(intent)} short_cn->{resolve_mode(short_cn)}")
+
+
+def guard_access_count_means_reads() -> Tuple[bool, str]:
+    """access_count counts retrievals; duplicate writes count separately.
+
+    Audit P1-4: a hash hit (re-writing the same content) incremented
+    access_count, so duplicate WRITES inflated the hot-topic ranking, the
+    decay score and the zero-access health statistic; and retrieval itself
+    never incremented it (only 21% of the store had ever been read).
+    """
+    _fresh_db()
+    from memall.core.db import get_conn, init_db
+    from memall.core.thin_waist import capture, retrieve
+
+    init_db()
+    text = "读写计数验证：这条记忆被检索一次 access_count 加一，重复写入只增加 dedup_hits。"
+    mid = capture(text, level="P2", category="testing", project="g",
+                  agent_name="cntbot", owner="老陈")
+    conn = get_conn()
+    before = conn.execute("SELECT access_count FROM memories WHERE id=?", (mid,)).fetchone()[0]
+    conn.close()
+
+    retrieve("读写计数验证", agent_name="cntbot", limit=3)
+    conn = get_conn()
+    after_read = conn.execute("SELECT access_count FROM memories WHERE id=?", (mid,)).fetchone()[0]
+    conn.close()
+
+    capture(text, level="P2", category="testing", project="g",
+            agent_name="cntbot", owner="老陈")
+    conn = get_conn()
+    row = conn.execute("SELECT access_count, dedup_hits FROM memories WHERE id=?", (mid,)).fetchone()
+    conn.close()
+    ok = (before == 0 and after_read == 1
+          and row["access_count"] == 1 and row["dedup_hits"] >= 1)
+    return ok, (f"before={before} after_read={after_read} "
+                f"after_dup=access{row['access_count']}/dedup{row['dedup_hits']}")
+
+
+def guard_batch_search_is_semantic() -> Tuple[bool, str]:
+    """batch_search must go through the unified (hybrid) path.
+
+    Audit P1-7: it called retrieve() — the plain FTS5 path — while the
+    docstring claimed "unified search", so a batch semantic query behaved
+    like a keyword query and never recalled keyword-disjoint memories.
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import init_db
+    from memall.core.thin_waist import capture
+    from memall.mcp.adapter import handle_call
+
+    init_db()
+    capture("批量语义检索验证：这条记忆与查询措辞不同但语义相关，用于验证批量搜索走了向量通路。",
+            level="P2", category="testing", project="g", agent_name="batchbot",
+            owner="老陈")
+    out = json.loads(handle_call("memall_read", {
+        "action": "batch_search", "queries": ["语义相关的另一种问法"], "limit": 3}))
+    items = out.get("results", [])
+    has_rrf = any(r.get("rrf_score") for item in items for r in item.get("results", []))
+    return has_rrf, f"rrf_score_present={has_rrf} processed={out.get('processed')}"
+
+
+def guard_capture_ignores_foreign_fields() -> Tuple[bool, str]:
+    """action=capture must not crash on schema fields of other actions, and
+    must REPORT them instead of silently dropping them (audit P0-2)."""
+    _fresh_db()
+    import json
+    from memall.core.db import init_db
+    from memall.mcp.adapter import handle_call
+
+    init_db()
+    out = json.loads(handle_call("memall_write", {
+        "action": "capture",
+        "content": "schema 收口验证：这条写入带上了别的 action 的字段，必须被忽略而不是崩溃。",
+        "agent_name": "schemabot", "owner": "老陈", "project": "g",
+        "dedup_threshold": 0.9, "memory_id": 123, "interaction_type": "click",
+    }))
+    ok = out.get("status") == "ok" and out.get("id")
+    ignored = set(out.get("ignored_fields") or [])
+    reported = {"dedup_threshold", "memory_id", "interaction_type"} <= ignored
+    return ok and reported, f"status={out.get('status')} ignored={sorted(ignored)}"
+
+
+def guard_session_cooldown_persisted() -> Tuple[bool, str]:
+    """The auto-start cooldown must survive a process restart.
+
+    Audit P2-13: the cooldown lived in process memory, so restarting the
+    MCP server reset it and every agent immediately re-opened a session
+    (the sessions table piled up duplicates — one agent had 7 in a day).
+    It now lives in the session_cooldowns table.
+    """
+    _fresh_db()
+    from memall.core.db import get_conn, init_db
+    from memall.mcp.shared import ensure_session_started, _last_start
+
+    init_db()
+    ensure_session_started("cdbot", auto_inject=False)
+    persisted = bool(_last_start("cdbot"))
+    conn = get_conn()
+    n1 = conn.execute(
+        "SELECT COUNT(*) FROM sessions WHERE agent_name = 'cdbot'").fetchone()[0]
+    conn.close()
+    ensure_session_started("cdbot", auto_inject=False)
+    conn = get_conn()
+    n2 = conn.execute(
+        "SELECT COUNT(*) FROM sessions WHERE agent_name = 'cdbot'").fetchone()[0]
+    conn.close()
+    ok = persisted and n1 == n2
+    return ok, f"persisted={persisted} sessions {n1}->{n2}"
+
+
+def guard_session_note_acknowledged() -> Tuple[bool, str]:
+    """A session note must survive until it is DELIVERED (audit P2-12).
+
+    consume_session_note() used to pop the note on read, so a response that
+    never reached the client lost the session context for good.  Reading
+    must not consume; only ack_session_note() does.
+    """
+    _fresh_db()
+    from memall.mcp import shared
+
+    shared._PENDING_SESSION_NOTES.clear()
+    shared._PENDING_SESSION_NOTES["ackbot"] = "上下文内容"
+    first = shared.consume_session_note("ackbot")
+    second = shared.consume_session_note("ackbot")
+    still = shared._PENDING_SESSION_NOTES.get("ackbot")
+    acked = shared.ack_session_note("ackbot")
+    gone = "ackbot" not in shared._PENDING_SESSION_NOTES
+    ok = first == "上下文内容" and second == "上下文内容" and still and acked and gone
+    return ok, (f"first={first!r} second={second!r} still_pending={bool(still)} "
+                f"acked={acked} dropped={gone}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -856,6 +1045,13 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "caller_pins_classification": guard_caller_pins_classification,
     "capture_audit_hook_fires": guard_capture_audit_hook_fires,
     "background_threads_bounded": guard_background_threads_bounded,
+    "search_filters_pushed_to_sql": guard_search_filters_pushed_to_sql,
+    "intent_reaches_semantic": guard_intent_reaches_semantic,
+    "access_count_means_reads": guard_access_count_means_reads,
+    "batch_search_is_semantic": guard_batch_search_is_semantic,
+    "capture_ignores_foreign_fields": guard_capture_ignores_foreign_fields,
+    "session_cooldown_persisted": guard_session_cooldown_persisted,
+    "session_note_acknowledged": guard_session_note_acknowledged,
 }
 
 # Full test files run as subprocesses when no guard name is given.

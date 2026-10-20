@@ -298,11 +298,27 @@ def _context_rerank(
     return combined
 
 
-def vector_search(query: str, top_k: int = 10, provider: Optional[str] = None) -> dict:
+def vector_search(
+    query: str,
+    top_k: int = 10,
+    provider: Optional[str] = None,
+    category: Optional[str] = None,
+    level: Optional[str] = None,
+    owner: Optional[str] = None,
+    project: Optional[str] = None,
+    agent_name: Optional[str] = None,
+) -> dict:
     """Semantic vector search.
 
     Uses the configured search provider (default vec0 KNN via bge-small-zh-v1.5).
     Set ``provider="faiss"`` to use FAISS, ``provider="vec0"`` for explicit vec0.
+
+    Audit P1-6: the function accepted only (query, top_k, provider), so a
+    semantic search could NOT be isolated by project / category / level /
+    agent — cross-project content leaked into every vector answer.  The
+    filters are applied here, after the provider returns its candidates,
+    against the live rows (the provider contract stays unchanged, so the
+    FAISS and vec0 providers need no change).
     """
     from memall.config import get_config
 
@@ -311,10 +327,54 @@ def vector_search(query: str, top_k: int = 10, provider: Optional[str] = None) -
 
     p = get_provider(active)
     if p is not None:
-        return p.search(query, top_k=top_k)
-    from memall.graph.retrieve import retrieve as graph_retrieve
+        result = p.search(query, top_k=top_k)
+    else:
+        from memall.graph.retrieve import retrieve as graph_retrieve
 
-    return graph_retrieve(query, mode="vector", top_k=top_k)
+        result = graph_retrieve(query, mode="vector", top_k=top_k)
+
+    filters = [f for f in (category, level, owner, project, agent_name) if f]
+    if not filters or not isinstance(result, dict):
+        return result
+
+    # Re-query the matching rows and keep only the provider's ids.
+    ids = [r.get("memory_id") for r in result.get("results", []) if r.get("memory_id")]
+    if not ids:
+        return result
+    from memall.core.thin_waist import _pool_conn
+
+    cols = {"category": category, "level": level, "owner": owner,
+            "project": project, "agent_name": agent_name}
+    where = " AND ".join(f"{c} = ?" for c, v in cols.items() if v)
+    params = [v for v in cols.values() if v]
+    ph = ",".join("?" * len(ids))
+    with _pool_conn() as conn:
+        rows = conn.execute(
+            f"SELECT id, project, category, level, owner, agent_name FROM memories "
+            f"WHERE id IN ({ph})" + (f" AND {where}" if where else ""),
+            ids + params,
+        ).fetchall()
+    keep = {r["id"] for r in rows}
+    attrs = {r["id"]: r for r in rows}
+    kept = []
+    for r in result.get("results", []):
+        mid = r.get("memory_id")
+        if mid not in keep:
+            continue
+        row = attrs.get(mid)
+        if row is not None:
+            # The provider's result dict carries no project/category/level;
+            # fill them from the live row so callers can verify the filter.
+            for col in ("project", "category", "level", "owner", "agent_name"):
+                if not r.get(col):
+                    try:
+                        r[col] = row[col] or ""
+                    except (IndexError, KeyError):
+                        pass
+        kept.append(r)
+    result["results"] = kept
+    result["total"] = len(kept)
+    return result
 
 
 def hybrid_search(
@@ -324,6 +384,8 @@ def hybrid_search(
     category: Optional[str] = None,
     level: Optional[str] = None,
     owner: Optional[str] = None,
+    project: Optional[str] = None,
+    agent_name: Optional[str] = None,
     rerank: Optional[bool] = None,
     viewer: Optional[str] = None,
 ) -> dict:
@@ -335,8 +397,14 @@ def hybrid_search(
     4. (optional) Cross-encoder reranking of top candidates
     5. (optional) Context-aware re-ranking using viewer profile
 
-    Optional metadata filters (``category``, ``level``, ``owner``) are applied
-    before the RRF merge, reducing candidate pool size.
+    Metadata filters (``category``, ``level``, ``owner``, ``project``,
+    ``agent_name``) are applied IN SQL, not in memory (audit P1-5/P1-6):
+    the old implementation fetched ``top_k * 2`` candidates and filtered
+    them afterwards, so a category filter usually left 0 rows (the filter
+    ran on a pool that had already been cut to 2x top_k) and there was no
+    way to isolate by project at all.  The filters are now part of the
+    candidate query, and the over-fetch factor is enlarged when a filter is
+    present so the filtered pool is still large enough to rank.
 
     Reranking is enabled when ``rerank=True`` (or, when ``rerank`` is left as
     ``None``, by the ``search.rerank_enabled`` config flag). The top
@@ -377,6 +445,21 @@ def hybrid_search(
         return filtered
 
     with _pool_conn() as conn:
+        # Filter conditions, pushed into SQL (audit P1-5/P1-6).
+        filters: list[str] = []
+        filter_params: list = []
+        for col, val in (("category", category), ("level", level),
+                         ("owner", owner), ("project", project),
+                         ("agent_name", agent_name)):
+            if val:
+                filters.append(f"m.{col} = ?")
+                filter_params.append(val)
+        where_sql = (" AND " + " AND ".join(filters)) if filters else ""
+        # With filters the candidate pool is pre-cut, so fetch more of it.
+        fetch = top_k * (8 if filters else 2)
+        sel = ("SELECT m.id, m.content, m.subject, m.category, m.level, "
+               "m.owner, m.agent_name, m.project, m.created_at FROM memories m")
+
         # FTS5 results
         fts_q = fts_query(query)
         fts_rows = []
@@ -384,30 +467,30 @@ def hybrid_search(
             fts_rowids = conn.execute(
                 "SELECT rowid FROM memories_fts WHERE memories_fts MATCH ? "
                 "ORDER BY rank LIMIT ?",
-                (fts_q, top_k * 2),
+                (fts_q, fetch),
             ).fetchall()
             if fts_rowids:
                 ids = [r["rowid"] for r in fts_rowids]
                 placeholders = ",".join("?" * len(ids))
                 fts_rows = conn.execute(
-                    f"SELECT id, content, subject, category, level, owner, agent_name, created_at FROM memories WHERE id IN ({placeholders})",
-                    ids,
+                    f"{sel} WHERE m.id IN ({placeholders}){where_sql}",
+                    ids + filter_params,
                 ).fetchall()
-        fts_rows = _apply_meta_filters(fts_rows)
+        fts_rows = list(fts_rows)
 
         # vec0 KNN results
         query_vec = _query_embed(query)
         vec_rows = []
         if query_vec is not None:
-            vec_results = _vec0_knn(conn, query_vec, top_k * 2)
+            vec_results = _vec0_knn(conn, query_vec, fetch)
             if vec_results:
                 mids = [vr["memory_id"] for vr in vec_results]
                 vp = ",".join("?" * len(mids))
                 vec_rows = conn.execute(
-                    f"SELECT id, content, subject, category, level, owner, agent_name, created_at FROM memories WHERE id IN ({vp})",
-                    mids,
+                    f"{sel} WHERE m.id IN ({vp}){where_sql}",
+                    mids + filter_params,
                 ).fetchall()
-        vec_rows = _apply_meta_filters(vec_rows)
+        vec_rows = list(vec_rows)
 
         if not fts_rows and not vec_rows:
             return {
@@ -428,6 +511,7 @@ def hybrid_search(
                 "level": r["level"] or "",
                 "owner": r["owner"] or "",
                 "agent_name": r["agent_name"] or "",
+                "project": r["project"] or "",
                 "created_at": r["created_at"] or "",
                 "rrf_score": 1.0 / (rrf_k + rank + 1),
                 "fts_rank": rank + 1,
@@ -446,6 +530,7 @@ def hybrid_search(
                     "level": r["level"] or "",
                     "owner": r["owner"] or "",
                     "agent_name": r["agent_name"] or "",
+                    "project": r["project"] or "",
                     "created_at": r["created_at"] or "",
                     "rrf_score": 1.0 / (rrf_k + rank + 1),
                     "fts_rank": None,

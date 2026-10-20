@@ -1051,8 +1051,14 @@ def _capture_dedup_check(
                 "capture: hash hit on #%d promoted (%s)", existing["id"],
                 ", ".join(p.split(" =")[0] for p in promotions),
             )
+        # Audit P1-4: a hash hit (re-writing the same content) is a WRITE,
+        # not a READ — counting it as an access inflated the hot-topic
+        # ranking and the decay score with duplicate writes.  Re-writes are
+        # counted in their own column; access_count now means "times this
+        # memory was retrieved".
         conn.execute(
-            "UPDATE memories SET access_count = access_count + 1 WHERE id = ?",
+            "UPDATE memories SET dedup_hits = COALESCE(dedup_hits, 0) + 1 "
+            "WHERE id = ?",
             (existing["id"],),
         )
         conn.commit()
@@ -1071,8 +1077,11 @@ def _capture_dedup_check(
         if threshold > 0 and window > 0:
             dup_id = _semantic_dedup_lookup(conn, data, threshold, window)
             if dup_id is not None:
+                # Audit P1-4: a semantic dedup hit is a duplicate WRITE,
+                # not a read — count it in dedup_hits, not access_count.
                 conn.execute(
-                    "UPDATE memories SET access_count = access_count + 1, updated_at = ? WHERE id = ?",
+                    "UPDATE memories SET dedup_hits = COALESCE(dedup_hits, 0) + 1, "
+                    "updated_at = ? WHERE id = ?",
                     (now, dup_id),
                 )
                 conn.commit()
@@ -1093,7 +1102,8 @@ def _capture_dedup_check(
         if dup:
             new_weight = (dup["weight"] or 1) + 1
             conn.execute(
-                "UPDATE memories SET weight = ?, content = ?, content_hash = ?, updated_at = ?, access_count = access_count + 1 WHERE id = ?",
+                "UPDATE memories SET weight = ?, content = ?, content_hash = ?, updated_at = ?, "
+                "dedup_hits = COALESCE(dedup_hits, 0) + 1 WHERE id = ?",
                 (new_weight, data.content, h, now, dup["id"]),
             )
             conn.commit()
@@ -1813,10 +1823,17 @@ def unified_search(arguments: dict) -> str:
                            ensure_ascii=False)
 
     if mode == "vector":
-        # Vector search: only accepts query and top_k
+        # Vector search: filters are applied on the returned candidates
+        # (audit P1-6: the function had no way to isolate by project /
+        # category / level / agent).
         result = vector_search(
             query=query,
             top_k=_seen_fetch_limit(arguments, top_k),
+            category=arguments.get("category"),
+            level=arguments.get("level"),
+            owner=arguments.get("owner"),
+            project=arguments.get("project"),
+            agent_name=arguments.get("agent_name"),
         )
         if wants_enhancements:
             _apply_enhancements_inplace(
@@ -1836,6 +1853,8 @@ def unified_search(arguments: dict) -> str:
         category=arguments.get("category"),
         level=arguments.get("level"),
         owner=arguments.get("owner"),
+        project=arguments.get("project"),
+        agent_name=arguments.get("agent_name"),
         rerank=arguments.get("rerank", False),
         viewer=arguments.get("agent_name"),
     )
@@ -2250,6 +2269,22 @@ def retrieve(query=None, viewer=None, **filters) -> list | Memory | None:
         cur = conn.execute(sql, params)
         rows = cur.fetchall()
         results = [_row_to_memory(r) for r in rows]
+
+        # Audit P1-4: retrieval is a READ, so the returned rows must be
+        # counted.  Previously only a direct lookup by id incremented
+        # access_count, so the hot-topic ranking, the decay score and the
+        # "zero_access" health statistic saw a store where only 21% of the
+        # memories had ever been read.  One batched UPDATE per retrieval.
+        if rows:
+            try:
+                ids = [r["id"] for r in rows]
+                ph = ",".join("?" * len(ids))
+                conn.execute(
+                    f"UPDATE memories SET access_count = access_count + 1 "
+                    f"WHERE id IN ({ph})", ids)
+                conn.commit()
+            except sqlite3.Error:
+                logger.debug("retrieve: access_count update failed", exc_info=True)
 
         if viewer:
             results = _filter_by_trust(conn, results, viewer)

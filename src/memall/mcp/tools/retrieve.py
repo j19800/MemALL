@@ -216,60 +216,61 @@ def handle_record_interaction(arguments: dict) -> str:
 
 
 def handle_batch_search(arguments: dict) -> str:
-    """Search for multiple queries in a single operation for improved efficiency."""
+    """Search for multiple queries in a single operation for improved efficiency.
+
+    Audit P1-7: this used to call ``retrieve()`` — the plain FTS5 path —
+    while the docstring claimed "unified search".  A batch semantic query
+    therefore behaved like a keyword query and never recalled memories
+    that share no keywords.  It now goes through the unified search with
+    ``mode='hybrid'`` (FTS5 + vector + RRF), which is what the tool
+    description promises.
+    """
     queries = arguments.get("queries") or []
     if not queries:
         return json.dumps({"error": "queries is required (non-empty array)"}, ensure_ascii=False)
-    
+
     limit = arguments.get("limit", 10)
+    mode = arguments.get("mode", "hybrid")
     results = []
     errors = []
-    
+
+    from memall.core.thin_waist import unified_search
+
     for i, query in enumerate(queries):
         try:
             if not query or not isinstance(query, str):
                 errors.append({"index": i, "error": "query must be a non-empty string"})
                 continue
-                
-            # Perform unified search for each query
-            search_result = retrieve(
-                query=query,
-                limit=limit
-            )
-            
-            if search_result is None:
-                results.append({
-                    "index": i,
-                    "query": query,
-                    "results": [],
-                    "total": 0
-                })
-            elif isinstance(search_result, list):
-                formatted_results = [{
-                    "id": r.id, "content": r.content, "category": r.category,
-                    "level": r.level, "owner": r.owner, "agent_name": r.agent_name,
-                    "subject": r.subject, "occurred_at": r.occurred_at,
-                } for r in search_result]
-                results.append({
-                    "index": i,
-                    "query": query,
-                    "results": formatted_results,
-                    "total": len(formatted_results)
-                })
-            else:
-                # Single result
-                formatted_result = [{
-                    "id": search_result.id, "content": search_result.content, 
-                    "category": search_result.category, "level": search_result.level,
-                    "owner": search_result.owner, "agent_name": search_result.agent_name,
-                    "subject": search_result.subject, "occurred_at": search_result.occurred_at,
-                }]
-                results.append({
-                    "index": i,
-                    "query": query,
-                    "results": formatted_result,
-                    "total": 1
-                })
+
+            # Unified search (hybrid by default) — semantic recall included.
+            raw = unified_search({
+                "query": query,
+                "top_k": limit,
+                "mode": mode,
+                "agent_name": arguments.get("agent_name"),
+                "category": arguments.get("category"),
+                "level": arguments.get("level"),
+                "project": arguments.get("project"),
+            })
+            payload = json.loads(raw) if isinstance(raw, str) else raw
+            items = payload.get("results", []) if isinstance(payload, dict) else []
+            formatted = [{
+                "id": r.get("memory_id") or r.get("id"),
+                "content": (r.get("content") or "")[:500],
+                "category": r.get("category", ""),
+                "level": r.get("level", ""),
+                "owner": r.get("owner", ""),
+                "agent_name": r.get("agent_name", ""),
+                "subject": r.get("subject", ""),
+                "occurred_at": r.get("occurred_at", ""),
+                "rrf_score": r.get("rrf_score"),
+            } for r in items]
+            results.append({
+                "index": i,
+                "query": query,
+                "results": formatted,
+                "total": len(formatted),
+            })
         except Exception as e:
             errors.append({
                 "index": i,
