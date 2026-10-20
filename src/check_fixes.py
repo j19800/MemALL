@@ -1110,6 +1110,45 @@ def guard_busy_timeout_survives_concurrency() -> Tuple[bool, str]:
                 f"concurrent_errors={errors[:2] or 'none'}")
 
 
+def guard_update_can_complete_tasks() -> Tuple[bool, str]:
+    """update must be able to write metadata (the L5 task status).
+
+    The task loop was broken at its LAST step: an executor marks a task
+    done by writing metadata.status='done', but UpdateInput never declared
+    `metadata`, so the validator stripped it before the handler ran and
+    update() answered "no updatable fields provided".  The task stayed
+    status='active' forever and kept reappearing in pending_tasks — the
+    hand-off could never be closed.  (Found while auditing the memall-bus
+    end-to-end collaboration flow.)
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.mcp.adapter import handle_call
+
+    init_db()
+    cap = json.loads(handle_call("memall_write", {
+        "action": "capture", "level": "L5", "agent_name": "taskbot",
+        "category": "task", "project": "g", "owner": "老陈",
+        "subject": "[任务] update 闭环验证",
+        "content": "验证 update 能否把 L5 任务标记为 done，这条内容需要足够长以通过质量门。",
+        "metadata": json.dumps({"status": "active"}),
+    }))
+    mid = cap.get("id")
+    if not mid:
+        return False, f"capture failed: {cap}"
+    upd = json.loads(handle_call("memall_write", {
+        "action": "update", "memory_id": mid, "agent_name": "taskbot",
+        "metadata": json.dumps({"status": "done"}),
+    }))
+    conn = get_conn()
+    meta = json.loads(conn.execute(
+        "SELECT metadata FROM memories WHERE id=?", (mid,)).fetchone()[0])
+    conn.close()
+    ok = upd.get("updated") is True and meta.get("status") == "done"
+    return ok, f"updated={upd.get('updated')} status={meta.get('status')}"
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -1149,6 +1188,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "session_note_acknowledged": guard_session_note_acknowledged,
     "fallback_produces_self_evolution": guard_fallback_produces_self_evolution,
     "busy_timeout_survives_concurrency": guard_busy_timeout_survives_concurrency,
+    "update_can_complete_tasks": guard_update_can_complete_tasks,
 }
 
 # Full test files run as subprocesses when no guard name is given.

@@ -64,9 +64,15 @@ def handle_call(tool_name: str, arguments: dict) -> str:
     # passed e.g. dedup_threshold to action=capture and that it silently
     # did nothing (audit P0-2).  The original keys are handed to the
     # handler as "__extra_args__" for that reporting.
+    #
+    # It is added ONLY for the capture action: handlers that splat their
+    # arguments into a function signature (graph.connect, retrieve,
+    # timeline) would treat it as a real field, and update() would report
+    # "updated: false, fields: ['__extra_args__']" while dropping the
+    # metadata the caller actually asked to change.
     _original_args = dict(arguments) if isinstance(arguments, dict) else {}
     arguments = validated_data
-    if _original_args:
+    if _original_args and arguments.get("action") == "capture":
         extra = {k: v for k, v in _original_args.items()
                  if k not in arguments and k != "action"}
         if extra:

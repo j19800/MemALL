@@ -1,6 +1,6 @@
 # mcp/models.py - Pydantic models for MCP tool input validation
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List, Literal, Dict, Any
+from typing import Optional, List, Literal, Dict, Any, Union
 
 
 # ── Core tools ──
@@ -205,6 +205,14 @@ class UpdateInput(BaseModel):
     project: Optional[str] = Field(None, max_length=500)
     summary: Optional[str] = Field(None, max_length=2000)
     level: Optional[str] = Field(None, pattern=r"^(P[0-2]|L(10|11|[1-9]))$")
+    # metadata carries the L5 task status — the single most important field
+    # to update: an executor marks a task done by writing
+    # {"status": "done"}.  The model did not declare it, so the validator
+    # STRIPPED it before the handler ran and the update failed with
+    # "no updatable fields provided" — the task could never be completed
+    # and stayed in pending_tasks forever, breaking the task loop.
+    metadata: Optional[Union[str, Dict[str, Any]]] = Field(
+        None, description="Metadata JSON (string or object) — L5 status lives here")
     # Caller identity.  Required by the ownership gate — without it the
     # validator strips the caller and the gate silently never fires.
     # It is deliberately NOT written to the row: ownership changes must go

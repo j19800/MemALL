@@ -2033,6 +2033,13 @@ def update(memory_id: int, **fields) -> bool:
     column names are provenance-checked against the whitelist before
     any f-string interpolation.
     """
+    # The adapter hands every handler the ORIGINAL arguments under
+    # __extra_args__ (so a handler can report fields the validator dropped).
+    # It is bookkeeping, not a column — leaving it in `fields` made the
+    # whitelist check see only that key, so a legitimate metadata update
+    # was reported as "updated: false, fields: ['__extra_args__']" and the
+    # L5 status never changed (the task card stayed in pending_tasks).
+    fields.pop("__extra_args__", None)
     with _pool_conn() as conn:
         existing = conn.execute(
             "SELECT id, level, metadata FROM memories WHERE id = ?", (memory_id,)

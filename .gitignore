@@ -181,3 +181,7 @@ htmlcov/
 
 # ── Local scratch / archived temp files (physical isolation) ──
 scratch/
+
+# Generated memory dumps (per-agent exports, regenerated on demand)
+_memory_export/
+
