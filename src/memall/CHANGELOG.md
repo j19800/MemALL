@@ -4,6 +4,25 @@ All notable changes to MemALL are documented in this file.
 
 ## [Unreleased]
 
+### Fixed — deep live testing of every MCP feature (turn 74/75)
+All of the following were found by **driving the real MCP protocol** (client tool calls through the long-lived server), which the in-process suites structurally cannot reach.
+
+- **`convergence` step crashed** with `'sqlite3.Row' object has no attribute 'get'` — three sites: `_converge_single`, `plugins/scheduler` capture-triggered convergence (the path every capture actually exercises), and a Row list reaching `converge_discussion` despite its dict contract. Rows are now materialised at every fetch, and `converge_discussion` normalises at its boundary so no caller can trip it.
+- **`distill`/`integrate`/`convergence` aborted with `UNIQUE constraint failed: memories.content_hash`** — upsert UPDATEs rewrote the UNIQUE hash without checking it was already held by another row; `integrate` used a plain INSERT after a separate existence check (race window); and `convergence`'s plain INSERTs aborted the transaction that *included* the `status=converged` update, so discussions stayed active and collided again every run, forever. All inserts are now idempotent (`_insert_or_reuse_id`, `INSERT OR IGNORE`, pre-checked UPDATE targets).
+- **Archived (soft-deleted) rows were re-processed by 14 pipeline steps** — content-scanning queries lacked `memory_status != 'archived'`, so deleted memories were distilled/promoted/enriched/linked, and denied-identity writes derived from them failed whole steps. Canonical predicate lives in `pipeline/sql_fragments.py`; `dormant`/`superseded`/`conflict`/`epoch` remain eligible (live states).
+- **`memall serve --watch`** added — the stdio server is long-lived, so code changes did not take effect until the client respawned it, and fixes *appeared* broken. The watcher restarts the server child on any mtime change in the `memall` package.
+- **FTS retrieve() ranked by recency, not relevance.** Two layers: the original `ORDER BY occurred_at DESC` ignored match quality entirely; and switching to `bm25()` was a silent no-op with the `id IN (SELECT rowid FROM memories_fts WHERE MATCH ?)` form — bm25() evaluates to constant 0 there (verified). The predicate is rewritten to its direct `FROM memories_fts JOIN memories ... WHERE memories_fts MATCH ?` form. The first results of a phrase query are now the rows containing the phrase, not recent noise containing one bigram.
+- **Facet counts described the wrong population.** `enhanced_search` applied `agent_name_filter` to results but built the facet WHERE from only `viewer` — a 4-result page came back with "L9: 259" (the whole store). Both paths now share one resolved filter set.
+- **Write deny-list was bypassable by its target identities.** `normalize_agent_name()` redirects 10+-digit names (`probe123456789012`) to `system`, and the gate ran *after* normalisation, so `probe*` never matched. One production row leaked (archived). The gate now checks the raw identity first.
+- **`hot` action was dead code**: the cutoff variable was named `week_ago` but set to `now()`, so `created_at > now` matched nothing — `hot_topics` always returned `[]` in production. Fixed and now excludes archived rows.
+- **digest included archived rows** — same class as the pipeline bug; planning surfaces must not show deleted history.
+- **fts5 enhancement inertness**: `enhanced_search` carried `rrf_score=None` into the enhancement dicts, so personalisation/context-boost computed `0.0 × anything = 0.0` on that path. Position is now carried as an RRF-form score.
+- A deny-list/quality-gate refusal in `distill_l7` is now a per-item skip, not a step failure.
+
+### Added
+- Four new regression guards (23 total): `denylist_before_normalize`, `search_ranks_by_bm25`, `facets_match_population`, `hot_topics_functional` (drives the real `handle_call` MCP path), plus `digest_excludes_archived`.
+- `check_fixes.py` closes the previous connection pool before switching databases — dropping the reference left open handles on the production file and made the next guard fail with "database is locked".
+
 ### Added — proactive-memory improvements ported from dsh-meow-memory
 A deep review of [dsh-meow-memory](https://github.com/Phant0Meow/dsh-meow-memory) (a cross-session memory plugin for DeepSeek Harness) produced a prioritised list of design ideas; the P0/P1/P2 items were implemented here, adapted to MemALL's MCP-server architecture (the code itself is TypeScript/DSH-plugin and not reusable — these are ported *principles*).
 

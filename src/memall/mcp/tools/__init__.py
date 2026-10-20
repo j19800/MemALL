@@ -432,7 +432,8 @@ def _handle_system(args: dict) -> str:
         t_hi = today_end.strftime("%Y-%m-%dT%H:%M:%S+00:00")
         s_lo = today_start.strftime("%Y-%m-%d %H:%M:%S")
         s_hi = today_end.strftime("%Y-%m-%d %H:%M:%S")
-        span_sql = "(created_at BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)"
+        span_sql = ("(created_at BETWEEN ? AND ? OR created_at BETWEEN ? AND ?) "
+                    "AND COALESCE(memory_status, '') != 'archived'")
         span_args = (t_lo, t_hi, s_lo, s_hi)
         with pool_conn() as conn:
             rows = conn.execute(
@@ -468,10 +469,16 @@ def _handle_system(args: dict) -> str:
         import json, datetime
         conn = get_conn()
         now_utc = datetime.datetime.now(datetime.timezone.utc)
-        week_ago = now_utc.isoformat()
+        # The cutoff variable is named week_ago but was set to now(), so
+        # "created_at > week_ago" matched nothing and hot_topics was always
+        # empty in production.  Subtract the window it claims to cover.
+        week_ago = (now_utc - datetime.timedelta(days=7)).isoformat()
         rows = conn.execute(
             "SELECT id, subject, category, level, access_count, summary FROM memories "
             "WHERE created_at > ? AND access_count > 0 "
+            # Archived rows are soft-deleted — they must not resurface as
+            # "hot topics" (a run of archived test rows did exactly that).
+            "AND COALESCE(memory_status, '') != 'archived' "
             "ORDER BY access_count DESC, created_at DESC LIMIT 10",
             (week_ago,)
         ).fetchall()

@@ -33,8 +33,12 @@ python -m memall capture "决定采用 SQLite 作为主存储" --agent claude --
 # 3. Search memories
 python -m memall search "SQLite 存储" --limit 10
 
-# 4. Start the HTTP gateway (port 9919) and open the SPA
+# 4. Start the MCP stdio server (what the agent client spawns)
 python -m memall serve
+#    Development: restart automatically when the source changes
+python -m memall serve --watch
+
+# 4b. Start the HTTP gateway (port 9919): python -m memall serve --http, then open the SPA
 
 # 5. Run the processing pipeline
 python -m memall pipeline

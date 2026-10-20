@@ -521,6 +521,63 @@ def guard_facets_match_population() -> Tuple[bool, str]:
     return ok, f"facet_total={total} results={n_res} levels={facets}"
 
 
+def guard_hot_topics_functional() -> Tuple[bool, str]:
+    """`hot` must return rows (the week_ago cutoff was set to now()) and
+    must not surface archived rows."""
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.core.thin_waist import capture
+    from memall.mcp.adapter import handle_call
+
+    init_db()
+    mid = capture("热门榜单验证记忆：这条记忆刚被访问过，应当出现在热榜里而不是被时间窗过滤掉。",
+                  level="P2", category="testing", project="hotg", agent_name="hotg",
+                  owner="老陈")
+    conn = get_conn()
+    conn.execute("UPDATE memories SET access_count = 9 WHERE id = ?", (mid,))
+    conn.commit()
+    conn.close()
+    hot = json.loads(handle_call("memall_system", {"action": "hot"}))
+    surfaced = any(h["id"] == mid for h in hot.get("hot_topics", []))
+
+    # now archive it — must vanish from the hot list
+    conn = get_conn()
+    conn.execute("UPDATE memories SET memory_status='archived' WHERE id = ?", (mid,))
+    conn.commit()
+    conn.close()
+    hot2 = json.loads(handle_call("memall_system", {"action": "hot"}))
+    gone = not any(h["id"] == mid for h in hot2.get("hot_topics", []))
+    return surfaced and gone, f"surfaced={surfaced} archived_gone={gone}"
+
+
+def guard_digest_excludes_archived() -> Tuple[bool, str]:
+    """digest aggregates live rows only (it's a planning surface, not a
+    history read)."""
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.core.thin_waist import capture
+    from memall.mcp.adapter import handle_call
+
+    init_db()
+    mid = capture("每日摘要排除验证：这条今天写入的记忆先计入摘要，归档后应当从摘要中消失，"
+                  "因此这条内容本身需要足够长并通过质量门的实测。",
+                  level="P2", category="acceptance2", project="dg", agent_name="dgg",
+                  owner="老陈")
+    if not mid:
+        return False, "capture returned no id (quality gate?)"
+    d1 = json.loads(handle_call("memall_system", {"action": "digest"}))
+    in1 = "acceptance2" in json.dumps(d1, ensure_ascii=False)
+    conn = get_conn()
+    conn.execute("UPDATE memories SET memory_status='archived' WHERE id = ?", (mid,))
+    conn.commit()
+    conn.close()
+    d2 = json.loads(handle_call("memall_system", {"action": "digest"}))
+    gone = "acceptance2" not in json.dumps(d2, ensure_ascii=False)
+    return in1 and gone, f"mid={mid} present={in1} archived_gone={gone}"
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -543,6 +600,8 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "denylist_before_normalize": guard_denylist_before_normalize,
     "search_ranks_by_bm25": guard_search_ranks_by_bm25,
     "facets_match_population": guard_facets_match_population,
+    "hot_topics_functional": guard_hot_topics_functional,
+    "digest_excludes_archived": guard_digest_excludes_archived,
 }
 
 # Full test files run as subprocesses when no guard name is given.
