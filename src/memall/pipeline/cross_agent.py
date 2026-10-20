@@ -172,7 +172,7 @@ def knowledge_distill_step() -> dict:
             conn.execute(
                 "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, confidence, weight, occurred_at, created_at, updated_at) "
                 "VALUES (?, ?, 'L10', 'system', 'knowledge', ?, ?, ?, ?, ?, ?)",
-                (l10_content, h, f"Global: {topic} ({len(members)} patterns)",
+                (l10_content, h, f"[L10 整合] 跨 Agent 全局模式：{topic}（{len(members)} 条教训聚合）"[:120],
                  round(avg_conf, 2), len(members), now, now, now),
             )
             l10_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -217,7 +217,7 @@ def knowledge_distill_step() -> dict:
             conn.execute(
                 "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, weight, occurred_at, created_at, updated_at) "
                 "VALUES (?, ?, 'L11', 'system', 'domain', ?, ?, ?, ?, ?)",
-                (l11_content, h, f"Domain pattern: {topic}", len(members), now, now, now),
+                (l11_content, h, f"[L11 领域] 跨 Agent 反复出现的模式：{topic}（{len(members)} 次记录）"[:120], len(members), now, now, now),
             )
             l11_created += 1
 

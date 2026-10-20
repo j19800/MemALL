@@ -101,6 +101,19 @@ check("explicit L6/reflection survives background classify",
       bool(row) and row[0]["level"] == "L6" and row[0]["category"] == "reflection",
       f"got {dict(row[0]) if row else None}")
 
+# The background lightweight pipeline is only needed for the survival check
+# above.  Let it finish, then stop forking background threads for the rest
+# of the suite: every later capture used to spawn another pipeline whose
+# write transactions (echo/dream/classify, even DELETEs) raced the suite's
+# own synchronous assertions on the same small WAL file, and under CPU
+# contention the stance insert lost that race — a load-dependent flake
+# ("discussion stance auto-captured 0 -> 0").
+from memall.core.bg_registry import set_enabled as _bg_set_enabled  # noqa: E402
+from memall.core.bg_registry import wait_for_background  # noqa: E402
+
+wait_for_background(timeout=25.0)
+_bg_set_enabled(False)
+
 # ── reflect → auto-capture ──
 ctx = (f"confirmed for {TAG}: the missing import was the whole reason the "
        "intent classifier never ran, because nothing registered the hook.")

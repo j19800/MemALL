@@ -36,6 +36,19 @@ def _fresh_db() -> str:
     """
     tmp = tempfile.mkdtemp(prefix="memall_guard_")
     path = os.path.join(tmp, "guard.db")
+    # Drain capture-spawned background threads BEFORE repointing DB_PATH:
+    # a still-running lightweight-pipeline thread calls get_conn() which
+    # resolves the *module-global* path at run time — it would hit the half-
+    # initialised new file ("no such table: memories" / "database is locked",
+    # randomly poisoning whichever guard/suite ran next).
+    try:
+        from memall.core.bg_registry import wait_for_background
+
+        left = wait_for_background(timeout=20.0)
+        if left:
+            print(f"note: {left} background thread(s) still alive after drain")
+    except Exception:
+        pass
     os.environ["MEMALL_DB_PATH"] = path
     # Reset cached singletons so the next import-time DB_PATH resolves fresh.
     import memall.config as mc
@@ -654,6 +667,48 @@ def guard_retrieve_excludes_archived() -> Tuple[bool, str]:
     can_see = any(m.id == mid for m in retrieve(
         "归档不可见验证", limit=10, include_archived=True))
     return (not leak) and can_see, f"leak={leak} explicit_opt_in_visible={can_see}"
+
+
+def guard_subjects_human_readable() -> Tuple[bool, str]:
+    """capture() must sanitise caller-supplied subjects and reject
+    machine-scaffolded titles on gated levels.
+
+    The readability audit found 469+ live rows with template markers,
+    embedded newlines, English fixed templates, or raw JSON in the title —
+    every one of them arrived as an external subject that the generation
+    path never saw. capture() now sanitises any supplied subject and the
+    quality gate marks machine titles low-clarity.
+    """
+    _fresh_db()
+    from memall.core.db import get_conn, init_db
+    from memall.core.thin_waist import capture
+
+    init_db()
+    # caller-supplied marker/newline subject must arrive clean
+    mid = capture("这条提供脏标题：[NOVEL:测试作品][FILE:章节]\n第二行才是正文要点，"
+                  "标题不应携带模板标记或换行，应当被消毒。",
+                  level="L4", category="reflection", project="g",
+                  agent_name="subjbot", owner="老陈",
+                  subject="[NOVEL:测试作品][FILE:章节]\n脏标题验证行")
+    conn = get_conn()
+    subj = conn.execute("SELECT subject FROM memories WHERE id=?", (mid,)).fetchone()[0]
+    conn.close()
+    clean = ("\n" not in subj and "[NOVEL:" not in subj and "[FILE:" not in subj)
+    # gate level + machine subject -> must not score as before (marker
+    # subjects get clarity<=3; an L4 with garbage body rejects outright)
+    json_title_ok = False
+    try:
+        mid2 = capture('{"from": "a", "to": "b", "topic": "验收标题可读性", '
+                       '"body": "正文保持 JSON 供消费者解析"}',
+                       level="L4", category="message", project="g",
+                       agent_name="subjbot", owner="老陈")
+        conn = get_conn()
+        s2 = conn.execute("SELECT subject FROM memories WHERE id=?", (mid2,)).fetchone()[0]
+        conn.close()
+        json_title_ok = s2 is not None and "from" not in s2[:3] and "{" not in s2
+    except ValueError:
+        json_title_ok = False
+    return clean and json_title_ok, f"clean={clean} subj={subj[:44]!r} json={json_title_ok}"
 
 
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {

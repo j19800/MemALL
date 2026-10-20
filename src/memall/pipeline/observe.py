@@ -81,41 +81,58 @@ def observation_step() -> dict:
             "warnings": warnings,
         }
 
-        # 7. Capture as memory
-        content = json.dumps(report, ensure_ascii=False, indent=2)
-        ch = hashlib.sha256(content.encode()).hexdigest()
-        existing = conn.execute(
-            "SELECT id FROM memories WHERE content_hash = ?",
-            (ch,),
-        ).fetchone()
-        if not existing:
-            conn.execute(
-                "INSERT INTO memories (content, content_hash, level, agent_name, category, project, summary, occurred_at, created_at, updated_at, metadata) "
-                "VALUES (?, ?, 'L6', 'system', 'reflection', ?, ?, ?, ?, ?, ?)",
-                (
-                    content, ch,
-                    "",
-                    "管线本轮观察 " + now[:10],
-                    now, now, now,
-                    json.dumps({"l6_source": "observation"}),
-                ),
-            )
-            report["captured_as_memory"] = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-        conn.commit()
-
-        # 8. Self-check anomaly detection (第三刀 第4点)
+        # 7. Capture as memory — human-readable prose, not raw JSON.
+        # The report dict above is the machine surface (returned to CLI /
+        # callers); what lands in the LONG-TERM store must read like a
+        # note. A json.dumps dump as the body made this step the single
+        # largest producer of machine content in the audit (115 rows whose
+        # content begins with '{\n  "timestamp"'), and its titles were
+        # indistinguishable in search results.
+        # Self-check runs BEFORE building the prose so its alerts are in it.
         alerts = _self_check(level_dist, l6_total)
         report["alerts"] = alerts
         if alerts:
             warnings.extend(f"[{a['level']}] {a['message']}" for a in alerts)
             report["warnings"] = warnings
 
-        # 9. Growth log (第二刀 第13点)
+        dist_line = "、".join(
+            f"{lvl}×{cnt}" for lvl, cnt in sorted(
+                level_dist.items(), key=lambda kv: -kv[1])[:8]
+        ) or "无"
+        warn_line = ("；告警：" + "；".join(warnings)) if warnings else ""
+        content = (
+            f"管线观察（{now[:10]}）：当前记忆分布 {dist_line}。"
+            f"L6 反思共 {l6_total} 条，其中高质量 {l6_high} 条，"
+            f"近 24 小时新增 {l6_recent} 条，聚合组 {agg_count} 个。"
+            f"{warn_line}"
+        )
+        ch = hashlib.sha256(content.encode()).hexdigest()
+        existing = conn.execute(
+            "SELECT id FROM memories WHERE content_hash = ?",
+            (ch,),
+        ).fetchone()
+        if not existing:
+            cur = conn.execute(
+                "INSERT INTO memories (content, content_hash, level, agent_name, category, project, summary, subject, occurred_at, created_at, updated_at, metadata) "
+                "VALUES (?, ?, 'L6', 'system', 'reflection', ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    content, ch,
+                    "",
+                    f"管线观察 {now[:10]}：分布与 L6 质量"[:120],
+                    content[:180],
+                    now, now, now,
+                    json.dumps({"l6_source": "observation", "report": report}),
+                ),
+            )
+            report["captured_as_memory"] = cur.lastrowid
+
+        conn.commit()
+
+        # 8. Growth log (第二刀 第13点)
         growth = _update_growth_log(conn, report)
         report["growth_log"] = growth
 
-        # 10. Weekly/monthly summaries (长期 第7点)
+        # 9. Weekly/monthly summaries (长期 第7点)
         rhythm = _update_weekly_monthly(conn)
         report["rhythm"] = rhythm
 

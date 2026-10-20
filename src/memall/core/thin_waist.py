@@ -205,6 +205,82 @@ _FILLER_STARTS = [
     "所以",
 ]
 
+# Machine/template markers embedded in content by external writers, e.g.
+# "[NOVEL:她从神殿来][FILE:庆余年文风][CHUNK:7/9]" or "[MODULE:layer/mcp]".
+# These must never reach a human-facing subject line.
+_TEMPLATE_MARKERS_RE = re.compile(
+    r"\[(?:NOVEL|FILE|CHUNK|MODULE|PART|VOL|CHAPTER|SECTION)\s*:[^\]\n]{0,80}\]",
+    re.IGNORECASE,
+)
+
+# The set of bracket labels a subject line MAY start with (level + category
+# prefixes produced by our own naming systems). Anything else in brackets is
+# noise.  Content-side variants ([L10 全局知识], [L6-周反思], [L7 教训] ...)
+# are matched by pattern, not membership: a label is OURS when it starts
+# with an L/P code.
+_CANONICAL_SUBJECT_PREFIXES = (
+    {p for p in _LEVEL_SUBJECT_PREFIX.values() if p}
+    | {p for p in _SUBJECT_PREFIX.values() if p}
+)
+_OUR_LABEL_RE = re.compile(
+    r"^\[([LP]\d{1,2}(?:-[^\]\n]{1,12})?[^\]\n]{0,12})\]\s*"
+)
+
+
+def _split_own_label(text: str) -> tuple[str, str]:
+    """Split a leading OURS-style bracket label; return (label+space, rest)."""
+    m = _OUR_LABEL_RE.match(text)
+    if m:
+        return f"[{m.group(1)}] ", text[m.end():]
+    m = re.match(r"^(\[[^\]\n]{1,20}\])\s*", text)
+    if m and m.group(1) in _CANONICAL_SUBJECT_PREFIXES:
+        return m.group(1) + " ", text[m.end():]
+    return "", text
+
+
+def sanitize_subject(value: str, max_len: int = 120) -> str:
+    """Force any subject (caller-provided or generated) to human-readable form.
+
+    Rules:
+      - drop [NOVEL:...] [MODULE:...] style template marker spans
+      - collapse newlines/tabs/whitespace runs to single spaces
+      - keep a canonical [L6 反思] / [决策] style prefix intact when present
+      - remove stray unbalanced brackets, trim edge punctuation, cap length
+
+    Returns "" when nothing readable survives — callers then auto-generate.
+
+    Every write path funnels through capture(); sanitising caller-supplied
+    subjects here is the single place that can keep the store's titles
+    readable (the audit found 194 live rows whose subject contained raw
+    newlines, 171 carrying [NOVEL:/[MODULE: markers — all pasted through
+    untouched because externally supplied subjects were never validated).
+    """
+    if not value:
+        return ""
+    s = _TEMPLATE_MARKERS_RE.sub(" ", value)
+    s = re.sub(r"[\r\n\t]+", " ", s)
+    s = re.sub(r"\s{2,}", " ", s).strip()
+
+    prefix, s = _split_own_label(s)
+    s = re.sub(r"^#{1,6}\s*", "", s)             # markdown header after the label
+    # unbalanced stray brackets are reader noise; balanced ones (e.g.
+    # "(EP09《七日》)", "[正文]") keep their content but drop the marks
+    # only when they no longer pair up
+    if s.count("[") != s.count("]"):
+        s = s.replace("[", "").replace("]", "")
+
+    # Edge trim: leading brackets/punctuation are scaffolding noise, but a
+    # TRAILING closing bracket may legitimately close a pair inside the
+    # string ("…（历史截断）") — stripping it by character-set broke exactly
+    # that (six repair outputs lost their "）"). Only whitespace and
+    # sentential punctuation (which never opens a pair) trim off the tail.
+    s = s.lstrip("{}（）() 　,，.。;；:：、")
+    s = s.rstrip(" 　,，.。;；:：、")
+    if len(prefix) + len(s) > max_len:
+        room = max(0, max_len - len(prefix) - 1)
+        s = s[:room].rstrip(" ,，.。;；:：、") + "…"
+    return (prefix + s).strip()
+
 
 def normalize_agent_name(name: str) -> str:
     """Normalize and validate an agent_name. Returns safe fallback "system" if invalid.
@@ -274,11 +350,63 @@ def _make_subject(
     Example: [L4 会话] admin: 从 SQLite 迁移到 PostgreSQL
     Falls back to category-based prefix if level has no mapping.
     """
-    # Prefer level-based prefix, fallback to category-based
+    # Prefer level-based prefix, fallback to category-based. BUT when the
+    # content itself opens with one of OUR canonical labels ("[L7 教训] …"),
+    # that label is the more truthful type — adopt it and drop the inferred
+    # one, or the title reads "[L11 商业]… [L7 教训] …" double-prefixed
+    # (the preview pass showed exactly this collision on distilled rows
+    # whose level drifted during re-classification).
     prefix = _LEVEL_SUBJECT_PREFIX.get(level, _SUBJECT_PREFIX.get(category, ""))
 
     # Extract core phrase: strip filler starts, take first meaningful segment
     core = content.strip()
+    own_label, core = _split_own_label(core)
+    if own_label:
+        prefix = own_label.strip()  # the content's own label wins
+    # Template markers ([NOVEL:..][FILE:..][CHUNK:..], [MODULE:..]) are
+    # writer scaffolding; a title must read like a sentence, not a diff
+    # header. (Audit: 171 production subjects carried these verbatim.)
+    core = _TEMPLATE_MARKERS_RE.sub(" ", core).strip()
+
+    # Structured payloads (identity cards, agent-to-agent bridge messages)
+    # legitimately keep JSON bodies — a consumer parses them. But a title
+    # of '{\n  "timestamp"…' is not a title: render the JSON as a human
+    # line over its informative fields instead.
+    if (core.startswith("{") and core.endswith("}")) or (
+        core.startswith("[") and core.endswith("]")
+    ):
+        try:
+            doc = json.loads(core)
+        except (json.JSONDecodeError, TypeError):
+            doc = None
+        if isinstance(doc, list):
+            # MCP-style tool-response dump: [{"type":"text","text":…}, …]
+            texts = [d.get("text", "") for d in doc
+                     if isinstance(d, dict) and isinstance(d.get("text"), str)]
+            joined = " ".join(t for t in texts if t).strip()
+            core = joined[:80] if joined else "工具返回内容"
+        if isinstance(doc, dict):
+            def _txt(k):
+                v = doc.get(k)
+                return v.strip() if isinstance(v, str) and v.strip() else ""
+
+            topic = _txt("topic") or _txt("title") or _txt("subject")
+            frm, to, name = _txt("from"), _txt("to"), _txt("name")
+            role, body = _txt("role"), _txt("message") or _txt("body")
+            if frm and topic:
+                core = f"来自 {frm} 的消息：{topic}"
+                if to:
+                    core += f"（致 {to}）"
+            elif topic:
+                core = topic
+            elif name:
+                core = f"身份：{name}（{role}）" if role else f"身份：{name}"
+            else:
+                picks = [f"{k}={str(v)[:40]}" for k, v in list(doc.items())[:4]
+                         if k not in ("timestamp", "ts", "version") and v]
+                core = " ".join(picks) if picks else "结构化数据"
+            core += "" if not body else f"：{body[:60]}"
+            core = core.strip()
     for filler in _FILLER_STARTS:
         if core.startswith(filler):
             core = core[len(filler) :].strip()
@@ -291,8 +419,23 @@ def _make_subject(
             core = core[:idx]
             break
     else:
-        # Fallback: first 35 chars
-        core = core[:35]
+        # A first line longer than the boundary window is still cut at its
+        # line end when one exists — otherwise the newline leaks into the
+        # subject (audit: 194 subjects with embedded \n). A SHORT first
+        # line (<=10, e.g. a "# 标题" header) is skipped in favour of the
+        # line below it, which carries the actual phrase.
+        nl = core.find("\n")
+        if nl > 10:
+            core = core[:nl]
+        elif nl != -1 and core[nl + 1:].strip():
+            core = core[nl + 1:].strip()[:35]
+        else:
+            core = core[:35]
+
+    # Collapse any surviving whitespace/marker noise in the phrase itself
+    # (sanitise the CORE only — the assembled label's [L4 会话] style prefix
+    # is intentional and must not go through bracket-edge trimming).
+    core = sanitize_subject(core, max_len=60)
 
     # Build who label: prefer owner, fall back to agent_name
     who = owner or agent_name or ""
@@ -413,7 +556,12 @@ _QUALITY_DIMS = [
 ]
 
 
-def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
+def _score_quality(data: MemoryInput, content_hash_val: str,
+                   caller_subject: str | None = None) -> dict:
+    """Score a memory pre-write. ``caller_subject`` is the raw subject the
+    caller supplied (before sanitising/auto-generation); machine-looking
+    titles are penalised here so the gate sees the violation the
+    sanitiser would otherwise hide."""
     text = data.content or ""
     text_len = len(text.strip())
     scores: dict = {}
@@ -423,6 +571,23 @@ def _score_quality(data: MemoryInput, content_hash_val: str) -> dict:
     scores["clarity"] = (
         10 if text_len > 40 else max(0, 10 - sum(text.count(f) for f in filler) * 2)
     )
+    # Readability penalty applied even to long content: template-marker text
+    # ("[NOVEL:..][FILE:..][CHUNK:..]" / raw JSON dumps) reads as machine
+    # output no matter its length, and titles are the human-facing surface.
+    # Markers in the SUBJECT are worse than in content: content may
+    # legitimately embed snippets, a subject may never embed scaffolding
+    # (audit: 171 marker / 194 newline subjects — the quality gate scored
+    # them 10/10 clarity because it only ever looked at the body).
+    if _TEMPLATE_MARKERS_RE.search(text):
+        scores["clarity"] = min(scores["clarity"], 5)
+    subj_probe = caller_subject if caller_subject is not None else (data.subject or "")
+    if subj_probe and (subj_probe != sanitize_subject(subj_probe)
+                       or _TEMPLATE_MARKERS_RE.search(subj_probe)):
+        scores["clarity"] = min(scores["clarity"], 3)
+    # Raw JSON as the whole memory: machine telemetry dressed as a memory.
+    stripped = text.lstrip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        scores["clarity"] = min(scores["clarity"], 4)
     scores["relevance"] = 7
     scores["specificity"] = max(1, min(10, len(_SPECIFICITY_RE.findall(text)) * 2))
 
@@ -1194,7 +1359,8 @@ def _capture_post_insert(conn, mem_id: int, data: MemoryInput, h: str) -> None:
             except Exception:
                 logger.debug("capture bg: connection close failed", exc_info=True)
 
-    threading.Thread(target=_background_post_process, daemon=True).start()
+    from memall.core.bg_registry import spawn as _bg_spawn
+    _bg_spawn(_background_post_process)
 
     # Note: dream_scan results are now processed in the background thread above.
     # The commit and logging are handled inside _background_post_process.
@@ -1228,7 +1394,23 @@ def capture(
 
     dispatch_lifecycle(HOOK_PRE_CAPTURE, blocking=True, data=data)
 
-    # Auto-generate subject if not provided by caller
+    # Remember what the CALLER supplied before anything is rewritten: the
+    # quality gate penalises machine-looking titles (markers/newlines) on
+    # this raw value; sanitising first would hide the violation.
+    caller_subject = data.subject
+
+    # Auto-generate subject if not provided by caller; when the caller DID
+    # provide one, sanitise it (markers, newlines, edge junk). Titles are
+    # what humans and agents re-read from search results — the audit found
+    # 366+ live rows whose subject was raw writer scaffolding ("[NOVEL:...]
+    # ...\n..." pasted verbatim), and every one of them arrived as an
+    # externally-supplied subject that the generation path never saw.
+    if data.subject:
+        cleaned = sanitize_subject(data.subject)
+        if cleaned != data.subject:
+            logger.debug("capture: subject sanitised %r -> %r",
+                         data.subject[:40], cleaned[:40])
+        data.subject = cleaned
     if not data.subject:
         data.subject = _make_subject(
             data.content, data.category, data.level, data.agent_name, data.owner
@@ -1245,7 +1427,7 @@ def capture(
             data.content, data.category, data.level, data.agent_name, data.owner
         )
 
-    quality_result = _score_quality(data, h)
+    quality_result = _score_quality(data, h, caller_subject=caller_subject)
     quality_gate = quality_result.get("gate", "accepted")
 
     if quality_gate == "rejected":

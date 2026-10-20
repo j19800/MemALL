@@ -107,7 +107,8 @@ class SummaryStrategy(MemoryStrategy):
                 + "\n".join(f"  • {s}" for s in key_sentences)
             )
 
-            subject = f"Auto-summary: {categories[0] if categories else 'general'} ({len(rows)} items)"
+            subject = (f"[L9 摘要] {self.agent_name} 近期活动："
+                       f"{categories[0] if categories else '综合'}类 {len(rows)} 条记录")[:120]
 
             # Store as L9 with refines edges
             mid = _capture(

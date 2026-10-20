@@ -496,11 +496,32 @@ def get_conn(db_path=None) -> sqlite3.Connection:
     # (which call memall_split_cjk) and before any write touches them.
     _register_sql_functions(conn)
 
-    if not _auto_init_done:
+    # Initialise the schema if this connection's file has no memories table.
+    # NOT driven by a process-global flag: check the actual file. The old
+    # _auto_init_done global let a connection opened *after* DB_PATH moved to
+    # a fresh file skip init (some earlier caller had already set the flag),
+    # so background threads hit half-initialised databases with
+    # "no such table: memories" — the flaky cross-guard contamination in
+    # check_fixes. A per-file sqlite_master check is correct even when the
+    # path changes under a running process.
+    try:
+        has_mem = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memories' LIMIT 1"
+        ).fetchone()
+    except sqlite3.Error:
+        has_mem = None
+    if not has_mem:
         with _auto_init_lock:
-            if not _auto_init_done:
+            try:
+                has_mem = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memories' LIMIT 1"
+                ).fetchone()
+            except sqlite3.Error:
+                has_mem = None
+            if not has_mem:
                 init_db(conn=conn)
-                _auto_init_done = True
+        # Flag kept for external readers (kept True once any init happened).
+        _auto_init_done = True
 
     return conn
 
@@ -713,7 +734,16 @@ class ConnectionPool:
         _register_sql_functions(conn)
         self._conn_tids[id(conn)] = threading.get_ident()
 
-        if not _auto_init_done:
+        # Per-file init check (see get_conn): the pool is rebuilt when
+        # DB_PATH moves, but _auto_init_done may already be True from the
+        # previous file, which would leave the NEW file uninitialised.
+        try:
+            has_mem = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memories' LIMIT 1"
+            ).fetchone()
+        except sqlite3.Error:
+            has_mem = None
+        if not has_mem:
             init_db(conn=conn)
             _auto_init_done = True
 

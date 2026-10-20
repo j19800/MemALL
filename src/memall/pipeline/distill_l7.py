@@ -139,7 +139,7 @@ def distill_l7_step() -> dict:
                             src_id = capture(
                                 {
                                     "content": l7_content,
-                                    "subject": f"lesson: {lesson[:60]}",
+                                    "subject": f"教训：{lesson[:60]}"[:120],
                                     "category": "reflection",
                                     "level": "L7",
                                     "owner": "system",
