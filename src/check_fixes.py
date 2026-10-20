@@ -45,12 +45,19 @@ def _fresh_db() -> str:
     sec["disabled_projects"] = []
     mc._config["security"] = sec
     import memall.core.db as mdb
+    # Close the previous pool's connections before dropping it.  Merely
+    # dropping the reference leaves open handles on the *production* file
+    # (and its WAL), which then make a later guard fail with "database is
+    # locked" — a cross-guard artifact that looks like a product bug.
+    try:
+        old_pool = mdb._global_pool
+        if old_pool is not None:
+            old_pool.close_all()
+    except Exception:
+        pass
+    mdb._global_pool = None
     mdb.DB_PATH = __import__("pathlib").Path(path)
     mdb._auto_init_done = False
-    try:
-        mdb._global_pool = None
-    except AttributeError:
-        pass
     return path
 
 
@@ -349,6 +356,80 @@ def guard_denylist_supports_globs() -> Tuple[bool, str]:
     return ok, "glob/exact matching"
 
 
+def guard_no_row_get_hazards() -> Tuple[bool, str]:
+    """No pipeline step may call .get() on a sqlite3.Row.
+
+    sqlite3.Row has no .get(); a row must become dict(r) first.  The
+    convergence step shipped this bug for months (the failure only surfaced
+    when a discussion actually converged), so it is worth a static check.
+
+    Scope: a binding only counts if the .get() happens in the SAME function
+    as the fetch — a later rebinding of the same name to a plain dict is a
+    false positive otherwise.
+    """
+    import re as _re
+    from pathlib import Path as _Path
+
+    fetch = _re.compile(
+        r"^\s*(\w+)\s*=\s*\w*conn\w*\s*\.\s*execute\s*\(", _re.M
+    )
+    get = _re.compile(r"^\s*.*\b(\w+)\.get\(", _re.M)
+    func = _re.compile(r"^def\s+(\w+)|^    def\s+(\w+)", _re.M)
+
+    problems = []
+    for path in sorted(_Path(r"E:\MemALL\src\memall\pipeline").glob("*.py")):
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        # Per-function scope: {func_name: {var: line}}
+        scopes: dict = {}
+        cur = "<module>"
+        bound: dict = {}
+        scopes[cur] = bound
+        for i, line in enumerate(lines, 1):
+            fm = func.match(line)
+            if fm:
+                cur = fm.group(1) or fm.group(2)
+                bound = {}
+                scopes[cur] = bound
+            m = fetch.match(line)
+            if m:
+                chunk = "\n".join(lines[i - 1:i + 6])
+                if ".fetch" in chunk:
+                    bound[m.group(1)] = i
+            for gm in get.finditer(line):
+                var = gm.group(1)
+                if var in bound:
+                    problems.append(f"{path.name}:{i} {var} (in {cur})")
+    return not problems, "; ".join(problems) or "no Row.get() hazards"
+
+
+def guard_pipeline_ignores_archived() -> Tuple[bool, str]:
+    """Content-scanning pipeline steps must exclude archived rows.
+
+    ``memory_status='archived'`` means soft-deleted.  A step that scans
+    archived rows re-derives deleted material, and if the archived row
+    belongs to a denied identity the write is refused — which failed the
+    whole step ("distill_l7: capture: agent ... is disabled").
+    """
+    import inspect
+    from memall.pipeline import distill, distill_l7, reflect, promote, link, enrich, classify
+
+    checks = {
+        "distill.distill_step": distill.distill_step,
+        "distill_l7.distill_l7_step": distill_l7.distill_l7_step,
+        "reflect.reflect_step": reflect.reflect_step,
+        "promote.promote_step": promote.promote_step,
+        "link.link_step": link.link_step,
+        "enrich.enrich_step": enrich.enrich_step,
+        "classify.classify_step": classify.classify_step,
+    }
+    missing = []
+    for name, fn in checks.items():
+        src = inspect.getsource(fn)
+        if "memory_status" not in src or "archived" not in src:
+            missing.append(name)
+    return not missing, ", ".join(missing) or "all scanning steps filter archived"
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -366,6 +447,8 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "disabled_write_denylist": guard_disabled_write_denylist,
     "tests_use_isolated_db": guard_tests_use_isolated_db,
     "denylist_supports_globs": guard_denylist_supports_globs,
+    "no_row_get_hazards": guard_no_row_get_hazards,
+    "pipeline_ignores_archived": guard_pipeline_ignores_archived,
 }
 
 # Full test files run as subprocesses when no guard name is given.

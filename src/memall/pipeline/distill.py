@@ -30,6 +30,8 @@ def distill_step() -> dict:
             "AND LENGTH(TRIM(content)) > 20 "
             "AND level NOT IN ('P0', 'P1', 'P2', 'P3', 'P4', 'L6', 'L9', 'L10', 'L11') "
             "AND stream = 'knowledge' "
+            # Archived rows are soft-deleted — not observations to distil.
+            "AND COALESCE(memory_status, '') != 'archived' "
             "AND COALESCE(metadata, '') NOT LIKE '%\"source\": \"ask\"%' "
             "AND COALESCE(metadata, '') NOT LIKE '%\"source\": \"reflect\"%' "
             "AND COALESCE(metadata, '') NOT LIKE '%\"source\": \"discussion\"%' "
@@ -158,18 +160,30 @@ def distill_step() -> dict:
                     if existing["content_hash"] == ch:
                         # Distillation unchanged → nothing to write.
                         continue
-                    conn.execute(
-                    "UPDATE memories SET content = ?, content_hash = ?, "
-                    "summary = ?, subject = ?, updated_at = ?, occurred_at = ?, "
-                    "stream = 'ledger', "
-                    "thread_id = ?, project = CASE "
-                    "  WHEN project IS NULL OR project = '' THEN ? "
-                    "  ELSE project END "
-                    "WHERE id = ?",
-                        (merged_content, ch, l9_subject, l9_subject, now, now,
-                         l9_thread_id, l9_project, existing["id"]),
-                    )
-                    new_id = existing["id"]
+                    # The UPDATE rewrites content_hash, which is UNIQUE across
+                    # the table.  Another row may already hold that hash (e.g.
+                    # an L10 integrated from the same source set), and the raw
+                    # UPDATE then aborts the whole pipeline with "UNIQUE
+                    # constraint failed: memories.content_hash".  When the
+                    # hash is taken, fall through to the insert path instead —
+                    # it will treat it as a duplicate and skip cleanly.
+                    holder = conn.execute(
+                        "SELECT id FROM memories WHERE content_hash = ? AND id != ?",
+                        (ch, existing["id"]),
+                    ).fetchone()
+                    if holder is None:
+                        conn.execute(
+                        "UPDATE memories SET content = ?, content_hash = ?, "
+                        "summary = ?, subject = ?, updated_at = ?, occurred_at = ?, "
+                        "stream = 'ledger', "
+                        "thread_id = ?, project = CASE "
+                        "  WHEN project IS NULL OR project = '' THEN ? "
+                        "  ELSE project END "
+                        "WHERE id = ?",
+                            (merged_content, ch, l9_subject, l9_subject, now, now,
+                             l9_thread_id, l9_project, existing["id"]),
+                        )
+                        new_id = existing["id"]
 
             if new_id is None:
                 cur = conn.execute(
@@ -179,7 +193,7 @@ def distill_step() -> dict:
                 if cur.rowcount == 0:
                     # Duplicate hash → record already exists, skip
                     continue
-                new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                new_id = cur.lastrowid
 
             for mid in mem_ids:
                 # Append to supersedes as JSON array of IDs

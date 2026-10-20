@@ -16,7 +16,12 @@ def reflect_step() -> dict:
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT id, content, summary, agent_name, category, created_at, level FROM memories WHERE level NOT IN ('L6', 'L7', 'L9', 'L11') AND stream = 'knowledge' AND LENGTH(TRIM(content)) > 10 ORDER BY created_at DESC LIMIT 500"
+            "SELECT id, content, summary, agent_name, category, created_at, level FROM memories "
+            "WHERE level NOT IN ('L6', 'L7', 'L9', 'L11') AND stream = 'knowledge' "
+            "AND LENGTH(TRIM(content)) > 10 "
+            # Archived rows are soft-deleted — not material to reflect on.
+            "AND COALESCE(memory_status, '') != 'archived' "
+            "ORDER BY created_at DESC LIMIT 500"
         ).fetchall()
         now = datetime.now(timezone.utc).isoformat()
         upgraded = 0

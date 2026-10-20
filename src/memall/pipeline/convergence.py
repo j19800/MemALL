@@ -26,6 +26,25 @@ from memall.core.utils import now_iso, unwrap
 logger = logging.getLogger(__name__)
 
 
+def _insert_or_reuse_id(conn, cur, content_hash: str) -> int:
+    """Row id of the just-inserted row, or the id of the row that already
+    holds *content_hash*.
+
+    All the inserts in this module are content-hash keyed, and
+    ``memories.content_hash`` is UNIQUE, so a repeat (the same discussion
+    created twice, the same agent restating the same position, a discussion
+    converged twice) collides.  ``INSERT OR IGNORE`` turns that into
+    ``rowcount == 0`` — and the pre-existing row is exactly what we want to
+    reference, not an error to raise.
+    """
+    if cur.rowcount:
+        return cur.lastrowid
+    row = conn.execute(
+        "SELECT id FROM memories WHERE content_hash = ?", (content_hash,)
+    ).fetchone()
+    return row["id"] if row else 0
+
+
 def _short_id() -> str:
     return "dt_" + uuid.uuid4().hex[:8]
 
@@ -130,7 +149,7 @@ def create_discussion(
         )
 
         cur = conn.execute(
-            """INSERT INTO memories
+            """INSERT OR IGNORE INTO memories
                (content, content_hash, level, owner, agent_name, subject,
                 category, project, summary, occurred_at, created_at, updated_at,
                 supersedes, confidence, visibility, metadata, arc_status)
@@ -155,7 +174,7 @@ def create_discussion(
                 "open",
             ),
         )
-        memory_id = cur.lastrowid
+        memory_id = _insert_or_reuse_id(conn, cur, h)
         conn.commit()
 
         try:
@@ -349,11 +368,18 @@ def _converge_single(conn, disc: dict) -> dict:
     if not responses:
         return {"warning": "no responses, can not converge"}
 
+    # sqlite3.Row has no .get() — materialise to dicts before any dict-style
+    # access.  The rows were read here but only converted further down
+    # (line "converge_discussion(conn, disc, [dict(r) ...])"), so the
+    # participant check above crashed with
+    # "AttributeError: 'sqlite3.Row' object has no attribute 'get'".
+    response_dicts = [dict(r) for r in responses]
+
     # Check if all participants have responded
     participants = unwrap_meta(meta, "participants") or []
     if participants and len(participants) > 1:
         responded_agents = set()
-        for resp in responses:
+        for resp in response_dicts:
             rmeta = json.loads(resp.get("metadata") or "{}")
             a = rmeta.get("agent_name", resp.get("agent_name", ""))
             if a:
@@ -365,7 +391,7 @@ def _converge_single(conn, disc: dict) -> dict:
                 "participants": participants,
             }
 
-    return converge_discussion(conn, disc, [dict(r) for r in responses], "confirmed")
+    return converge_discussion(conn, disc, response_dicts, "confirmed")
 
 
 def confirm_discussion(
@@ -416,7 +442,7 @@ def confirm_discussion(
             }
         )
         cur = conn.execute(
-            """INSERT INTO memories
+            """INSERT OR IGNORE INTO memories
                (content, content_hash, level, owner, agent_name, subject,
                 category, project, summary, occurred_at, created_at, updated_at,
                 supersedes, confidence, visibility, metadata, arc_status)
@@ -441,11 +467,11 @@ def confirm_discussion(
                 "open",
             ),
         )
-        resp_id = cur.lastrowid
+        resp_id = _insert_or_reuse_id(conn, cur, h)
 
         # Edge: response cites discussion
         conn.execute(
-            "INSERT INTO edges (source_id, target_id, relation_type, created_at, valid_from) VALUES (?,?,?,?,?)",
+            "INSERT OR IGNORE INTO edges (source_id, target_id, relation_type, created_at, valid_from) VALUES (?,?,?,?,?)",
             (discussion_id, resp_id, "cites", now, now),
         )
 
@@ -683,36 +709,55 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
             "synthesis": analysis["synthesis"],
         }
     )
-    cur = conn.execute(
-        """INSERT INTO memories
-           (content, content_hash, level, owner, agent_name, subject,
-            category, summary, occurred_at, created_at, updated_at,
-            supersedes, confidence, visibility, metadata, arc_status)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (
-            l4_content,
-            l4_hash,
-            "L4",
-            "system",
-            "system",
-            f"[L4 会话] {title}",
-            "decision",
-            "",
-            now,
-            now,
-            now,
-            "[]",
-            0.7,
-            "private",
-            l4_meta,
-            "open",
-        ),
-    )
-    l4_id = cur.lastrowid
+    # The L4 decision is keyed by the hash of its own content, so the same
+    # discussion converged twice (or two discussions with identical content)
+    # hits the UNIQUE index on memories.content_hash.  A raw INSERT aborts
+    # the whole transaction, which rolls back the "status = converged" update
+    # above — the discussion stays active and the next pipeline run collides
+    # again, forever.  Make the insert idempotent instead: if the hash is
+    # already there, reuse that row and re-point the edge at it.
+    holder = conn.execute(
+        "SELECT id FROM memories WHERE content_hash = ?", (l4_hash,)
+    ).fetchone()
+    if holder is not None:
+        l4_id = holder["id"]
+    else:
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO memories
+               (content, content_hash, level, owner, agent_name, subject,
+                category, summary, occurred_at, created_at, updated_at,
+                supersedes, confidence, visibility, metadata, arc_status)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                l4_content,
+                l4_hash,
+                "L4",
+                "system",
+                "system",
+                f"[L4 会话] {title}",
+                "decision",
+                "",
+                now,
+                now,
+                now,
+                "[]",
+                0.7,
+                "private",
+                l4_meta,
+                "open",
+            ),
+        )
+        if cur.rowcount == 0:
+            # Another writer took the hash between the check and the insert.
+            l4_id = conn.execute(
+                "SELECT id FROM memories WHERE content_hash = ?", (l4_hash,)
+            ).fetchone()["id"]
+        else:
+            l4_id = cur.lastrowid
 
     # edge: discussion --refines--> decision
     conn.execute(
-        "INSERT INTO edges (source_id, target_id, relation_type, created_at, valid_from) VALUES (?,?,?,?,?)",
+        "INSERT OR IGNORE INTO edges (source_id, target_id, relation_type, created_at, valid_from) VALUES (?,?,?,?,?)",
         (disc["id"], l4_id, "refines", now, now),
     )
 
@@ -772,12 +817,12 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
                 "open",
             ),
         )
-        tid = cur.lastrowid
+        tid = _insert_or_reuse_id(conn, cur, task_hash)
         task_ids.append(tid)
 
         # edge: decision --refines--> task
         conn.execute(
-            "INSERT INTO edges (source_id, target_id, relation_type, created_at, valid_from) VALUES (?,?,?,?,?)",
+            "INSERT OR IGNORE INTO edges (source_id, target_id, relation_type, created_at, valid_from) VALUES (?,?,?,?,?)",
             (l4_id, tid, "refines", now, now),
         )
 

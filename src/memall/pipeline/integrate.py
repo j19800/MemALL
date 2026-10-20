@@ -200,7 +200,10 @@ def integrate_step(min_categories: int = 2) -> dict:
 
         rows = conn.execute(
             "SELECT id, content, agent_name, category, access_count, metadata, created_at "
-            "FROM memories WHERE level = 'L9' AND LENGTH(TRIM(content)) > 20 ORDER BY id DESC LIMIT 2000"
+            "FROM memories WHERE level = 'L9' AND LENGTH(TRIM(content)) > 20 "
+            # Archived L9 rows are soft-deleted — not inputs to integrate.
+            "AND COALESCE(memory_status, '') != 'archived' "
+            "ORDER BY id DESC LIMIT 2000"
         ).fetchall()
 
         by_agent: dict = defaultdict(list)
@@ -313,13 +316,29 @@ def integrate_step(min_categories: int = 2) -> dict:
                     if prev["content_hash"] == ch:
                         skipped_duplicate += 1
                         continue
-                    conn.execute(
-                        "UPDATE memories SET content = ?, content_hash = ?, "
-                        "subject = ?, category = ?, level = 'L10', metadata = ?, "
-                        "updated_at = ?, occurred_at = ? WHERE id = ?",
-                        (merged, ch, l10_subject, best_cat, _l10_metadata(now), now, now, prev["id"]),
-                    )
-                    l10_id = prev["id"]
+                    # The UPDATE below rewrites content_hash, which is UNIQUE
+                    # across the whole table.  A different row (e.g. an L9
+                    # distilled from the same source set) may already hold
+                    # that hash, and the raw UPDATE then aborts the whole
+                    # pipeline with "UNIQUE constraint failed:
+                    # memories.content_hash".  Fall back to "insert as a new
+                    # row" when the target hash is taken by someone else.
+                    holder = conn.execute(
+                        "SELECT id FROM memories WHERE content_hash = ? AND id != ?",
+                        (ch, prev["id"]),
+                    ).fetchone()
+                    if holder is None:
+                        conn.execute(
+                            "UPDATE memories SET content = ?, content_hash = ?, "
+                            "subject = ?, category = ?, level = 'L10', metadata = ?, "
+                            "updated_at = ?, occurred_at = ? WHERE id = ?",
+                            (merged, ch, l10_subject, best_cat, _l10_metadata(now), now, now, prev["id"]),
+                        )
+                        l10_id = prev["id"]
+                    else:
+                        # Hash owned by another row — fall through to the
+                        # insert path, which will skip it as a duplicate.
+                        l10_id = None
 
             if l10_id is None:
                 # ✅ Semantic dedup: check against recent L10s
@@ -344,8 +363,16 @@ def integrate_step(min_categories: int = 2) -> dict:
             # I2: L10 is pipeline-generated synthetic insight, no conversation thread
             l10_thread_id = None
             if l10_id is None:
-                conn.execute(
-                    "INSERT INTO memories "
+                # INSERT OR IGNORE, not plain INSERT: content_hash is UNIQUE
+                # across the table and the "does this hash exist?" check
+                # above is a separate statement, so a concurrent writer (or
+                # an L9 row that happens to hash to the same value) can take
+                # the hash in between.  A plain INSERT then aborts the whole
+                # pipeline with "UNIQUE constraint failed:
+                # memories.content_hash"; OR IGNORE degrades to a skipped
+                # duplicate instead of losing the run.
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO memories "
                     "(content, content_hash, level, category, agent_name, project, subject, metadata, occurred_at, created_at, updated_at, thread_id, stream) "
                     "VALUES (?, ?, 'L10', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ledger')",
                     (
@@ -354,7 +381,11 @@ def integrate_step(min_categories: int = 2) -> dict:
                         now, now, now, l10_thread_id,
                     ),
                 )
-                l10_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                if cur.rowcount == 0:
+                    # Hash was taken between the check and the insert.
+                    skipped_duplicate += 1
+                    continue
+                l10_id = cur.lastrowid
 
             for sid in source_ids:
                 row2 = conn.execute(

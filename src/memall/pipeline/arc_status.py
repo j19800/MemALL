@@ -61,7 +61,7 @@ def arc_status_step() -> dict:
     try:
         # Phase 1: Backfill NULL arc_status L4s
         null_rows = conn.execute(
-            "SELECT id, created_at FROM memories WHERE level = 'L4' AND arc_status IS NULL"
+            "SELECT id, created_at FROM memories WHERE level = 'L4' AND arc_status IS NULL AND COALESCE(memory_status, '') != 'archived'"
         ).fetchall()
 
         backfilled = 0
@@ -82,7 +82,7 @@ def arc_status_step() -> dict:
 
         # Phase 2: Update non-closed L4s (both existing open/in_progress and newly backfilled)
         active_rows = conn.execute(
-            "SELECT id, arc_status FROM memories WHERE level = 'L4' AND "
+            "SELECT id, arc_status FROM memories WHERE level = 'L4' AND COALESCE(memory_status, '') != 'archived' AND "
             "arc_status IS NOT NULL AND arc_status != 'closed'"
         ).fetchall()
 

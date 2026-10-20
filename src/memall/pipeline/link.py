@@ -100,7 +100,10 @@ def link_step() -> int:
             done_pairs.add((e["source_id"], e["target_id"], e["relation_type"]))
 
         rows = conn.execute(
-            "SELECT id, content, category FROM memories WHERE level != 'P0' ORDER BY id LIMIT ?",
+            "SELECT id, content, category FROM memories WHERE level != 'P0' "
+            # Archived rows are soft-deleted — do not link them.
+            "AND COALESCE(memory_status, '') != 'archived' "
+            "ORDER BY id LIMIT ?",
             (_MEMORY_BATCH_LIMIT,),
         ).fetchall()
 

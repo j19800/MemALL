@@ -52,7 +52,7 @@ def identity_step() -> dict:
     try:
         now = datetime.now(timezone.utc).isoformat()
         rows = conn.execute(
-            "SELECT id, content, agent_name, level FROM memories WHERE LENGTH(TRIM(content)) > 20 ORDER BY id"
+            "SELECT id, content, agent_name, level FROM memories WHERE COALESCE(memory_status, '') != 'archived' AND LENGTH(TRIM(content)) > 20 ORDER BY id"
         ).fetchall()
 
         # Per-agent trait accumulation

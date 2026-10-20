@@ -214,13 +214,16 @@ def classify_step() -> dict:
         if cursor:
             rows = conn.execute(
                 "SELECT id, content, category, summary, level, metadata "
-                "FROM memories WHERE id < ? ORDER BY id DESC LIMIT 500",
+                "FROM memories WHERE id < ? "
+                "AND COALESCE(memory_status, '') != 'archived' "
+                "ORDER BY id DESC LIMIT 500",
                 (cursor,),
             ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT id, content, category, summary, level, metadata "
-                "FROM memories ORDER BY id DESC LIMIT 500"
+                "FROM memories WHERE COALESCE(memory_status, '') != 'archived' "
+                "ORDER BY id DESC LIMIT 500"
             ).fetchall()
 
         if rows:

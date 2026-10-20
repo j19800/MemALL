@@ -77,7 +77,10 @@ def entity_extraction_step(conn=None) -> dict:
 
         rows = conn.execute(
             "SELECT id, content, level, agent_name FROM memories "
-            "WHERE id > ? AND LENGTH(TRIM(content)) > 20 ORDER BY id LIMIT 500",
+            "WHERE id > ? AND LENGTH(TRIM(content)) > 20 "
+            # Archived rows are soft-deleted — not worth extracting entities from.
+            "AND COALESCE(memory_status, '') != 'archived' "
+            "ORDER BY id LIMIT 500",
             (cursor,),
         ).fetchall()
 

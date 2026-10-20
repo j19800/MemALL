@@ -112,6 +112,8 @@ def knowledge_distill_step() -> dict:
         lessons = conn.execute(
             "SELECT id, content, subject, agent_name, confidence, weight FROM memories "
             "WHERE level = 'L6' AND confidence >= 0.5 AND LENGTH(TRIM(content)) > 20 "
+            # Archived rows are soft-deleted — not shared lessons.
+            "AND COALESCE(memory_status, '') != 'archived' "
             "ORDER BY confidence DESC LIMIT 500"
         ).fetchall()
 

@@ -48,6 +48,14 @@ A deep review of [dsh-meow-memory](https://github.com/Phant0Meow/dsh-meow-memory
 - `ReflectInteractMCPInput` now declares `agent_name`. The validator's `model_dump(exclude_unset=True)` was dropping it, so every reflect-derived memory was attributed to `system` regardless of the caller.
 
 ### Fixed
+- **Pipeline: `convergence` step crashed** with `'sqlite3.Row' object has no attribute 'get'`. `_converge_single()` read response rows and called `.get()` on them, but `sqlite3.Row` has no `.get()` — the rows were only converted to dicts further down, on the path that was never reached. The failure only surfaced when a discussion actually converged, which is why it survived in production.
+- **Pipeline: `distill` / `integrate` aborted** with `UNIQUE constraint failed: memories.content_hash`. Three separate causes:
+  1. The upsert `UPDATE` rewrites `content_hash` (UNIQUE across the table) and aborted when another row already held that hash. The target hash is now checked first and the code falls through to the insert path instead of raising.
+  2. `integrate` used a plain `INSERT INTO` for the L10 row while the "does this hash exist?" check was a separate statement — a concurrent writer could take the hash in between. Now `INSERT OR IGNORE` + reuse of the existing row id.
+  3. `convergence` inserted its L4 decision, L5 tasks and response memories with a plain `INSERT INTO`; a repeat (same discussion converged twice, same agent restating a position) aborted the transaction, which rolled back the `status = converged` update — so the discussion stayed active and the next pipeline run collided again, forever. All inserts are now idempotent via a shared `_insert_or_reuse_id()` helper, and the edge inserts use `INSERT OR IGNORE`.
+- **Pipeline steps re-processed archived (soft-deleted) memories.** `memory_status='archived'` means deleted, but the content-scanning queries of 14 steps did not filter it — so archived rows were distilled, promoted, enriched, linked and classified as if live, and when such a row belonged to a denied identity the resulting write was refused, failing the step (`distill_l7: capture: agent 'autocap...' is disabled`). The scanning steps (distill, distill_l7, integrate, reflect, promote, enrich, classify, link, arc_status, observe, cross_agent, entity_extraction, identity) now exclude archived rows; the canonical predicate lives in `pipeline/sql_fragments.py`. Note that `dormant` / `superseded` / `conflict` / `epoch` are *live* states and remain eligible.
+- `plugins/scheduler.py` called `.get()` on two `sqlite3.Row` values (the discussion row and the supersedes row) in the discussion-convergence path — the same crash class as the convergence step, on a path that only runs when a discussion converges.
+- A write refused by the deny-list or the quality gate is now a per-item outcome, not a step failure: `distill_l7` catches the `ValueError` and skips that lesson instead of aborting the step.
 - **`classify` silently demoted caller-assigned levels.** `_detect_layers()` accepted a `current_level` argument and never used it, and its fallback for unrecognised text was `P2`. Any explicitly-written `L4`/`L5`/`L6`/`L7`/`L8`/`L11` memory whose text matched no marker pattern was rewritten to `P2` by the capture-triggered lightweight pipeline. The fallback now preserves a non-default `current_level`; only `L9`/`L10` remain hard-protected as before.
 - **`_inline_classify` overwrote category with `"general"`.** `best_cat` defaulted to `"general"` and was written unconditionally, so an unmatched memory lost its caller-assigned category (e.g. `reflection` → `general`) on every pass. It is now `None` until a rule matches, and only changed columns are written.
 - **English L6 reflections were always rejected.** `_REASONING_MARKERS` held only Chinese terms and the L6 gate hard-rejects `reasoning < 2`, so any English reflection scored 0 and was refused by the quality gate. Added 27 English equivalents; verified the Chinese side is unchanged (good content still accepted, junk still rejected).
@@ -56,6 +64,13 @@ A deep review of [dsh-meow-memory](https://github.com/Phant0Meow/dsh-meow-memory
 
 ### Notes
 - `normalize_agent_name()` maps any name containing a date or 10+ consecutive digits to `system` (a guard against parse artifacts like `claude-2026-01-01`). This is pre-existing and intentional, but it means a timestamp-suffixed agent name is silently redirected — worth knowing when writing tests or naming agents.
+
+### Added
+- `pipeline/sql_fragments.py` — the canonical "not archived" SQL predicate, so the many pipeline queries share one definition instead of each spelling it slightly differently.
+- Two new regression guards: `no_row_get_hazards` (static scan of the pipeline package for `.get()` on a fetched row, scoped per function) and `pipeline_ignores_archived` (asserts every content-scanning step filters archived rows).
+
+### Changed
+- `check_fixes.py` now closes the previous connection pool before switching databases, so a guard cannot leave an open handle on the production file (which made the *next* guard fail with "database is locked" — a cross-guard artifact that looked like a product bug).
 
 ### Added
 - **Query enhancement layer** (`memall/search/enhancements.py`) implementing the six previously-unimplemented retrieval features:

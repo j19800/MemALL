@@ -244,6 +244,9 @@ def _check_capture_discussion(memory_id: int) -> dict | None:
             ).fetchone()
             if not row:
                 return None
+            # sqlite3.Row has no .get() — materialise to a dict before any
+            # dict-style access (metadata is read further down).
+            row = dict(row)
 
             # Check supersedes: does this memory reference a discussion?
             supersedes = row["supersedes"]
@@ -276,6 +279,8 @@ def _check_capture_discussion(memory_id: int) -> dict | None:
                 ).fetchone()
                 if not disc:
                     continue
+                # sqlite3.Row has no .get() — materialise to a dict.
+                disc = dict(disc)
 
                 meta = json.loads(disc.get("metadata") or "{}")
                 if meta.get("status") != "active":

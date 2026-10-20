@@ -81,10 +81,11 @@ def promote_step() -> dict:
         placeholders = ",".join(["?"] * len(thresholds))
         rows = conn.execute(
             f"""
-            SELECT id, level, access_count 
-            FROM memories 
+            SELECT id, level, access_count
+            FROM memories
             WHERE level IN ({placeholders})
               AND access_count > 0
+              AND COALESCE(memory_status, '') != 'archived'
             ORDER BY access_count DESC
             """,
             list(thresholds.keys())

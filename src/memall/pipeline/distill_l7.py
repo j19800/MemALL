@@ -57,11 +57,15 @@ def distill_l7_step() -> dict:
     """
     conn = get_conn()
     try:
-        # Find L6 reflections not yet processed for L7
+        # Find L6 reflections not yet processed for L7.
+        # Archived rows are excluded: they are soft-deleted (ops.batch_archive)
+        # and must not be distilled into new L7 lessons.
         rows = conn.execute(
             "SELECT m.id, m.content, m.summary, m.agent_name, m.subject "
             "FROM memories m "
-            "WHERE m.level = 'L6' AND NOT EXISTS ("
+            "WHERE m.level = 'L6' "
+            "AND COALESCE(m.memory_status, '') != 'archived' "
+            "AND NOT EXISTS ("
             "  SELECT 1 FROM edges e "
             "  WHERE e.relation_type = 'derived_l7_from' "
             "  AND e.target_id = m.id"
@@ -126,16 +130,29 @@ def distill_l7_step() -> dict:
                         created_l7 += 1
                         logger.info("distill_l7: content-prefix matched → weight=%d (mem_id=%d)", new_weight, existing["id"])
                     else:
-                        src_id = capture(
-                            {
-                                "content": l7_content,
-                                "subject": f"lesson: {lesson[:60]}",
-                                "category": "reflection",
-                                "level": "L7",
-                                "owner": "system",
-                                "agent_name": agent,
-                            }
-                        )
+                        # A denied identity (security.disabled_agents) or the
+                        # quality gate can refuse this write.  That is a
+                        # per-item outcome, not a step failure: letting the
+                        # ValueError escape aborted the whole step and the
+                        # pipeline reported it as failed.
+                        try:
+                            src_id = capture(
+                                {
+                                    "content": l7_content,
+                                    "subject": f"lesson: {lesson[:60]}",
+                                    "category": "reflection",
+                                    "level": "L7",
+                                    "owner": "system",
+                                    "agent_name": agent,
+                                }
+                            )
+                        except ValueError as e:
+                            skipped += 1
+                            logger.info(
+                                "distill_l7: write refused for agent %r: %s",
+                                agent, str(e)[:120],
+                            )
+                            continue
 
                     # Record edge: L7 → derived_l7_from → L6
                     inner_conn.execute(
