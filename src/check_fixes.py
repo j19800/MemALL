@@ -737,6 +737,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "digest_excludes_archived": guard_digest_excludes_archived,
     "fts_query_survives_syntax": guard_fts_query_survives_syntax,
     "retrieve_excludes_archived": guard_retrieve_excludes_archived,
+    "subjects_human_readable": guard_subjects_human_readable,
 }
 
 # Full test files run as subprocesses when no guard name is given.

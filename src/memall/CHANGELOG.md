@@ -4,6 +4,18 @@ All notable changes to MemALL are documented in this file.
 
 ## [Unreleased]
 
+### Added — human-readable titles enforced at the single write funnel
+An audit of the production store (3804 live rows) found **469 memories whose subject was machine scaffolding** — `[NOVEL:..][FILE:..][CHUNK:..]` writer markers (171), embedded newlines (194), fixed English templates `Auto-summary:`/`Global:`/`Domain pattern:`/`lesson:` (142) — plus 115 rows whose whole body was a raw `json.dumps` report and 6 legacy rows titled with a truncated tool response. Titles are what humans and agents re-read from every search result, so enforcement went to `capture()`, the single write funnel, and the existing store was repaired.
+
+- `sanitize_subject()` (new): strips template marker spans, collapses newlines/tabs, drops markdown headers, keeps our canonical bracket labels (`[L6 反思]`, `[L10 全局知识]` — matched by L/P pattern, not an exact set), removes unbalanced stray brackets, caps length with an ellipsis. Edge trim is deliberately asymmetric: leading brackets/punctuation strip, trailing only sentential punctuation (a closing `）` may legitimately close a pair).
+- `capture()` now **sanitises caller-supplied subjects** — every audited violation arrived as an external subject that the generation path never saw — and falls back to `_make_subject`.
+- `_make_subject` adopts a canonical label already present in the content as the prefix instead of double-prefixing with the inferred level (the label in the text is the more truthful type when levels drift on reclassification); cuts long first lines at their line end so newlines never leak; renders a JSON/array **body** into a human line (`来自 marvis 的消息：topic（致 opencode）`, `身份：name（role）`, the inner text of MCP tool dumps) while leaving the body untouched for consumers that parse it.
+- Quality gate: clarity ≤5 when the body carries template markers, ≤4 for a whole-JSON body, ≤3 when the raw caller subject is machine-looking — scored on the **pre-sanitisation** value (sanitising first would hide the violation; `capture` passes `caller_subject` through).
+- Producers fixed: the **observation step's** L6 memory (largest machine-content source) is now prose with the machine report in `metadata.report`; cross-agent L10/L11 titles became `[L10 整合] 跨 Agent 全局模式：X（N 条教训聚合）` / `[L11 领域] …`; `Auto-summary:` → `[L9 摘要] …`; `lesson:` → `教训：…`.
+- Existing store repaired (`repair_readable_titles.py`, verified after: 0 marker / 0 newline / 0 English-template subjects, 0 raw-JSON observation bodies; backup `data_pre_titles.db` taken first).
+- New guard `subjects_human_readable`; **26/26 guards + 4 suites**, three consecutive clean rounds.
+- Fixed a long-standing harness flake family while there: `get_conn`/`ConnectionPool` gated init on a process-global flag, so the first connection opened after `DB_PATH` moved to a fresh file could skip initialisation ("no such table"); init is now checked per actual file. Background threads spawned by capture are registered in the new `core/bg_registry` — suites disable spawning (their transactions raced assertions: the "discussion stance auto-captured 0→0" flake), guard harnesses drain them before switching databases.
+
 ### Fixed — deep live testing of every MCP feature (turn 74/75)
 All of the following were found by **driving the real MCP protocol** (client tool calls through the long-lived server), which the in-process suites structurally cannot reach.
 
