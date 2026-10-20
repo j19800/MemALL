@@ -610,6 +610,13 @@ def _capture_normalize_and_validate(
             f"capture: short memory ({content_len} chars) agent={data.agent_name} cat={data.category}: {data.content[:60]}"
         )
 
+    # Deny-list on the RAW identity, before normalisation.  A name like
+    # "probe123456789012" is redirected to "system" by normalize_agent_name
+    # (10+ consecutive digits), and "system" is not on the deny-list — so a
+    # test identity could smuggle writes into the store simply by carrying a
+    # timestamp suffix, bypassing exactly the gate meant to stop it.
+    _check_disabled_identity_raw(data)
+
     data.agent_name = normalize_agent_name(data.agent_name)
     _validate_category(data)
     # level must land inside the canonical enum before it reaches the INSERT:
@@ -630,6 +637,30 @@ def _capture_normalize_and_validate(
     # Pipeline artifacts are tagged 'ledger' at their producer instead.
     data.stream = data.stream or classify_stream(data.category)
     return data
+
+
+def _check_disabled_identity_raw(data: MemoryInput) -> None:
+    """Deny-list check against the *raw* identity, before normalisation.
+
+    normalize_agent_name() redirects names that fail validation (10+
+    consecutive digits, template leaks, single chars) to "system".  Running
+    the deny-list after that lets a test identity like
+    "probe123456789012" — which matches the "probe*" ban — slip through as
+    "system".  Checking the raw value first closes that bypass; the
+    post-normalisation check in capture() still covers the inferred project.
+    """
+    from memall.config import get_config
+    from memall.core.denylist import matches_any
+
+    raw = (data.agent_name or "").strip()
+    if not raw:
+        return
+    patterns = get_config("security.disabled_agents", []) or []
+    if matches_any(raw, patterns):
+        raise ValueError(
+            f"capture: agent {raw!r} is disabled "
+            f"(security.disabled_agents) — memory not stored"
+        )
 
 
 def _capture_check_disabled(data: MemoryInput) -> None:
@@ -1932,7 +1963,43 @@ def retrieve(query=None, viewer=None, **filters) -> list | Memory | None:
         where, params, _ = _build_retrieve_where(conn, query, viewer, filters)
         limit = filters.get("limit", 20)
 
-        sql = f"SELECT * FROM memories WHERE {' AND '.join(where)} ORDER BY occurred_at DESC LIMIT ?"
+        # Relevance ordering.  When the query goes through FTS5, rank by
+        # bm25() (lower = better).  The previous ORDER BY occurred_at DESC
+        # returned the *newest* matches regardless of how well they matched:
+        # a 6-character query whose CJK bigram ("测试") appears in 725 rows
+        # surfaced recent noise above the rows containing the full phrase.
+        # Filter-only retrievals (no query text) keep the recency order.
+        fts_ranked = False
+        if query and isinstance(query, str):
+            fts_ranked = bool(fts_query(query))
+
+        if fts_ranked:
+            # bm25() is only meaningful when the MATCH constraint is applied
+            # *directly* to the FTS table in the outer query — with the
+            # `id IN (SELECT rowid FROM memories_fts WHERE MATCH ?)` form the
+            # join's bm25() evaluates to a constant 0 for every row, so the
+            # ORDER BY silently degenerates to recency again (verified: all
+            # -0.0 from the IN form vs real scores from the direct form).
+            # Rewrite the FTS predicate to its direct equivalent; the bound
+            # query string sits at the same index in `params`, so ordering
+            # and binding stay aligned.
+            fts_in_clause = (
+                "memories.id IN (SELECT rowid FROM memories_fts "
+                "WHERE memories_fts MATCH ?)"
+            )
+            sql_where = list(where)
+            for idx, clause in enumerate(sql_where):
+                if clause == fts_in_clause:
+                    sql_where[idx] = "memories_fts MATCH ?"
+                    break
+            sql = (
+                "SELECT memories.* FROM memories_fts "
+                "JOIN memories ON memories.id = memories_fts.rowid "
+                f"WHERE {' AND '.join(sql_where)} "
+                "ORDER BY bm25(memories_fts) ASC, memories.occurred_at DESC LIMIT ?"
+            )
+        else:
+            sql = f"SELECT * FROM memories WHERE {' AND '.join(where)} ORDER BY occurred_at DESC LIMIT ?"
         params.append(limit)
         cur = conn.execute(sql, params)
         rows = cur.fetchall()
@@ -2024,10 +2091,18 @@ def enhanced_search(
             out["expanded_query"] = effective_query
 
     # ── Base retrieval (same filter semantics as retrieve) ──
+    # Identity resolution: `agent_name_filter` is the explicit retrieval
+    # filter (what unified_search passes); plain `agent_name` is the caller's
+    # own identity (personalisation) and doubles as the retrieval filter when
+    # no separate filter was given — so a direct enhanced_search(agent_name=X)
+    # returns X's memories and its facets count the same population.
+    effective_agent_filter = (
+        agent_name_filter if agent_name_filter is not None else (agent_name or None)
+    )
     retrieve_kwargs = dict(filters)
     retrieve_kwargs.setdefault("limit", limit)
-    if agent_name_filter is not None:
-        retrieve_kwargs["agent_name"] = agent_name_filter
+    if effective_agent_filter is not None:
+        retrieve_kwargs["agent_name"] = effective_agent_filter
     results = retrieve(effective_query or None, viewer=viewer, **retrieve_kwargs)
 
     if results is None:
@@ -2040,8 +2115,16 @@ def enhanced_search(
     with _pool_conn() as conn:
         # ── Facet aggregates over the unlimited candidate set ──
         if fields:
+            # The facet population must be the SAME set the results come from:
+            # same query match, same identity filter, same field filters.
+            # Building it by re-running the WHERE builder with the exact same
+            # arguments the retrieval above used is what guarantees that; an
+            # earlier version disagreed on the identity filter and printed
+            # "L9: 259" next to a 4-result page.
+            facet_filters = {k: v for k, v in retrieve_kwargs.items()
+                             if k != "limit"}
             where, params, _ = _build_retrieve_where(
-                conn, effective_query, viewer, {k: v for k, v in filters.items() if k != "limit"}
+                conn, effective_query, viewer, facet_filters,
             )
             out["facets"] = compute_facets(conn, " AND ".join(where), params, fields)
 
@@ -2051,6 +2134,14 @@ def enhanced_search(
 
         # ── Post-retrieval enhancements (need dict-shaped results) ──
         if explain or cluster or personalize or context_boost:
+            # Carry the retrieval rank into the dicts: retrieve() already
+            # ordered by bm25, so position i *is* the relevance signal.
+            # Without a score the enhancements were inert on this path —
+            # personalisation computed 0.0*(1+w*affinity)=0.0 for every row
+            # and context boosting likewise, and explain reported all-null
+            # ranks.  RRF-form score 1/(k+i) keeps the same scale as the
+            # hybrid path so boosts compose consistently across modes.
+            _RRF_K = 60
             as_dicts = [
                 {
                     "memory_id": m.id,
@@ -2063,11 +2154,11 @@ def enhanced_search(
                     "agent_name": m.agent_name,
                     "created_at": m.created_at,
                     "occurred_at": m.occurred_at,
-                    "rrf_score": None,
-                    "fts_rank": None,
+                    "rrf_score": round(1.0 / (_RRF_K + i), 6),
+                    "fts_rank": i,
                     "vec_rank": None,
                 }
-                for m in results
+                for i, m in enumerate(results, start=1)
             ]
             enhanced = apply_enhancements(
                 as_dicts,

@@ -815,9 +815,116 @@ def cmd_serve(args):
     if args.http:
         from memall.gateway import MemAllGateway
         MemAllGateway(port=args.port).start()
+    elif getattr(args, "watch", False):
+        _serve_with_watch()
     else:
         from memall.mcp.server import serve
         serve()
+
+
+def _serve_with_watch() -> None:
+    """Run the MCP server in a child process and restart it when the source
+    changes.
+
+    Why this exists: the MCP stdio server is a long-lived process.  A code
+    change therefore does NOT take effect until the client restarts the
+    server — during development that means every fix needs a manual
+    restart, and the "fix" appears not to work (the old module stays
+    cached in the running interpreter).  That is exactly the trap that made
+    a pipeline fix look ineffective.
+
+    The watcher tracks mtimes of the ``memall`` package and restarts the
+    child when any of them change.  stdio framing is preserved because the
+    child owns stdin/stdout directly; the parent only supervises.
+
+    Use ``memall serve --watch`` during development.
+    """
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+
+    import memall
+
+    pkg_dir = Path(memall.__file__).parent
+    _log = logging.getLogger("memall.serve.watch")
+
+    def _snapshot() -> dict:
+        out = {}
+        for p in pkg_dir.rglob("*.py"):
+            try:
+                out[str(p)] = p.stat().st_mtime_ns
+            except OSError:
+                pass
+        return out
+
+    env = dict(os.environ)
+    # Child must not think it is the watcher.
+    env.pop("MEMALL_SERVE_WATCH", None)
+
+    child = subprocess.Popen(
+        [sys.executable, "-m", "memall.mcp.server"], env=env
+    )
+    _log.info("watch mode: server pid=%d, watching %s", child.pid, pkg_dir)
+
+    def _forward(signum, frame):
+        try:
+            child.send_signal(signum)
+        except Exception:
+            pass
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _forward)
+        except (ValueError, OSError):
+            pass
+
+    last = _snapshot()
+    try:
+        while True:
+            try:
+                rc = child.wait(timeout=1.0)
+                _log.info("server exited (rc=%s); restarting", rc)
+                time.sleep(0.5)
+                child = subprocess.Popen(
+                    [sys.executable, "-m", "memall.mcp.server"], env=env
+                )
+                last = _snapshot()
+                continue
+            except subprocess.TimeoutExpired:
+                pass
+
+            now = _snapshot()
+            changed = [k for k in set(now) | set(last)
+                       if now.get(k) != last.get(k)]
+            if changed:
+                _log.info(
+                    "watch: %d file(s) changed, restarting server", len(changed)
+                )
+                for k in changed[:5]:
+                    _log.info("  changed: %s", k)
+                try:
+                    child.terminate()
+                    child.wait(timeout=5)
+                except Exception:
+                    try:
+                        child.kill()
+                    except Exception:
+                        pass
+                child = subprocess.Popen(
+                    [sys.executable, "-m", "memall.mcp.server"], env=env
+                )
+                last = _snapshot()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            child.terminate()
+            child.wait(timeout=5)
+        except Exception:
+            pass
 
 
 def cmd_start(args):

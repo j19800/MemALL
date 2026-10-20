@@ -430,6 +430,97 @@ def guard_pipeline_ignores_archived() -> Tuple[bool, str]:
     return not missing, ", ".join(missing) or "all scanning steps filter archived"
 
 
+def guard_denylist_before_normalize() -> Tuple[bool, str]:
+    """Deny-list must run on the RAW identity, before normalize_agent_name.
+
+    A name with 10+ consecutive digits (autocap2026..., probe123456789012)
+    normalises to "system", which is not on the deny-list — checking after
+    normalisation lets exactly the test identities the list exists to stop
+    write straight through.
+    """
+    _fresh_db()
+    import memall.config as mc
+    from memall.core.db import init_db
+    from memall.core.thin_waist import capture
+
+    init_db()
+    mc._config["security"]["disabled_agents"] = ["probe*"]
+    try:
+        mid = capture("这条内容用命中拒绝名单通配符且含十位以上连续数字的身份写入，"
+                      "归一化会把它变成 system 从而尝试绕过拒绝名单的检查。",
+                      level="P2", category="general", project="g",
+                      agent_name="probe123456789012", owner="老陈")
+        ok = False  # write succeeded -> bypass still open
+        detail = f"WROTE id={mid}"
+    except ValueError as e:
+        ok = "disabled" in str(e)
+        detail = str(e)[:80]
+    finally:
+        mc.reset_config()
+    return ok, detail
+
+
+def guard_search_ranks_by_bm25() -> Tuple[bool, str]:
+    """FTS retrieve() must order by bm25 relevance, not recency.
+
+    The IN-subquery form evaluates bm25() to a constant 0 (the MATCH is not
+    in the outer FROM), so ORDER BY bm25 silently degenerates back to the
+    recency tiebreak — verified by two rows that contain the full query
+    phrase being outranked by noise matching only a 2-char bigram.
+    """
+    _fresh_db()
+    from memall.core.db import init_db, pool_conn
+    from memall.core.thin_waist import capture, retrieve
+
+    init_db()
+    noise = capture("这是一条只含测试两字的噪音记忆，用于验证 bm25 排序不会把无关结果排在前面，"
+                    "因为最近写入的噪音曾经靠 occurred_at 挤掉了真正匹配的记忆。",
+                    level="P2", category="testing", project="g", agent_name="bm25g",
+                    owner="老陈")
+    exact = capture("验收标记词组完整出现的记忆 alpha，用于被 bm25 排序提前，"
+                    "这是验证检索相关性排序的核心用例。",
+                    level="P2", category="testing", project="g", agent_name="bm25g",
+                    owner="老陈")
+    with pool_conn() as c:
+        c.execute("UPDATE memories SET occurred_at = datetime('now') WHERE id = ?",
+                  (noise,))
+        c.execute("UPDATE memories SET occurred_at = '2020-01-01T00:00:00' "
+                  "WHERE id = ?", (exact,))
+        c.commit()
+    hits = retrieve("验收标记词组", agent_name="bm25g", limit=2)
+    order = [m.id for m in hits]
+    return order and order[0] == exact, f"order={order} exact={exact}"
+
+
+def guard_facets_match_population() -> Tuple[bool, str]:
+    """Facet counts must describe the SAME population as the results.
+
+    An earlier version built the facet WHERE without the identity filter, so
+    a 4-result page came back with 'L9: 259' — the whole store.
+    """
+    _fresh_db()
+    from memall.core.db import init_db
+    from memall.core.thin_waist import capture, enhanced_search
+
+    init_db()
+    for i in range(3):
+        capture(f"分面对齐验证词条 alpha{i}：这条记忆属于本测试 agent，"
+                "用于检查分面计数是否只统计候选集而不是全库。",
+                level="P2", category="testing", project="facetproj",
+                agent_name="facetg", owner="老陈")
+    other = capture("分面对齐验证词条不属于该 agent：同查询词但不同 agent，"
+                    "如果它进了分面计数就说明过滤集漂移了。",
+                    level="L9", category="testing", project="other",
+                    agent_name="otherg", owner="老陈")
+    res = enhanced_search(query="分面对齐验证词条", agent_name="facetg",
+                          limit=5, facet_fields=["level"])
+    facets = res.get("facets", {}).get("level", {})
+    total = sum(facets.values())
+    n_res = len(res["results"])
+    ok = (total == n_res == 3) and "L9" not in facets
+    return ok, f"facet_total={total} results={n_res} levels={facets}"
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -449,6 +540,9 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "denylist_supports_globs": guard_denylist_supports_globs,
     "no_row_get_hazards": guard_no_row_get_hazards,
     "pipeline_ignores_archived": guard_pipeline_ignores_archived,
+    "denylist_before_normalize": guard_denylist_before_normalize,
+    "search_ranks_by_bm25": guard_search_ranks_by_bm25,
+    "facets_match_population": guard_facets_match_population,
 }
 
 # Full test files run as subprocesses when no guard name is given.

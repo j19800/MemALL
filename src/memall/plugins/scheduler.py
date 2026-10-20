@@ -316,6 +316,8 @@ def _check_capture_discussion(memory_id: int) -> dict | None:
                     ") AND level = 'P2' ORDER BY created_at ASC LIMIT 1000",
                     (disc_id,),
                 ).fetchall()
+                # sqlite3.Row has no .get() — materialise before dict-style access.
+                responses = [dict(r) for r in responses]
                 for r in responses:
                     rmeta = json.loads(r.get("metadata") or "{}")
                     agent = rmeta.get("agent_name", r.get("agent_name", ""))

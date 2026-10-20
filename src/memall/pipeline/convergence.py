@@ -626,7 +626,14 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
 
     All writes happen on *conn* in a single transaction.
     Caller is responsible for commit.
+
+    ``responses`` is normalised to dicts here: callers reach this function
+    from several paths (MCP respond, capture-triggered convergence, the
+    background resolver) and some of them hand over ``sqlite3.Row`` objects,
+    which have no ``.get()``.  Normalising at the boundary means no caller
+    can trip over it.
     """
+    responses = [dict(r) for r in (responses or [])]
     meta = json.loads(disc.get("metadata") or "{}")
     if meta.get("status") != "active":
         return {"warning": "already " + str(meta.get("status"))}
