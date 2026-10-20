@@ -1036,6 +1036,17 @@ def guard_fallback_produces_self_evolution() -> Tuple[bool, str]:
 
     work = fallback.has_distillable_input()
     events = fallback.pending_event_count()
+    # Start from a QUIESCENT database.  A pipeline run left "running" by a
+    # killed process (or by a concurrent guard that just captured something)
+    # is correctly treated as in-progress by claim_run — but that made this
+    # guard depend on external state and fail intermittently.  Production
+    # has recover_stale_pipeline_runs() for exactly this row; do the same.
+    conn = get_conn()
+    conn.execute("UPDATE pipeline_runs SET status='completed', "
+                 "ended_at=datetime('now') WHERE status='running'")
+    conn.commit()
+    conn.close()
+
     # claim must succeed on a quiet DB with no recent run
     claimed = fallback.claim_run(min_age_seconds=0)
     # and a second claim must be refused while the first one is "running"
@@ -1225,6 +1236,19 @@ def main(argv: list) -> int:
 
     if not selected:  # also run the full suites
         print("\n--- suites ---")
+        # A guard's capture may have scheduled a lightweight pipeline on the
+        # bounded pool; it keeps writing to the test DB for up to a minute.
+        # Launching the suite subprocesses while that runs made
+        # test_auto_capture.py fail intermittently (it passes standalone).
+        try:
+            from memall.core.bg_registry import wait_for_background
+
+            left = wait_for_background(timeout=120.0)
+            if left:
+                print(f"NOTE  {left} background task(s) still running; "
+                      f"suites may contend with them")
+        except Exception:
+            pass
         for f in SUITE_FILES:
             path = os.path.join(SRC, f)
             if not os.path.exists(path):
