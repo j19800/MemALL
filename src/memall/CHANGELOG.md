@@ -4,6 +4,26 @@ All notable changes to MemALL are documented in this file.
 
 ## [Unreleased]
 
+### Added — full-store diagnostic (5,477 memories) + audit ticket for two confirmed contract defects
+A full read of the production store (5,477 rows × 39 fields, every layer) was taken as a baseline. The raw dump is kept out of git (`_memory_export/`, ~12.6 MB); the findings live in `docs/FIX-TICKET-opencode-20261021.md`.
+
+- **Signal/noise split.** Only **4,028 of 5,477 rows (73.5%) carry substance**. 369 are pipeline scaffolding — a `管线观察：当前记忆分布 …` snapshot of pure counters written on every pipeline run — and 1,080 are `会话总结：本次会话记录了 N 条记忆 …` counters. Together **26.4% of the golden L6/L9 layers is numeric garbage with zero retrieval value**.
+- **The reflection layer produces counters, not reflections.** 1,065 L6 rows, **0 high quality** (the pipeline warns every run: `L6 高质量反思占比 0/1065`), 404 shorter than 120 characters. `reflect.py` is a keyword scanner and cannot produce a reflection.
+- **Graph health.** 12,381 edges, but **2,204 memories (40.2%) are isolated**. `thread_id` coverage reached 83.8% and `project` empties fell to 4.8% — both were 0% and 10.6% in June and are now closed.
+- **Still open:** `access_count` covers only 22.3% of the store; 1,702 rows (31%) sit under `agent_name='system'`; 60+ junk `category` values (single characters and Chinese fragments).
+
+The ticket records two contract defects, both **reproduced live** and **dispatched to codex — not yet fixed**:
+
+- **P0 — `pipeline/reflect.py:97` replaces the whole `metadata` column** and ignores the `metadata.pinned_fields` guard. Consequences: the Oct-20 pin mechanism erases itself after one pipeline cycle, and any L5 task row it touches loses `metadata.status` — the field `notify_pending_tasks()` selects on. 595 L6 rows carry the marker; 404 had their metadata destroyed outright; a live task card (#999016) is already queued to be erased by the next run.
+- **P1 — `mcp/models.py CaptureInput` does not declare 8 fields `mcp/tools/capture.py` supports** (`tags`, `creator`, `confidence`, `visibility`, `stream`, `occurred_at`, `supersedes`, `source_ids`); the validator strips them before the handler runs. This is the write-side twin of the read-side `project` defect fixed in `203f03a` — that fix's acceptance check only verified that dropped fields were *reported*, not that supported fields *worked*.
+
+### Changed — AGENTS.md §7 synced with memall-bus protocol v2
+The bus prototype's independent security audit found three reproducible problems; all are fixed in the bus repo (`D:\Agent项目\Claw\memall-bus`, protocol v2, 16/16 tests, now a git repo with a baseline commit). AGENTS.md §7 is updated to match.
+
+- **Six repair baselines instead of three.** Added: the live push must carry the mailbox row id (otherwise it can never be acked, `read` is never set, and the real-time and pull channels double-deliver); `publish`'s `from` must be taken from the connection identity and `inbox` may only read the caller's own mailbox (v1 had no auth at all — reading another agent's mailbox and impersonating one were both reproduced); resetting `bus.db` must remove `-wal`/`-shm` too, because WAL residue resurrects old messages.
+- **Auth model.** `~/.memall/bus_token` (installation token) + `~/.memall/bus_agents/<agent>.token` (per-agent token); agents must be pre-enrolled with `bus_admin.py enroll` to close the first-claim race. Honest boundary: the installation token does not stop a process running as the same OS user — the same trust level as the MemALL HTTP gateway token. Raising that requires OS-level isolation, which is a trust-model decision, not a code change.
+- **Deployment form corrected.** The v1 report's "run the bus as an asyncio coroutine inside the MemALL MCP server" rested on two assumptions that do not hold: the stdio MCP server is a **synchronous** stdin JSON-RPC loop (not an asyncio host), and it is spawned **per client session** — short-lived, and the very source of the orphan-process problem. The bus belongs in an **independent resident process**; aiohttp's HTTP gateway is the right host if the process count ever needs to come down.
+
 ### Fixed — MCP flow audit: 16 reported issues + 4 found by the acceptance run
 An external review of the MCP layer (`docs/MemALL-MCP流程审查报告-20261020.md`) listed 16 defects. All were addressed; four more surfaced only when the acceptance checklist was actually executed.
 
