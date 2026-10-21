@@ -185,6 +185,12 @@ async def handle_mcp_post(request: web.Request) -> web.Response:
 
     # ── Tools/List ──
     if method == "tools/list":
+        # Tools register lazily (adapter._ensure_loaded) so the stdio server
+        # can answer `initialize` without the ~11s heavy import.  Every
+        # reader of TOOL_DEFINITIONS must trigger the load, or this
+        # transport reports an EMPTY tool list until a tool is called.
+        from memall.mcp.adapter import _ensure_loaded
+        _ensure_loaded()
         return web.json_response({
             "jsonrpc": "2.0", "id": req_id,
             "result": {"tools": TOOL_DEFINITIONS},
@@ -395,6 +401,8 @@ async def handle_sse(request: web.Request) -> web.Response:
     )
     await response.prepare(request)
     # Send initial tool list event
+    from memall.mcp.adapter import _ensure_loaded
+    _ensure_loaded()  # lazy registration — see tools/list above
     event = {"type": "tool_list_changed", "tools": [_t["name"] for _t in TOOL_DEFINITIONS]}
     await response.write(f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode())
     # Keep connection alive with periodic heartbeats

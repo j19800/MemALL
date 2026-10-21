@@ -92,6 +92,13 @@ class McpHandlersMixin:
 
         # ── Tools/List ──
         if method == "tools/list":
+            # Tools register lazily (adapter._ensure_loaded) so the stdio
+            # server can answer `initialize` without paying the ~11s
+            # heavy-import cost.  Every reader of TOOL_DEFINITIONS must
+            # trigger that load, or this HTTP transport reports an EMPTY
+            # tool list until the client happens to call a tool first.
+            from memall.mcp.adapter import _ensure_loaded
+            _ensure_loaded()
             return web.json_response({
                 "jsonrpc": "2.0", "id": req_id,
                 "result": {"tools": TOOL_DEFINITIONS},
@@ -188,7 +195,8 @@ class McpHandlersMixin:
 
     async def _handle_mcp_sse(self, request: web.Request) -> web.Response:
         """GET /mcp — SSE subscription for tool list change notifications."""
-        from memall.mcp.adapter import TOOL_DEFINITIONS
+        from memall.mcp.adapter import TOOL_DEFINITIONS, _ensure_loaded
+        _ensure_loaded()  # lazy registration — see tools/list above
         response = web.StreamResponse(
             status=200, reason="OK",
             headers={

@@ -1,7 +1,7 @@
 import json
 import logging
 import sys
-from memall.mcp.adapter import TOOL_DEFINITIONS, handle_call, _intercept, consume_session_note
+from memall.mcp.adapter import TOOL_DEFINITIONS, handle_call, _intercept, consume_session_note, _ensure_loaded
 from memall.mcp.shared import ack_session_note
 
 _initialized = False
@@ -278,6 +278,7 @@ def serve():
                     _respond({"jsonrpc": "2.0", "id": req_id,
                               "error": {"code": _ERR_NOT_INITIALIZED, "message": "server not initialized"}})
                 else:
+                    _ensure_loaded()
                     _respond({
                         "jsonrpc": "2.0", "id": req_id,
                         "result": {"tools": TOOL_DEFINITIONS},

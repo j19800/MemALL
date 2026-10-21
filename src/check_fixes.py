@@ -227,9 +227,13 @@ def guard_mcp_contract_fields() -> Tuple[bool, str]:
     """Per-action sub_action fields exist and record_interaction is on the
     WRITE tool (was: one flat enum mixing 7 vocabularies; a write action behind
     readOnlyHint)."""
-    import memall.mcp.adapter  # noqa: F401
+    import memall.mcp.adapter as _ad
     from memall.mcp.adapter import TOOL_DEFINITIONS
 
+    # Tools register lazily so the stdio server can answer `initialize`
+    # without the ~11s heavy import; reading TOOL_DEFINITIONS before this
+    # yields an empty list.
+    _ad._ensure_loaded()
     write = next(t for t in TOOL_DEFINITIONS if t["name"] == "memall_write")
     read = next(t for t in TOOL_DEFINITIONS if t["name"] == "memall_read")
     wprops = write["inputSchema"]["properties"]
@@ -1025,45 +1029,57 @@ def guard_fallback_produces_self_evolution() -> Tuple[bool, str]:
     (pending-work detection + claim) without running the expensive steps.
     """
     _fresh_db()
+    from memall.core import bg_registry
     from memall.core.db import get_conn, init_db
     from memall.core.thin_waist import capture
     from memall.pipeline import fallback
 
-    init_db()
-    capture("兜底定时器验证：这条知识记忆应当被识别为可蒸馏输入，"
-            "让进程内的自进化兜底有活可干。",
-            level="L4", category="decision", project="g", agent_name="fb", owner="老陈")
+    # No background pipeline may start while this guard runs: one starting
+    # between the quiesce below and claim_run() writes a fresh "running" row
+    # and the claim is (correctly) refused, making the guard flaky.  Captures
+    # still work — only the fire-and-forget pipeline is suppressed.
+    prior = bg_registry.spawn
+    bg_registry.set_enabled(False)
+    try:
+        init_db()
+        capture("兜底定时器验证：这条知识记忆应当被识别为可蒸馏输入，"
+                "让进程内的自进化兜底有活可干。",
+                level="L4", category="decision", project="g", agent_name="fb",
+                owner="老陈")
 
-    work = fallback.has_distillable_input()
-    events = fallback.pending_event_count()
-    # Start from a QUIESCENT database.  A pipeline run left "running" by a
-    # killed process (or by a concurrent guard that just captured something)
-    # is correctly treated as in-progress by claim_run — but that made this
-    # guard depend on external state and fail intermittently.  Production
-    # has recover_stale_pipeline_runs() for exactly this row; do the same.
-    conn = get_conn()
-    conn.execute("UPDATE pipeline_runs SET status='completed', "
-                 "ended_at=datetime('now') WHERE status='running'")
-    conn.commit()
-    conn.close()
+        work = fallback.has_distillable_input()
+        events = fallback.pending_event_count()
 
-    # claim must succeed on a quiet DB with no recent run
-    claimed = fallback.claim_run(min_age_seconds=0)
-    # and a second claim must be refused while the first one is "running"
-    second = fallback.claim_run(min_age_seconds=0)
+        # Start from a QUIESCENT database: a "running" row left by a killed
+        # process is correctly treated as in-progress by claim_run, which
+        # made this guard depend on external state.  Production recovers
+        # such a row via recover_stale_pipeline_runs(); do the same.
+        conn = get_conn()
+        conn.execute("UPDATE pipeline_runs SET status='completed', "
+                     "ended_at=datetime('now') WHERE status='running'")
+        conn.commit()
+        conn.close()
 
-    conn = get_conn()
-    running = conn.execute(
-        "SELECT COUNT(*) FROM pipeline_runs WHERE status='running'").fetchone()[0]
-    # Do not leave a phantom "running" row behind: it would block the real
-    # fallback (and the next run of this guard) for the rest of the process.
-    conn.execute("UPDATE pipeline_runs SET status='completed', "
-                 "ended_at=datetime('now') WHERE status='running'")
-    conn.commit()
-    conn.close()
-    ok = work and events >= 1 and claimed and (not second) and running >= 1
-    return ok, (f"work={work} events={events} claimed={claimed} "
-                f"second_refused={not second} running_rows={running}")
+        # claim must succeed on a quiet DB with no recent run
+        claimed = fallback.claim_run(min_age_seconds=0)
+        # and a second claim must be refused while the first one is "running"
+        second = fallback.claim_run(min_age_seconds=0)
+
+        conn = get_conn()
+        running = conn.execute(
+            "SELECT COUNT(*) FROM pipeline_runs WHERE status='running'").fetchone()[0]
+        # Do not leave a phantom "running" row behind: it would block the
+        # real fallback (and the next run of this guard) for the process.
+        conn.execute("UPDATE pipeline_runs SET status='completed', "
+                     "ended_at=datetime('now') WHERE status='running'")
+        conn.commit()
+        conn.close()
+        ok = work and events >= 1 and claimed and (not second) and running >= 1
+        return ok, (f"work={work} events={events} claimed={claimed} "
+                    f"second_refused={not second} running_rows={running}")
+    finally:
+        bg_registry.set_enabled(True)
+        del prior
 
 
 def guard_busy_timeout_survives_concurrency() -> Tuple[bool, str]:
@@ -1160,6 +1176,49 @@ def guard_update_can_complete_tasks() -> Tuple[bool, str]:
     return ok, f"updated={upd.get('updated')} status={meta.get('status')}"
 
 
+def guard_lazy_tools_always_loadable() -> Tuple[bool, str]:
+    """Every tools/list reader must trigger the lazy tool registration.
+
+    Tools are registered lazily (adapter._ensure_loaded) so the stdio server
+    answers `initialize` without the ~11s heavy import that made MCP clients
+    time out with "Not connected".  That win only holds if EVERY code path
+    that serves a tool list calls it first — otherwise an HTTP/SSE client
+    gets an empty list.  This guard pins the server-side readers.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent / "memall"
+    readers = {
+        "mcp/server.py": 'method == "tools/list"',
+        "mcp/http_transport.py": 'method == "tools/list"',
+        "gateway_mcp_handlers.py": 'method == "tools/list"',
+    }
+    offenders = []
+    for rel, anchor in readers.items():
+        p = root / rel
+        if not p.exists():
+            offenders.append(f"{rel}: missing")
+            continue
+        src = p.read_text(encoding="utf-8", errors="replace")
+        i = src.find(anchor)
+        if i == -1:
+            offenders.append(f"{rel}: no tools/list branch")
+            continue
+        # the call must appear in the same branch (next ~600 chars)
+        if "_ensure_loaded()" not in src[i:i + 600]:
+            offenders.append(f"{rel}: tools/list without _ensure_loaded()")
+
+    # and the registry must actually be empty until the loader runs
+    import memall.mcp.adapter as ad
+    from memall.mcp.adapter import TOOL_DEFINITIONS
+
+    ad._ensure_loaded()
+    n = len(TOOL_DEFINITIONS)
+    ok = not offenders and n >= 7
+    return ok, f"tools={n} offenders={offenders or 'none'}"
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -1200,6 +1259,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fallback_produces_self_evolution": guard_fallback_produces_self_evolution,
     "busy_timeout_survives_concurrency": guard_busy_timeout_survives_concurrency,
     "update_can_complete_tasks": guard_update_can_complete_tasks,
+    "lazy_tools_always_loadable": guard_lazy_tools_always_loadable,
 }
 
 # Full test files run as subprocesses when no guard name is given.

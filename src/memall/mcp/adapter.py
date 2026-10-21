@@ -18,22 +18,51 @@ def _intercept(tool_name: str, arguments: dict, result_str: str = "") -> None:
     """Backward compat wrapper — result_str is unused."""
     run_intercept(tool_name, arguments)
 
-# Import tools to register them (side-effect)
-from memall.mcp import tools  # noqa: F401
-# Import built-in hooks (side-effect registers them)
-from memall.mcp import hooks_builtin  # noqa: F401
-# Auto-capture hook (side-effect registers the post_tool_use extractor).
-# Without this import the hook never registers and auto-capture is dead code.
-from memall import auto_capture  # noqa: F401
-# Load plugins so lifecycle hooks (on_capture, on_pipeline, etc.) fire
-from memall.plugins.loader import load_all_plugins as _load_all_plugins
-_load_all_plugins()
 
-TOOL_DEFINITIONS = registry.list_definitions()
+TOOL_DEFINITIONS = []
+_loaded = False
+
+# ── Eager, but cheap (0.08s each) ────────────────────────────────────────
+# The hooks are registered by importing these modules; anything that imports
+# the adapter is entitled to see them.  Deferring them too broke
+# auto-capture for every caller that touched the hook registry before making
+# a tool call (the registry looked empty).  Only the genuinely heavy module
+# — memall.mcp.tools, which drags in sentence-transformers — is lazy.
+from memall.mcp import hooks_builtin  # noqa: E402,F401  (registers hooks)
+from memall import auto_capture  # noqa: E402,F401  (registers the extractor)
+
+
+def _ensure_loaded():
+    """Lazily import the HEAVY tool/plugin modules.
+
+    ``memall.mcp.tools`` registers the 18 tool modules and pulls in
+    sentence-transformers (measured 1.58s hot, more when cold), and
+    ``load_all_plugins`` loads every plugin on top of that.  Doing it at
+    module import blocked the MCP stdio server from answering the
+    ``initialize`` handshake, so clients timed out and reported
+    "Not connected".  Hooks (0.08s) stay eager above; this defers only the
+    expensive part to the first tool call.
+
+    Every reader of TOOL_DEFINITIONS must call this first.
+    """
+    global _loaded
+    if _loaded:
+        return
+    # Import tools to register them (side-effect)
+    from memall.mcp import tools  # noqa: F401
+    # Load plugins so lifecycle hooks (on_capture, on_pipeline, etc.) fire
+    from memall.plugins.loader import load_all_plugins as _load_all_plugins
+    _load_all_plugins()
+    # Mutate in place so `from ... import TOOL_DEFINITIONS` bindings in other
+    # modules (server.py) see the populated list, not just a rebind.
+    TOOL_DEFINITIONS.clear()
+    TOOL_DEFINITIONS.extend(registry.list_definitions())
+    _loaded = True
 
 
 def handle_call(tool_name: str, arguments: dict) -> str:
     reset_trace()
+    _ensure_loaded()
     m = get_metrics()
     m.incr("tool_call_total")
     m.incr(f"tool_call.{tool_name}")
