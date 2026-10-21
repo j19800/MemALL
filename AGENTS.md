@@ -83,13 +83,15 @@ auto_inject 会自动返回分配给自己的 `pending_tasks`（id/content/subje
 > 背景：原推模式 scheduler 死 4 个月（OpenBLAS/DLL 初始化失败 0xC0000142），agent 间无实时通道，只能靠 session_start 拉取。
 > 方案与实证报告（**所有 agent 接手前必读**）：
 > `D:\Agent项目\Claw\memall-bus\技术报告-多Agent即时通讯总线-供Agent调研学习.md`
-> 代码：`D:\Agent项目\Claw\memall-bus\`（纯标准库 asyncio+sqlite3，**零外部依赖**，**8/8 精确测试通过**）。
+> 代码：`D:\Agent项目\Claw\memall-bus\`（纯标准库 asyncio+sqlite3，**零外部依赖**，**16/16 精确测试通过**，协议 v2）。
 
-- **当前状态**：原型已实证可用（在线延迟 p50≈6ms/p99≈13ms、1000 条全送达 154msg/s、离线 mailbox 不丢、1MB 完整），**尚未接回主库 MCP server（P1 待做）**。
-- **协议**：TCP 行分隔 JSON（127.0.0.1:8770）；op 含 hello/publish/inbox/ack；响应用 req_id 三队列路由（实时推送 / inbox 历史 / 请求回包）。
-- **三条修复底线（改代码前必跑 test_suite.py）**：① 单连接禁止多协程抢读 reader；② inbox 响应必须带 req_id 与实时推送区分；③ asyncio readline 默认 64KB 行限制，大 payload 须设 limit=16MB。
-- **接回主库设计**：MCP 新增 `memall_msg_send` / `memall_msg_inbox`；AGENTS 派单改为 publish 实时推；与 auto_inject 拉取共读 mailbox，去重靠 status/read。
-- **开放调研项**：安全鉴权与 agent 隔离（当前无 auth）、常驻封装、跨机后端（Redis/NATS）、A2A 互通桥接——详见报告第 8 节。
+- **当前状态**：原型已实证可用（在线延迟 p50≈0.75ms/p99≈1.31ms、真并发 1917 msg/s、离线 mailbox 不丢、服务重启不丢、1MB 完整），**尚未接回主库 MCP server（P1 待做）**。
+- **协议**：TCP 行分隔 JSON（127.0.0.1:8770）；op 含 hello/publish/inbox/ack/ping；响应用 req_id 三队列路由（实时推送 / inbox 历史 / 请求回包）；hello 回包带 `proto` 版本号（当前 v2），客户端校验不匹配即失败。
+- **六条修复底线（改代码前必跑 test_suite.py）**：① 单连接禁止多协程抢读 reader；② inbox 响应必须带 req_id 与实时推送区分；③ asyncio readline 默认 64KB 行限制，大 payload 须设 limit=16MB；④ **实时推送必须带 mailbox 行 id**（否则收到即无法 ack → read 永不置位 → L2/L3 必然双投）；⑤ **publish 的 from 必须由服务端从连接身份取，inbox 只能读自己的**（v1 无鉴权，实证可越权读 + 冒充 agent）；⑥ **重置 bus.db 必须连 -wal/-shm 一起删**（WAL 残留会让已清空的邮箱冒出旧消息）。
+- **鉴权模型（v2）**：`~/.memall/bus_token` 是 installation token（安装级共享密钥），`~/.memall/bus_agents/<agent>.token` 是 per-agent token（绑定身份，防 agent 间冒充）。生产环境须用 `python bus_admin.py enroll <agent>...` **预登记**，消除首次登记的抢占窗口。边界：installation token 挡不住同 OS 用户的其他进程，与 MemALL HTTP gateway token 同一信任级别。
+- **接回主库设计**：MCP 新增 `memall_msg_send` / `memall_msg_inbox`；AGENTS 派单改为 publish 实时推；与 auto_inject 拉取共读 mailbox，去重靠 status/read。**建议总线只传 `memory_id` 指针、不复制任务卡正文**——L5 卡保持唯一事实源，避免两库两份状态跨库不一致。
+- **⚠️ 部署形态更正**：v1 报告写的「塞进 MemALL MCP server 作为 asyncio 协程」**前提是错的**——stdio MCP server 是**同步** stdin JSON-RPC 循环，且由每个客户端会话**各 spawn 一个**（短命、正是孤儿进程问题的来源）。推荐**独立常驻进程**；若要复用进程，宿主应是 aiohttp 的 HTTP gateway 而非 stdio server。
+- **开放调研项**：同用户恶意进程的信任模型（需 OS 级隔离，待老陈拍板）、常驻封装与看门狗、跨机后端（Redis/NATS）、去重幂等精确规则、A2A 互通桥接——详见报告第 8 节。
 
 
 _本协议自身也是记忆：level=L4, category=decision, project=memall。修改须走 memall_discussion 收敛 + 老陈批准。_
