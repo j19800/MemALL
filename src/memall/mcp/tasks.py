@@ -125,9 +125,13 @@ def list_tasks(agent_name: str, status: Optional[str] = None,
             rows = pending_tasks_for(conn, agent_name, limit=limit)
             if want == "all":
                 # ask for every state the agent owns
+                # Only REAL task cards: reminders (task_pending) and session
+                # summaries also live at L5 and are addressed to the agent, so
+                # without this filter "my tasks" was mostly noise.
                 all_rows = conn.execute(
                     "SELECT m.id, m.subject, m.metadata, m.category FROM memories m "
-                    "WHERE m.level = 'L5' AND COALESCE(LOWER(json_extract("
+                    "WHERE m.level = 'L5' AND m.category IN ('task', 'todo') "
+                    "AND COALESCE(LOWER(json_extract("
                     "m.metadata, '$.assignee')), LOWER(m.agent_name)) = LOWER(?) "
                     f"AND {_NOT_ARCHIVED} ORDER BY m.created_at DESC LIMIT ?",
                     (agent_name, limit)).fetchall()
@@ -142,7 +146,8 @@ def list_tasks(agent_name: str, status: Optional[str] = None,
         else:
             rows = conn.execute(
                 "SELECT m.id, m.subject, m.metadata, m.category FROM memories m "
-                "WHERE m.level = 'L5' AND COALESCE(LOWER(json_extract("
+                "WHERE m.level = 'L5' AND m.category IN ('task', 'todo') "
+                "AND COALESCE(LOWER(json_extract("
                 "m.metadata, '$.assignee')), LOWER(m.agent_name)) = LOWER(?) "
                 f"AND {_NOT_ARCHIVED} ORDER BY m.created_at DESC LIMIT ?",
                 (agent_name, limit * 3)).fetchall()
