@@ -21,12 +21,13 @@
 
 | 任务 | 负责人 | 协同 | 说明 |
 |---|---|---|---|
-| P0-2 会话级身份绑定（灭 F3，头号阻塞） | dsh | Claude 终审 | 最高杠杆，从根灭 F3。**注意：方案 §Step1「从 clientInfo 取 agent_name」取不到**——MCP 的 clientInfo 结构只有 {name, version}，须另定身份协商方式（见 #999964 opencode 表态第三节） |
-| P0-3 清 30 分钟冷却短路（shared.py:87） | dsh | opencode 实现 | 让 e2e L3 生效 |
+| P0-2 会话级身份绑定（灭 F3，头号阻塞） | dsh | Claude 终审 | 最高杠杆，从根灭 F3。**注意：方案 §Step1「从 clientInfo 取 agent_name」取不到**——MCP 的 clientInfo 结构只有 {name, version}，须另定身份协商方式（见 #999964 opencode 表态第三节）。`mcp/session_identity.py` 已落地握手绑定，绑定什么身份仍待定 |
+| P0-3 清 30 分钟冷却短路（`mcp/shared.py` 的 `_AUTO_START_COOLDOWN` 分支） | dsh | opencode 实现 | 让 e2e L3 生效 |
 | P0-0 content_hash 去重 | opencode | dsh 验收 | **已实现**：去重键由 content_hash 改为 `metadata.task_id` + 迁移 036 + 守卫 `task_reminder_one_per_task`（记忆 #1000209）。原派单的「INSERT OR IGNORE」只兜底并发、单独用会漏掉 level 被 promote 改写那条路径 |
-| P0-1 通知栏落到 agent_name（路线 B） | dsh | （F3 修后自然成立） | 复用现有通知栏，不复活表。通知栏目前只给计数（`server.py:328-330`），不带 memory_id，要能接单须补 |
+| P0-1 通知栏落到 agent_name（路线 B） | dsh | （F3 修后自然成立） | 复用现有通知栏，不复活表。**已完成**：通知栏已重构为 `mcp/notify.py` 单一实现，携带 [ID \| 标题 \| 状态] |
 | P0-4a session note 跨 agent 误投 | opencode | dsh 验收 | **已实现**：删除 `consume/ack_session_note` 的 "oldest" 兜底，三处传输层改传 agent_name + 守卫 `session_note_not_shared_across_agents`（记忆 #1000213） |
-| P0-4b 检索面 viewer 透传 | opencode | dsh 验收 | **未做**：`unified_search` 五分支只有 1 条透传 `viewer`，任何 agent 检索都能读到别人的卡。AGENTS.md §三.4 身份锁定在主读路径上是空的；且总线已上线，「只传 memory_id 指针」会放大越权（见 #999964 opencode 表态第三节） |
+| P0-4b 检索面 viewer 透传 | opencode | dsh 验收 | **未做**：`unified_search` 各分支多数不透传 `viewer`，任何 agent 检索都能读到别人的卡。AGENTS.md §三.4 身份锁定在主读路径上是空的；且总线已上线，「只传 memory_id 指针」会放大越权（见 #999964 opencode 表态第三节） |
+| P0-4c 通知栏只列任务卡 | opencode | dsh 验收 | **已实现**：`mcp/notify.py` 的 `pending_tasks_for` 补 `category='task'` 约束 + 守卫 `notification_bar_lists_only_tasks`（记忆 #1000336）。此前把 discussion/session/L7 教训等非任务行算成待办，实测 opencode 名下 25 条 L5 未归档行中真任务卡 0 条却报 10 条 |
 | MCP 修复 4 批次（第1/2/3/4批） | dsh 总负责 | opencode 实现、qoder 增量 | dsh TODO 已列 |
 | P1-1 总线接回 MCP | — | — | **已完成**（`06e9d28`，MCP 工具 `memall_msg`，动作 send/inbox/ack/status）。原派工行已过期，见 §七 |
 | e2e 测试（memall-bus 脚本复跑） | workbuddy 协调 | opencode 配合 | **13/13 通过**（真 MCP stdio + 总线 + 三 agent） |
@@ -73,6 +74,7 @@ auto_inject 会自动返回分配给自己的 `pending_tasks`（id/content/subje
 2. **会话开始三件套**：session_start（auto_inject 自动注入 pending_tasks/l5_active_global）→ 认领属于自己的任务 → 加载本宪法
 3. **写前先查**：执行任务前必须 memall_search 同 thread_id 历史，禁止重复派工
 4. **身份锁定**：agent_name 一经写入不可冒充（agent_name_locked），test_* 前缀禁止出现在生产任务
+   - ⚠️ **读路径的物理前提当前不成立**：`memall_read` 的 `viewer` 在 `unified_search` 多数分支未透传，实测任何 agent 检索都能读到别人的卡（见 §1.1 P0-4b）。在修好之前，**不要把「agent 只看自己的数据」当作已有保证**——涉及他人项目数据的读取须显式用 `agent_name` 过滤参数，并自行确认该参数在目标路径上确实生效。
 5. **会审机制**：涉及 ≥2 个 agent 的决策，必须走 memall_discussion 多 agent 表态收敛，禁止单 agent 自说自话
    - **名册必须与真实 roster 一致**：`participants` 写当前实际在册的 agent（见 §一）。名册里留一个已退出的 agent，**讨论在数学上永不收敛**——收敛要求全体参与者已回应，而那个 agent 不会再来。线上实证：#999964 / #999948 的名册含已出局的 codex/marvis，缺 dsh/qoder，两条讨论因此永久卡在 active。
    - **收敛规则**：`metadata.convergence_rule` 决定何时收敛——`unanimous`（默认，全员回应）/ `majority`（过半，5 人需 3）/ `any`（1 人）。规则只决定**何时**收敛，**收敛结论仍如实记录每个人的立场与 dissenters**：有反对票时 `consensus=false`、反对方进 `dissenters`，不会被"多数通过"抹掉。
@@ -147,3 +149,33 @@ memall_msg(action="status")
 
 
 _本协议自身也是记忆：level=L4, category=decision, project=memall。修改须走 memall_discussion 收敛 + 老陈批准。_
+
+## 八、身份配置（MUST — 不配则收不到任务）
+
+**每个 agent 的 MCP 客户端必须声明自己的身份**，否则系统不知道"你是谁"，任务推送、通知栏、会话注入全部失效（实测会返回 `agent identity required`）。
+
+配置方式：在 MCP 服务器的 `env` 里设 `MEMALL_AGENT_NAME`。
+
+```jsonc
+// Claude Code (~/.claude.json) 与 Claude Desktop (claude_desktop_config.json)
+"memall": {
+  "command": "memall",
+  "args": ["serve"],
+  "env": { "MEMALL_AGENT_NAME": "claude" }
+}
+```
+
+```yaml
+# DSH (~/.dsh/profiles/web/cordis.patch.yml)
+        env:
+          MEMALL_AGENT_NAME: dsh
+```
+
+**已配置**（2026-10-22）：claude（Claude Code / Desktop）、dsh（DeepSeek Harness）。
+**未配置**：codex / opencode / workbuddy / marvis —— 用各自客户端时须自行补上，值必须与 `identities` 表中的 agent_name 完全一致。
+
+身份来源优先级：调用参数 `agent_name` > 握手 `params.agent_name` / `clientInfo.agent_name` > 环境变量 `MEMALL_AGENT_NAME`。
+**客户端软件名（`clientInfo.name`，如 `dsh-mcp-client`）不会被当作身份** —— 那会让所有 agent 挤进同一个桶，隔离与路由全错。
+
+**改完配置必须重启该客户端**：MCP 服务器是长驻进程，不重启则跑的还是旧环境。
+
