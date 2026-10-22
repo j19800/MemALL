@@ -1464,9 +1464,12 @@ def guard_task_reminder_no_hash_collision() -> Tuple[bool, str]:
     constraint.  The old dedup used a 6-hour TIME WINDOW, so past the window
     the INSERT re-used the same hash and raised
     `UNIQUE constraint failed: memories.content_hash`, aborting the round
-    (audit F6).  Dedup must be by hash existence, and the body must carry
-    the task id so two different tasks with the same subject still get their
-    own reminder.
+    (audit F6).  The body must carry the task id so two different tasks with
+    the same subject still get their own reminder.
+
+    The dedup key is the task id in the reminder's metadata, not the body's
+    hash — see guard_task_reminder_one_per_task for why the hash is the wrong
+    key.
     """
     _fresh_db()
     from memall.core.db import init_db, get_conn
@@ -1505,6 +1508,93 @@ def guard_task_reminder_no_hash_collision() -> Tuple[bool, str]:
           and len(third) == 0 and rows3 == 1)
     return ok, (f"首轮 {len(first)} 条/库中 {rows1}；第二轮 {len(second)}/{rows2}；"
                 f"老化后再跑 {len(third)}/{rows3}（期望 1/1, 0/1, 0/1）")
+
+
+def guard_task_reminder_one_per_task() -> Tuple[bool, str]:
+    """A task must get exactly ONE reminder, whatever the body format is.
+
+    The reminder's identity is the (task, agent) pair.  Keying the dedup on
+    the body's content_hash ties that identity to the body FORMAT: when the
+    body gained its task-id suffix, every reminder written in the old format
+    hashed differently, so each of those tasks got a SECOND reminder row —
+    the duplicate delivery the reminder table exists to prevent.
+
+    The key must therefore be the task id in the reminder's metadata, which
+    does not change when the body format does.
+    """
+    _fresh_db()
+    import hashlib
+    from memall.core.db import init_db, get_conn
+    from memall.core.thin_waist import capture
+    from memall.scheduler.agent_round import notify_pending_tasks
+
+    init_db()
+    capture("一张用于验证提醒唯一性的任务卡，内容足够长以便通过长度门槛。",
+            level="L5", category="task", project="g", agent_name="guard",
+            owner="老陈", metadata=json.dumps({"status": "active"}))
+
+    notify_pending_tasks("guard")
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT id, content, agent_name, subject, metadata FROM memories "
+        "WHERE category='task_pending' ORDER BY id LIMIT 1").fetchone()
+    conn.close()
+    if not row:
+        return False, "首轮没有生成提醒"
+
+    # Simulate a reminder written under an OLDER body format: same task id in
+    # the metadata, different content (and therefore different hash).
+    old_body = row["content"].replace(" (task #", " [old-format] task #")
+    meta = json.loads(row["metadata"])
+    meta["subject"] = meta.get("subject", "") + " [old-format]"
+    h = hashlib.sha256(old_body.encode("utf-8")).hexdigest()
+    from memall.core.db import get_conn as _gc
+    conn = _gc()
+    conn.execute(
+        "INSERT INTO memories (content, content_hash, level, owner, agent_name, "
+        "subject, category, project, summary, occurred_at, created_at, updated_at, "
+        "supersedes, confidence, visibility, metadata, arc_status) "
+        "VALUES (?,?,'P2',?,?,'旧格式提醒','task_pending','','',?,?,?,'[]',0.5,"
+        "'private',?,'open')",
+        (old_body, h, row["agent_name"], row["agent_name"],
+         "2026-10-22T00:00:00+00:00", "2026-10-22T00:00:00+00:00",
+         "2026-10-22T00:00:00+00:00", json.dumps(meta, ensure_ascii=False)))
+    conn.commit()
+    conn.close()
+
+    # The next round must NOT add a third reminder for the same task.
+    added = notify_pending_tasks("guard")
+    conn = get_conn()
+    before = [r[0] for r in conn.execute(
+        "SELECT COUNT(*) FROM memories WHERE category='task_pending' "
+        "AND json_extract(metadata,'$.task_id') IS NOT NULL "
+        "GROUP BY json_extract(metadata,'$.task_id')"
+    ).fetchall()]
+    conn.close()
+
+    # The duplicate that already exists is the migration's job: collapsing it
+    # must leave exactly one reminder per task.
+    import importlib.util
+    import pathlib
+    mig_path = (pathlib.Path(__file__).parent / "memall" / "migrations" /
+                "036_collapse_duplicate_task_reminders.py")
+    spec = importlib.util.spec_from_file_location("m036_guard", mig_path)
+    mig = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mig)
+    conn = get_conn()
+    mig.apply(conn)
+    conn.commit()
+    counts = [r[0] for r in conn.execute(
+        "SELECT COUNT(*) FROM memories WHERE category='task_pending' "
+        "AND json_extract(metadata,'$.task_id') IS NOT NULL "
+        "GROUP BY json_extract(metadata,'$.task_id')"
+    ).fetchall()]
+    conn.close()
+
+    ok = (len(added) == 0 and before == [2] and counts == [1])
+    return ok, (f"旧格式提醒存在时新一轮新增 {len(added)} 条；"
+                f"迁移前每 task 提醒数={before}、迁移后={counts}"
+                f"（期望 0 条新增, [2], [1]）")
 
 
 def guard_discussion_reminders_and_responses() -> Tuple[bool, str]:
@@ -1569,6 +1659,45 @@ def guard_discussion_reminders_and_responses() -> Tuple[bool, str]:
                 f"ra_muted_after_reply={did not in pend_a2}")
 
 
+def guard_identity_honours_level_pin() -> Tuple[bool, str]:
+    """identity_step must not relabel a row whose level the caller pinned.
+
+    identity_step is a keyword classifier (first-person preference phrases),
+    so it is the same class as classify_step and reflect_step — and it must
+    consult memall.core.pins.is_field_pinned like they do.  It did not: its
+    guard was a hardcoded list of "terminal" levels that left P2 unprotected,
+    so a discussion_response (written at P2) whose text happened to contain
+    "我建议…" / "我觉得更好…" was demoted to L1 — mislabelling a discussion
+    reply as an identity signal and feeding that text into the agent's
+    persona traits.
+    """
+    _fresh_db()
+    from memall.core.db import init_db, get_conn
+    from memall.core.thin_waist import capture
+    from memall.pipeline.identity import identity_step
+
+    init_db()
+    # A first-person preference phrase — exactly what identity_step hunts for.
+    mid = capture("我建议用 SQLite 存储，零依赖部署是最省心的做法，强烈推荐。",
+                  level="P2", category="discussion_response", project="g",
+                  agent_name="guard", owner="老陈",
+                  metadata=json.dumps({"pinned_fields": ["category", "level"]}))
+    conn = get_conn()
+    conn.execute("UPDATE memories SET metadata=? WHERE id=?",
+                 (json.dumps({"pinned_fields": ["category", "level"],
+                              "stance": "confirm", "agent_name": "guard"}), mid))
+    conn.commit()
+    conn.close()
+
+    identity_step()
+
+    conn = get_conn()
+    row = conn.execute("SELECT level FROM memories WHERE id=?", (mid,)).fetchone()
+    conn.close()
+    ok = row["level"] == "P2"
+    return ok, f"after identity_step: level={row['level']} (expect P2, was demoted to L1)"
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -1610,6 +1739,8 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "capture_tags_survive_validator": guard_capture_tags_survive_validator,
     "inject_cache_refreshes_tasks": guard_inject_cache_refreshes_tasks,
     "task_reminder_no_hash_collision": guard_task_reminder_no_hash_collision,
+    "task_reminder_one_per_task": guard_task_reminder_one_per_task,
+    "identity_honours_level_pin": guard_identity_honours_level_pin,
     "session_cooldown_persisted": guard_session_cooldown_persisted,
     "session_note_acknowledged": guard_session_note_acknowledged,
     "fallback_produces_self_evolution": guard_fallback_produces_self_evolution,

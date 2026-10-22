@@ -450,6 +450,14 @@ def confirm_discussion(
                 "discussion_id": discussion_id,
                 "agent_name": agent_name,
                 "note": note[:500],
+                # A response is a P2 CONTRACT object: convergence counts the
+                # replies to decide whether a discussion may converge.  The
+                # keyword classifier used to rewrite that level (a long note
+                # matches L3/L6 markers) and the counting query filtered
+                # level='P2', so a demoted reply silently stopped counting —
+                # 11 of 30 live responses had already drifted (one to L1, one
+                # to L6), which is why discussions never converged.  Pin both.
+                "pinned_fields": ["category", "level"],
             }
         )
         cur = conn.execute(
@@ -492,10 +500,14 @@ def confirm_discussion(
         participants = unwrap_meta(disc_meta, "participants") or []
 
         # Fetch ALL responses so far
+        # Do NOT filter by level here.  Identity of a reply is the cites edge
+        # plus category='discussion_response'; level is a mutable classifier
+        # verdict and filtering on it made demoted replies invisible, so the
+        # discussion waited forever for participants who had already answered.
         responses = conn.execute(
             "SELECT * FROM memories WHERE id IN ("
             "  SELECT target_id FROM edges WHERE source_id = ? AND relation_type = 'cites'"
-            ") AND level = 'P2' ORDER BY created_at ASC",
+            ") AND category = 'discussion_response' ORDER BY created_at ASC",
             (discussion_id,),
         ).fetchall()
         response_list = [dict(r) for r in responses]
@@ -954,12 +966,20 @@ def check_pending_discussions(agent_name: str) -> list[dict]:
         for disc in rows:
             dd = dict(disc)
 
-            # Has ANY response been recorded via edges?
-            has_responses = conn.execute(
-                "SELECT 1 FROM edges WHERE source_id=? AND relation_type='cites' LIMIT 1",
-                (disc["id"],),
+            # Has THIS agent responded?  The old check asked "does the
+            # discussion have ANY response" and then skipped the reminder for
+            # EVERY participant — so the first agent to reply muted the rest.
+            # That is why #999964 sat with one reply out of five participants.
+            # The notification bar in server.py already asks the per-agent
+            # question; this now matches it.
+            my_response = conn.execute(
+                "SELECT 1 FROM edges e JOIN memories r ON e.target_id = r.id "
+                "WHERE e.source_id = ? AND e.relation_type = 'cites' "
+                "AND r.category = 'discussion_response' "
+                "AND LOWER(r.agent_name) = LOWER(?) LIMIT 1",
+                (disc["id"], agent_name),
             ).fetchone()
-            if has_responses:
+            if my_response:
                 continue
 
             # Dedup: recent P2 reminder for same discussion+agent
@@ -988,7 +1008,7 @@ def check_pending_discussions(agent_name: str) -> list[dict]:
                     "reminder_for": agent_name,
                 }
             )
-            conn.execute(
+            cur = conn.execute(
                 """INSERT OR IGNORE INTO memories
                    (content, content_hash, level, owner, agent_name, subject,
                     category, summary, occurred_at, created_at, updated_at,
@@ -1006,7 +1026,13 @@ def check_pending_discussions(agent_name: str) -> list[dict]:
                     now.isoformat(),
                     now.isoformat(),
                     now.isoformat(),
-                    None,
+                    # supersedes is NOT NULL DEFAULT '[]'.  Passing None here
+                    # raised a constraint violation, and because the INSERT is
+                    # OR IGNORE the failure was SILENT: no reminder row was
+                    # written, yet the caller was told
+                    # reminder_captured=True.  Same defect class as the one
+                    # that broke notify_pending_tasks (which raised instead).
+                    "[]",
                     0.5,
                     "private",
                     rem_meta,
@@ -1014,12 +1040,14 @@ def check_pending_discussions(agent_name: str) -> list[dict]:
                 ),
             )
             conn.commit()
+            captured = cur.rowcount > 0
 
             pending.append(
                 {
                     "discussion_id": disc["id"],
                     "subject": dd["subject"],
-                    "reminder_captured": True,
+                    # Report what actually happened instead of assuming.
+                    "reminder_captured": captured,
                 }
             )
 
