@@ -1456,6 +1456,119 @@ def guard_discussion_stays_l5() -> Tuple[bool, str]:
                 f"pinned={meta.get('pinned_fields')}")
 
 
+def guard_task_reminder_no_hash_collision() -> Tuple[bool, str]:
+    """The task-reminder round must not collide with the UNIQUE content_hash.
+
+    The reminder body is deterministic per (task, agent), so its content_hash
+    is deterministic too — but content_hash carries a PERMANENT UNIQUE
+    constraint.  The old dedup used a 6-hour TIME WINDOW, so past the window
+    the INSERT re-used the same hash and raised
+    `UNIQUE constraint failed: memories.content_hash`, aborting the round
+    (audit F6).  Dedup must be by hash existence, and the body must carry
+    the task id so two different tasks with the same subject still get their
+    own reminder.
+    """
+    _fresh_db()
+    from memall.core.db import init_db, get_conn
+    from memall.core.thin_waist import capture
+    from memall.scheduler.agent_round import notify_pending_tasks
+
+    init_db()
+    mid = capture("一张用于验证提醒去重的任务卡，内容足够长以便通过长度门槛。",
+                  level="L5", category="task", project="g", agent_name="guard",
+                  owner="老陈", metadata=json.dumps({"status": "active"}))
+
+    first = notify_pending_tasks("guard")
+    conn = get_conn()
+    rows1 = conn.execute(
+        "SELECT COUNT(*) FROM memories WHERE category='task_pending'").fetchone()[0]
+    conn.close()
+
+    # Second round: must be a no-op, not an UNIQUE violation.
+    second = notify_pending_tasks("guard")
+    conn = get_conn()
+    rows2 = conn.execute(
+        "SELECT COUNT(*) FROM memories WHERE category='task_pending'").fetchone()[0]
+    # Simulate the old behaviour: age the reminder past any window and re-run.
+    conn.execute("UPDATE memories SET created_at='2020-01-01T00:00:00' "
+                 "WHERE category='task_pending'")
+    conn.commit()
+    conn.close()
+    third = notify_pending_tasks("guard")
+    conn = get_conn()
+    rows3 = conn.execute(
+        "SELECT COUNT(*) FROM memories WHERE category='task_pending'").fetchone()[0]
+    conn.close()
+
+    ok = (len(first) == 1 and rows1 == 1
+          and len(second) == 0 and rows2 == 1
+          and len(third) == 0 and rows3 == 1)
+    return ok, (f"首轮 {len(first)} 条/库中 {rows1}；第二轮 {len(second)}/{rows2}；"
+                f"老化后再跑 {len(third)}/{rows3}（期望 1/1, 0/1, 0/1）")
+
+
+def guard_discussion_reminders_and_responses() -> Tuple[bool, str]:
+    """A discussion must be able to REACH its participants and COUNT replies.
+
+    Three defects made the review mechanism silently unworkable (found while
+    auditing discussion #999964):
+      1. confirm_discussion wrote replies with level='P2' but no pinned_fields,
+         and counted them with "AND level='P2'".  The classifier rewrote the
+         level (11 of 30 live replies had drifted, one to L1), so an agent that
+         HAD answered looked like it never had — convergence waited forever.
+      2. check_pending_discussions skipped the reminder for EVERY participant
+         as soon as ANY reply existed, so the first responder muted everyone.
+      3. its reminder INSERT passed supersedes=None against a NOT NULL column
+         inside INSERT OR IGNORE, so the row was never written while the
+         caller was told reminder_captured=True.
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.pipeline.classify import classify_step
+    from memall.pipeline.convergence import (
+        check_pending_discussions, confirm_discussion, create_discussion,
+    )
+
+    init_db()
+    d = create_discussion(title="守卫：讨论可达且可统计",
+                          background="验证回执计数与提醒投递。",
+                          participants=["ra", "rb"], creator="guardbot")
+    did = d.get("discussion_id") or d.get("memory_id")
+    if not did:
+        return False, f"create failed: {d}"
+
+    # (3) a reminder must actually be written
+    pend_a = check_pending_discussions("ra")
+    conn = get_conn()
+    got_reminder = conn.execute(
+        "SELECT COUNT(*) FROM memories WHERE category='discussion_pending' "
+        "AND agent_name='ra' AND json_extract(metadata,'$.discussion_id')=?",
+        (did,)).fetchone()[0]
+    conn.close()
+
+    # (1) a reply must survive reclassification and still be counted
+    confirm_discussion(discussion_id=did, agent_name="ra", stance="agree",
+                       note="ra 的表态：内容足够长以便分类器有发挥空间，"
+                            "包含反思 教训 架构 认知 模式 洞察 归因 复盘 等L6诱饵词。")
+    classify_step()
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT level, category FROM memories WHERE category='discussion_response' "
+        "AND agent_name='ra' ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+
+    # (2) rb has not replied, so rb must still be reminded; ra must not be
+    pend_b = [x.get("discussion_id") for x in check_pending_discussions("rb")]
+    pend_a2 = [x.get("discussion_id") for x in check_pending_discussions("ra")]
+
+    ok = (got_reminder > 0 and row is not None and row["level"] == "P2"
+          and did in pend_b and did not in pend_a2)
+    return ok, (f"reminder_rows={got_reminder} reply_level="
+                f"{row['level'] if row else None} rb_reminded={did in pend_b} "
+                f"ra_muted_after_reply={did not in pend_a2}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -1496,6 +1609,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "capture_declares_supported_fields": guard_capture_declares_supported_fields,
     "capture_tags_survive_validator": guard_capture_tags_survive_validator,
     "inject_cache_refreshes_tasks": guard_inject_cache_refreshes_tasks,
+    "task_reminder_no_hash_collision": guard_task_reminder_no_hash_collision,
     "session_cooldown_persisted": guard_session_cooldown_persisted,
     "session_note_acknowledged": guard_session_note_acknowledged,
     "fallback_produces_self_evolution": guard_fallback_produces_self_evolution,
@@ -1503,6 +1617,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "update_can_complete_tasks": guard_update_can_complete_tasks,
     "lazy_tools_always_loadable": guard_lazy_tools_always_loadable,
     "discussion_stays_l5": guard_discussion_stays_l5,
+    "discussion_reminders_and_responses": guard_discussion_reminders_and_responses,
 }
 
 # Full test files run as subprocesses when no guard name is given.
