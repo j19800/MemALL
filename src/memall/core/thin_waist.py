@@ -11,6 +11,7 @@ from .levels import normalize_level
 from .models import Memory, MemoryInput
 from .nlp import cosine_sim, compute_tfidf
 from .project_infer import infer_project
+from .status import TASK_STATUSES, task_status_of
 from memall.config import get_config
 from memall.core.lifecycle import (
     dispatch_lifecycle,
@@ -105,8 +106,8 @@ _ALLOWED_UPDATE_FIELDS = frozenset(
     }
 )
 
-# Valid L5 status values for lifecycle management
-_VALID_L5_STATUSES = frozenset({"active", "done", "archived"})
+# Valid L5 workflow statuses — the single track lives in core.status.
+_VALID_L5_STATUSES = TASK_STATUSES
 
 
 @contextmanager
@@ -964,10 +965,29 @@ def _capture_inject_metadata(
     # json_extract(metadata,'$.status')='active', and a capture(level='L5',
     # category='task') never set it — the reminder chain returned zero for
     # every task written that way (audit P1-16, second half).
-    if isinstance(data.metadata, dict):
-        if (data.level == "L5" and data.category == "task"
-                and not data.metadata.get("status")):
-            data.metadata["status"] = "active"
+    #
+    # metadata.status is the only workflow track now (memory_status no longer
+    # mirrors it), so an out-of-vocabulary value here would create a card no
+    # reader can see.  Reject it at the funnel instead.
+    if data.level == "L5" and data.category in ("task", "discussion"):
+        supplied = None
+        if isinstance(data.metadata, dict):
+            supplied = data.metadata.get("status")
+            if data.category == "task" and not supplied:
+                data.metadata["status"] = "active"
+                supplied = None
+        elif isinstance(data.metadata, str):
+            try:
+                parsed = json.loads(data.metadata or "{}")
+            except (json.JSONDecodeError, TypeError):
+                parsed = None
+            if isinstance(parsed, dict):
+                supplied = parsed.get("status")
+        if supplied is not None and task_status_of(supplied) is None:
+            raise ValueError(
+                f"invalid L5 status {supplied!r} for {data.category}: must be "
+                f"one of {', '.join(sorted(_VALID_L5_STATUSES))}"
+            )
     return data
 
 
@@ -1308,10 +1328,16 @@ def _capture_insert_row(conn, data: MemoryInput, h: str, now: str) -> int:
         data.supersedes if data.supersedes and data.supersedes != "[]" else "[]"
     )
 
-    # Extract memory_status and accumulate_key from metadata if present
+    # ``memory_status`` is the storage-lifecycle track only (owned by the
+    # pipeline); an L5 card's workflow status lives in ``metadata.status``.
+    # Mirroring the latter into the former — which this used to do — put task
+    # vocabulary into the lifecycle track, so ``retrieve()``'s not-archived
+    # filter and the pipeline's ``memory_status IS NULL`` preconditions
+    # disagreed with the card's real state.  Migration 034 cleared the legacy
+    # mirrored values.
     meta = data.metadata
     meta_dict = json.loads(meta) if isinstance(meta, str) else (meta or {})
-    memory_status = meta_dict.get("status") if data.level == "L5" else None
+    memory_status = None
     accumulate_key_val = meta_dict.get("accumulate_key")
 
     try:
@@ -2063,12 +2089,17 @@ def update(memory_id: int, **fields) -> bool:
             else:
                 incoming = {}
             if isinstance(incoming, dict) and "status" in incoming:
-                raw_status = incoming["status"]
-                if isinstance(raw_status, str) and raw_status not in _VALID_L5_STATUSES:
+                scalar = task_status_of(incoming["status"])
+                if scalar is None:
                     raise ValueError(
-                        f"invalid L5 status '{raw_status}': "
+                        f"invalid L5 status {incoming['status']!r}: "
                         f"must be one of {', '.join(sorted(_VALID_L5_STATUSES))}"
                     )
+                if scalar != incoming["status"]:
+                    # An {value, _meta} envelope here is invisible to every
+                    # json_extract reader, so flatten it before storing.
+                    incoming["status"] = scalar
+                    fields["metadata"] = json.dumps(incoming, ensure_ascii=False)
 
         # ── metadata merge (not replace) ──
         if "metadata" in fields:

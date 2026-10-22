@@ -19,6 +19,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from memall.core.db import get_conn
+from memall.core.status import NOT_ARCHIVED, task_status_of
 from memall.pipeline.convergence import check_pending_discussions
 from memall.federation.family import get_family_db_path, init_family_db
 from memall.federation.conflict import detect_conflicts, list_conflicts
@@ -217,6 +218,7 @@ def _pending_l5_for(conn, agent_name: str) -> tuple:
             "SELECT id, content, summary, subject, metadata, category, level, created_at "
             "FROM memories "
             "WHERE level = 'L5' AND LOWER(agent_name) = LOWER(?) "
+            f"AND {NOT_ARCHIVED} "
             "AND LENGTH(TRIM(content)) > 5 "
             "ORDER BY created_at DESC LIMIT 20",
             (agent_name,),
@@ -226,7 +228,11 @@ def _pending_l5_for(conn, agent_name: str) -> tuple:
             meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else r["metadata"]
             if not isinstance(meta, dict):
                 meta = {}
-            status = meta.get("status") or "active"
+            raw_status = meta.get("status")
+            # A card with no status recorded is still owed work (AGENTS.md:
+            # 缺省视为 active); an enveloped value is unwrapped before the
+            # comparison so it is not silently dropped.
+            status = task_status_of(raw_status) if raw_status else "active"
             if status != "active":
                 continue
             if r["category"] == "task":

@@ -20,6 +20,7 @@ import logging
 from datetime import datetime, timezone
 
 from memall.core.db import get_conn
+from memall.core.status import NOT_ARCHIVED, pending_tasks, task_status_of, task_status_eq
 from memall.core.utils import now_iso, unwrap
 
 logger = logging.getLogger(__name__)
@@ -36,21 +37,19 @@ def list_active_tasks(agent_name: str = "") -> list[dict]:
     """
     conn = get_conn()
     try:
+        base = (
+            "SELECT id, subject, content, agent_name, metadata, created_at "
+            "FROM memories WHERE level='L5' AND category='task' "
+            f"AND {pending_tasks()} "
+        )
         if agent_name:
             rows = conn.execute(
-                "SELECT id, subject, content, agent_name, metadata, created_at "
-                "FROM memories WHERE level='L5' AND category='task' "
-                "AND json_extract(metadata, '$.status') = 'active' "
-                "AND agent_name = ? "
-                "ORDER BY created_at ASC LIMIT 1000",
+                base + "AND agent_name = ? ORDER BY created_at ASC LIMIT 1000",
                 (agent_name,),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, subject, content, agent_name, metadata, created_at "
-                "FROM memories WHERE level='L5' AND category='task' "
-                "AND json_extract(metadata, '$.status') = 'active' "
-                "ORDER BY created_at ASC LIMIT 1000",
+                base + "ORDER BY created_at ASC LIMIT 1000",
             ).fetchall()
 
         results = []
@@ -75,20 +74,19 @@ def list_blocked_tasks(agent_name: str = "") -> list[dict]:
     """Return blocked L5 tasks (status=blocked)."""
     conn = get_conn()
     try:
+        base = (
+            "SELECT id, subject, agent_name, metadata, created_at "
+            "FROM memories WHERE level='L5' AND category='task' "
+            f"AND {task_status_eq('blocked')} AND {NOT_ARCHIVED} "
+        )
         if agent_name:
             rows = conn.execute(
-                "SELECT id, subject, agent_name, metadata, created_at "
-                "FROM memories WHERE level='L5' AND category='task' "
-                "AND json_extract(metadata, '$.status') = 'blocked' "
-                "AND agent_name = ? ORDER BY created_at ASC LIMIT 1000",
+                base + "AND agent_name = ? ORDER BY created_at ASC LIMIT 1000",
                 (agent_name,),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, subject, agent_name, metadata, created_at "
-                "FROM memories WHERE level='L5' AND category='task' "
-                "AND json_extract(metadata, '$.status') = 'blocked' "
-                "ORDER BY created_at ASC LIMIT 1000",
+                base + "ORDER BY created_at ASC LIMIT 1000",
             ).fetchall()
 
         results = []
@@ -115,14 +113,15 @@ def acknowledge_task(task_id: int) -> dict:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT metadata FROM memories WHERE id=? AND level='L5' AND category='task'",
+            "SELECT metadata FROM memories "
+            f"WHERE id=? AND level='L5' AND category='task' AND {NOT_ARCHIVED}",
             (task_id,),
         ).fetchone()
         if not row:
             return {"error": f"task #{task_id} not found"}
 
         meta = json.loads(row["metadata"] or "{}")
-        status = unwrap(meta.get("status"))
+        status = task_status_of(meta.get("status"))
         if status != "active":
             return {"warning": f"task #{task_id} status is '{status}', not 'active'"}
 
@@ -143,14 +142,15 @@ def resolve_task(task_id: int, result: str = "") -> dict:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT metadata FROM memories WHERE id=? AND level='L5' AND category='task'",
+            "SELECT metadata FROM memories "
+            f"WHERE id=? AND level='L5' AND category='task' AND {NOT_ARCHIVED}",
             (task_id,),
         ).fetchone()
         if not row:
             return {"error": f"task #{task_id} not found"}
 
         meta = json.loads(row["metadata"] or "{}")
-        status = unwrap(meta.get("status"))
+        status = task_status_of(meta.get("status"))
         if status not in ("active", "blocked"):
             return {"warning": f"task #{task_id} status is '{status}', cannot resolve"}
 
@@ -175,14 +175,15 @@ def block_task(task_id: int, reason: str) -> dict:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT metadata FROM memories WHERE id=? AND level='L5' AND category='task'",
+            "SELECT metadata FROM memories "
+            f"WHERE id=? AND level='L5' AND category='task' AND {NOT_ARCHIVED}",
             (task_id,),
         ).fetchone()
         if not row:
             return {"error": f"task #{task_id} not found"}
 
         meta = json.loads(row["metadata"] or "{}")
-        status = unwrap(meta.get("status"))
+        status = task_status_of(meta.get("status"))
         if status not in ("active",):
             return {"warning": f"task #{task_id} status is '{status}', cannot block"}
 

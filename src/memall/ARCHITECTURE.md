@@ -54,11 +54,46 @@ Single SQLite file (`~/.memall/data.db`, WAL journal). Key tables:
 | `memory_embeddings` | 512-dim float32 vectors per memory |
 | `mem_vec` | sqlite-vec virtual table for KNN vector search |
 | `suggestions`, `narrative_clusters`, `pipeline_events`, `pipeline_cursors`, … | Pipeline and analytics state |
-| `shared_memories`, `conflicts` | Federation shared memory + conflict tracking |
-| `entities`, `health_metrics`, `intercept_logs`, `discussions` | Extensibility and observability |
+| `entities`, `memory_entities`, `intercept_logs` | Entity extraction + MCP request observability |
+| `shared_records` | Federation shared-memory ledger |
 
-32 schema migrations (`migrations/001`–`032`) evolve the schema incrementally. Migration 028 adds
-the level `CHECK` constraint; migration 027 fixes invalid levels and agent name casing.
+`health_metrics`, `conflicts` and `shared_memories` (`federation/health.py`,
+`federation/conflict.py`, `federation/family.py`) are created lazily with
+`CREATE TABLE IF NOT EXISTS` when federation code first runs, so a fresh DB does not contain them.
+There is no dedicated discussion table: discussions live in `memories` (see below).
+
+35 schema migrations (`migrations/001`–`035`) evolve the schema incrementally. Migration 028 adds
+the level `CHECK` constraint; migration 027 fixes invalid levels and agent name casing;
+migration 033 retires the dead `discussion_topics`/`discussion_responses` tables created by 019
+and imports their stranded rows into `memories` + `edges`; migration 034 separates the two status
+tracks described below and migration 035 reconciles the cards that still disagreed.
+
+### 3.1 Discussions: a memory shape, not a table
+
+A discussion is one `memories` row — `level='L5'`, `category='discussion'`, with the collaboration
+state in `metadata` (`status`, `participants`, `options`, `open_questions`, `action_items`,
+`conclusion`, `pinned_fields`). Each participant reply is another `memories` row
+(`level='P2'`, `category='discussion_response'`, `metadata.discussion_id` + `metadata.stance`)
+linked back to the topic by an `edges` row with `relation_type='cites'`
+(source = topic id, target = response id); both response readers
+(`convergence.confirm_discussion`, `agent_routing._participation_boost`) select that level.
+`pipeline/convergence.py` is the only writer.
+Migration 019's `discussion_topics`/`discussion_responses` tables were never read by any code path
+and are dropped by migration 033 — do not reintroduce them.
+
+### 3.2 Two status tracks on one row
+
+`memories.memory_status` is the **storage lifecycle** track, owned by the pipeline:
+`archived` / `dormant` / `superseded` / `conflict` / `epoch`, with `NULL` meaning live.
+Only `archived` counts as deleted (`core/status.not_archived()`).
+
+`metadata.status` is the **workflow** track — the AGENTS.md task/discussion contract read with
+`json_extract(metadata, '$.status')`: `active` / `done` / `blocked` / `resolved` / `converged` /
+`archived`. `capture()` never mirrors one into the other; readers that select pending work use
+`core/status.pending_tasks()`, which combines `metadata.status='active'` with the lifecycle filter
+so a soft-deleted card cannot resurface as a phantom task. Migration 034 repaired the rows written
+while the tracks were still mirrored and unwrapped legacy `{"value": …, "_meta": …}` status
+envelopes.
 
 ## 4. Search Stack (`search/`)
 

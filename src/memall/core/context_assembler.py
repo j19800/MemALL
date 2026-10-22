@@ -15,6 +15,7 @@ from typing import Optional
 
 from memall.core.db import pool_conn
 from memall.core.nlp import compute_tfidf, cosine_sim
+from memall.core.status import pending_tasks
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ def _build_tier1(agent_name: str, conn) -> list[str]:
     active = conn.execute(
         "SELECT content, subject FROM memories "
         "WHERE LOWER(agent_name)=LOWER(?) AND level='L5' "
-        "AND COALESCE(memory_status, json_extract(metadata, '$.status')) = 'active' "
+        f"AND {pending_tasks()} "
         "ORDER BY created_at DESC LIMIT 5",
         (agent_name,),
     ).fetchall()
@@ -195,7 +196,7 @@ def _build_collab(agent_name: str, query: str, conn) -> list[str]:
             "SELECT DISTINCT m.id, m.subject FROM memories m "
             "JOIN json_each(json_extract(m.metadata, '$.participants')) AS p "
             "WHERE m.level='L5' AND m.category='discussion' "
-            "AND json_extract(m.metadata, '$.status') = 'active' "
+            f"AND {pending_tasks('m')} "
             "AND LOWER(p.value) = LOWER(?) "
             "ORDER BY m.created_at DESC LIMIT 2",
             (agent_name,),

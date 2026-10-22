@@ -437,6 +437,7 @@ class HtmlHandlersMixin:
 
     async def _handle_todos(self, request: web.Request) -> web.Response:
         from memall.pipeline.task_lifecycle import list_active_tasks, list_blocked_tasks
+        from memall.core.status import NOT_ARCHIVED, task_status_eq
         agent_filter = request.query.get("agent", "").strip()
 
         active_tasks = list_active_tasks(agent_filter)
@@ -447,7 +448,7 @@ class HtmlHandlersMixin:
             resolved_rows = conn.execute(
                 "SELECT id, subject, agent_name, metadata, created_at "
                 "FROM memories WHERE level='L5' AND category='task' "
-                "AND json_extract(metadata, '$.status') = 'resolved' "
+                f"AND {task_status_eq('resolved')} AND {NOT_ARCHIVED} "
                 "ORDER BY created_at DESC LIMIT 20"
             ).fetchall()
 

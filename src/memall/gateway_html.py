@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from memall.core.db import pool_conn, get_conn, db_stats
+from memall.core.status import NOT_ARCHIVED, pending_tasks, task_status_eq
 from memall.core.thin_waist import retrieve, MemoryInput, normalize_agent_name
 from memall.core.models import MemoryInput as MemoryInputModel
 from memall.gateway_utils import esc_html, _density_color
@@ -290,17 +291,18 @@ def handle_todos(conn) -> str:
     """GET /todos — task board as HTML."""
     active = conn.execute(
         "SELECT id, content, subject, category, created_at FROM memories "
-        "WHERE level='L5' AND json_extract(metadata, '$.status')='active' "
+        f"WHERE level='L5' AND {pending_tasks()} "
         "ORDER BY created_at DESC LIMIT 50"
     ).fetchall()
     blocked = conn.execute(
         "SELECT id, content, subject, category, created_at FROM memories "
-        "WHERE level='L5' AND json_extract(metadata, '$.status')='blocked' "
+        f"WHERE level='L5' AND {task_status_eq('blocked')} AND {NOT_ARCHIVED} "
         "ORDER BY created_at DESC LIMIT 20"
     ).fetchall()
     resolved = conn.execute(
         "SELECT id, content, subject, category, created_at FROM memories "
-        "WHERE level='L5' AND json_extract(metadata, '$.status') IN ('done','archived') "
+        "WHERE level='L5' AND json_extract(metadata, '$.status') "
+        "IN ('done', 'resolved', 'converged', 'archived') "
         "ORDER BY created_at DESC LIMIT 20"
     ).fetchall()
     def _rows(rows):
