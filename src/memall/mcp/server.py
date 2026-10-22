@@ -185,9 +185,18 @@ def serve():
                 try:
                     from memall.mcp.session_identity import bind_handshake_agent
 
+                    # Do NOT fall back to clientInfo.name: that is the
+                    # CLIENT SOFTWARE ("dsh-mcp-client", "claude-ai"), not
+                    # the agent.  Using it would attribute every agent to one
+                    # identity — worse than no identity, because isolation
+                    # and task routing would then all point at the same
+                    # wrong bucket.  Explicit handshake identity first, then
+                    # an env var the launcher can set per agent.
+                    import os as _os
+
                     _agent = (params.get("agent_name")
                               or client_info.get("agent_name")
-                              or client_info.get("name")
+                              or _os.environ.get("MEMALL_AGENT_NAME")
                               or "")
                     if _agent and _agent != "unknown":
                         bind_handshake_agent(_agent)

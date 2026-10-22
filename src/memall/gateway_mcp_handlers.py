@@ -48,6 +48,23 @@ class McpHandlersMixin:
 
         # ── Initialize ──
         if method == "initialize":
+            # Bind the agent identity for the session (design #1000007,
+            # step 1).  Explicit handshake identity wins, then
+            # MEMALL_AGENT_NAME; the client software name is NOT used — it
+            # would attribute every agent to one bucket and break isolation.
+            try:
+                import os as _osid
+                from memall.mcp.session_identity import bind_handshake_agent
+
+                _ci = params.get("clientInfo") or {}
+                _agent = (params.get("agent_name")
+                          or _ci.get("agent_name")
+                          or _osid.environ.get("MEMALL_AGENT_NAME")
+                          or "")
+                if _agent:
+                    bind_handshake_agent(_agent)
+            except Exception:
+                logger.warning("session identity binding failed", exc_info=True)
             from memall.onboarding import _get_status
             identity_path = os.path.join(os.path.expanduser("~"), ".memall", "identity.json")
             user_id = "default"
