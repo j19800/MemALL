@@ -135,7 +135,11 @@ class McpHandlersMixin:
                 _intercept(tool_name, arguments, result_str)
                 result_data = json.loads(result_str)
                 content = [{"type": "text", "text": json.dumps(result_data, ensure_ascii=False)}]
-                agent_name = arguments.get("agent_name", "")
+                # Identity: explicit agent_name, else the session identity
+                # bound at handshake.  28 tool models never declare
+                # agent_name, so the raw argument is often absent.
+                from memall.mcp.session_identity import identify
+                agent_name = identify(arguments)
                 if agent_name:
                     # Shared, stateless notification bar (memall/mcp/notify.py).
                     try:

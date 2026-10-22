@@ -323,7 +323,14 @@ def serve():
                         # pending discussions or tasks and attach as a second content
                         # block.  This is the "notification bar" — agents don't need to
                         # explicitly query for pending items.
-                        agent_name = arguments.get("agent_name", "")
+                        #
+                        # Identity: explicit agent_name, else the session identity
+                        # bound at handshake.  28 tool models never declare
+                        # agent_name, so a call through one of them arrives
+                        # with the field stripped and the bar would find
+                        # nobody.
+                        from memall.mcp.session_identity import identify
+                        agent_name = identify(arguments)
                         if agent_name:
                             # Shared, stateless notification bar (see
                             # memall/mcp/notify.py).  Carries task IDs, titles

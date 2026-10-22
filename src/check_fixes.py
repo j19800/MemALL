@@ -25,6 +25,16 @@ sys.path.insert(0, SRC)
 
 
 def _fresh_db() -> str:
+    # The MCP session identity is process-global by design (it is bound once
+    # at handshake and reused for every subsequent call).  Guards must not
+    # inherit the previous guard's identity: a leaked identity makes search
+    # filter to that agent's own memories and silently returns nothing.
+    try:
+        from memall.mcp.session_identity import reset as _reset_identity
+
+        _reset_identity()
+    except Exception:
+        pass
     """Point MemALL at a throwaway DB and return its path.
 
     Also isolates the deny-list: the deployment's
@@ -1953,6 +1963,130 @@ def guard_msg_tool_wired() -> Tuple[bool, str]:
                 f"(err={err!r}), clean_error_without_bus={clean_error}")
 
 
+def guard_notification_bar_lists_only_tasks() -> Tuple[bool, str]:
+    """The notification bar must list TASK cards, not every L5 row.
+
+    ``pending_tasks_for`` selected L5 rows addressed to the agent without
+    requiring ``category='task'``.  A discussion, a session summary or an L7
+    lesson addressed to the agent was therefore listed as "待完成任务" —
+    those rows carry no work at all, and their ``metadata.status`` is usually
+    absent, which means "active" (AGENTS.md §二), so they all passed the
+    owed-status filter.
+
+    Observed on the live database: one agent's bar showed ten pending tasks,
+    of which none was a task card — the three rows whose subject read
+    "[任务] …" had their ``category`` rewritten to meeting/documentation/
+    implementation by the keyword classifier, because they were written
+    before ``pinned_fields`` existed and never declared ``category='task'``.
+
+    The bar must show what is actually owed.
+    """
+    _fresh_db()
+    from memall.core.db import init_db, get_conn
+    from memall.core.thin_waist import capture
+    from memall.mcp.notify import pending_tasks_for
+
+    init_db()
+    conn = get_conn()
+    # A real task card addressed to the agent.
+    capture("守卫用任务卡：验证通知栏只列任务卡，不列其它 L5 行。",
+            level="L5", category="task", project="g", agent_name="bar",
+            owner="老陈", metadata=json.dumps({"status": "active"}))
+    # A non-task L5 row addressed to the same agent, with no status.
+    capture("守卫用会话摘要行：这不是任务卡，不该出现在待办里。"
+            "内容足够长以便通过长度门槛。",
+            level="L5", category="session", project="g", agent_name="bar",
+            owner="老陈")
+    # A discussion addressed to the same agent, with no status.
+    capture("守卫用讨论行：这不是任务卡，不该出现在待办里。"
+            "内容足够长以便通过长度门槛。",
+            level="L5", category="discussion", project="g", agent_name="bar",
+            owner="老陈")
+    conn.close()
+
+    conn = get_conn()
+    got = pending_tasks_for(conn, "bar", limit=20)
+    conn.close()
+    cats = sorted({t["category"] for t in got})
+    ids = [t["id"] for t in got]
+
+    ok = (len(got) == 1 and cats == ["task"])
+    return ok, (f"通知栏返回 {len(got)} 条, category 分布={cats}, ids={ids}"
+                f"（期望 1 条, ['task']）")
+
+
+def guard_notification_bar_uses_session_identity() -> Tuple[bool, str]:
+    """The notification bar must work for tools that never declare agent_name.
+
+    28 of the 55 tool input models never declared ``agent_name``, so the
+    field is stripped by the validator before the handler runs.  The three
+    transports each read the identity for the notification bar and the
+    session note, and reading it from the raw argument alone meant a call
+    through one of those tools found NOBODY: the bar stayed silent and the
+    agent's pending work was invisible.
+
+    ``mcp/session_identity.py`` binds the identity once at handshake and
+    exposes ``identify()`` — explicit argument wins, session identity is the
+    fallback.  All three transports must use it.
+
+    A second defect: ``http_transport.py`` referenced ``agent_name`` at the
+    session-note call without ever defining it in that scope, so the HTTP
+    transport raised NameError on every tool response.
+    """
+    _fresh_db()
+    import re
+    from memall.core.db import init_db
+    from memall.core.thin_waist import capture
+    from memall.mcp import session_identity as si
+    from memall.mcp.notify import build_notice
+
+    init_db()
+    capture("守卫用任务卡：验证经握手绑定的身份也能收到通知栏内容。",
+            level="L5", category="task", project="g", agent_name="sessagent",
+            owner="老陈", metadata=json.dumps({"status": "active"}))
+    capture("守卫用另一 agent 的任务卡：不应出现在本 agent 的通知栏里。",
+            level="L5", category="task", project="g", agent_name="otheragent",
+            owner="老陈", metadata=json.dumps({"status": "active"}))
+
+    si.reset()
+    si.bind_handshake_agent("sessagent")
+    # A call with NO agent_name — the F3 case.
+    session_name = si.identify({"action": "search", "query": "任务"})
+    notice = build_notice(session_name) or ""
+    session_ok = session_name == "sessagent" and bool(notice)
+
+    # An explicit agent_name still wins.
+    explicit_name = si.identify({"agent_name": "otheragent"})
+    explicit_ok = explicit_name == "otheragent"
+
+    # Every transport must read the identity through identify().
+    from pathlib import Path as _P
+
+    # Absolute paths: this guard used to hard-code "src/..." and therefore only
+    # passed when the shell happened to be sitting in the repo root.  Resolve
+    # against this file instead.
+    _pkg = _P(__file__).resolve().parent
+    transports = (_pkg / "memall/mcp/server.py",
+                  _pkg / "memall/mcp/http_transport.py",
+                  _pkg / "memall/gateway_mcp_handlers.py")
+    raw_reads = {}
+    for t in transports:
+        src = t.read_text(encoding="utf-8")
+        raw_reads[t.name] = len(re.findall(r'arguments\.get\("agent_name", ""\)', src))
+
+    # http_transport must define agent_name before using it.
+    ht = (_pkg / "memall/mcp/http_transport.py").read_text(encoding="utf-8")
+    use = ht.find("consume_session_note(agent_name)")
+    assign = ht.rfind("agent_name = ", 0, use) if use > 0 else -1
+    defined_before_use = 0 < assign < use
+
+    ok = (session_ok and explicit_ok and defined_before_use
+          and all(v == 0 for v in raw_reads.values()))
+    return ok, (f"session身份={'sessagent' if session_ok else 'FAIL'} "
+                f"显式优先={explicit_ok} http定义先于使用={defined_before_use} "
+                f"裸读取={raw_reads}")
+
+
 def guard_precise_task_handoff() -> Tuple[bool, str]:
     """The four-step precise hand-off must work end to end (design #1000007).
 
@@ -2077,6 +2211,8 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "session_note_acknowledged": guard_session_note_acknowledged,
     "session_note_not_shared_across_agents": guard_session_note_not_shared_across_agents,
     "convergence_rule_respected": guard_convergence_rule_respected,
+    "notification_bar_lists_only_tasks": guard_notification_bar_lists_only_tasks,
+    "notification_bar_uses_session_identity": guard_notification_bar_uses_session_identity,
     "confirm_path_honours_rule": guard_confirm_path_honours_rule,
     "retrieve_by_id_respects_viewer": guard_retrieve_by_id_respects_viewer,
     "fallback_produces_self_evolution": guard_fallback_produces_self_evolution,

@@ -231,12 +231,18 @@ async def handle_mcp_post(request: web.Request) -> web.Response:
             _intercept(tool_name, arguments, result_str)
             result_data = json.loads(result_str)
             content = [{"type": "text", "text": json.dumps(result_data, ensure_ascii=False)}]
+            # Identity: explicit agent_name, else the session identity bound
+            # at handshake.  28 tool models never declare agent_name, so the
+            # raw argument is often absent — identify() is what makes the
+            # bar and the session note work for every tool.
+            from memall.mcp.session_identity import identify
+            agent_name = identify(arguments)
             # Shared, stateless notification bar (memall/mcp/notify.py):
             # task IDs + titles + states, queried fresh every response.
             try:
                 from memall.mcp.notify import build_notice
 
-                _notice = build_notice(arguments.get("agent_name", ""))
+                _notice = build_notice(agent_name)
                 if _notice:
                     content.append({"type": "text", "text": _notice})
             except Exception:
