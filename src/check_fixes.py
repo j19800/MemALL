@@ -1122,6 +1122,75 @@ def guard_convergence_rule_respected() -> Tuple[bool, str]:
                 f"even_roster={four}")
 
 
+def guard_confirm_path_honours_rule() -> Tuple[bool, str]:
+    """confirm_discussion must apply the discussion's convergence_rule.
+
+    The background sweep (_converge_single) consulted _rule_satisfied(),
+    but the immediate auto-converge path inside confirm_discussion() did a
+    bare `if missing:` — so a "majority" discussion converged on the FIRST
+    response while the sweep would still have waited, and the two paths
+    disagreed about the same discussion.
+    """
+    _fresh_db()
+    from memall.core.db import init_db
+    from memall.pipeline.convergence import create_discussion, confirm_discussion
+
+    init_db()
+    d = create_discussion(
+        title="守卫：确认路径必须尊重收敛规则",
+        participants=["ga", "gb", "gc"],
+        convergence_rule="majority",
+        creator="guardbot")
+    did = d.get("memory_id") or d.get("discussion_id")
+    if not did:
+        return False, f"create_discussion failed: {d}"
+
+    # 1 of 3 — majority needs 2, so the discussion must stay pending
+    r1 = confirm_discussion(discussion_id=did, agent_name="ga",
+                            stance="confirm", note="第一条表态")
+    # 2 of 3 — majority satisfied, so it must converge now
+    r2 = confirm_discussion(discussion_id=did, agent_name="gb",
+                            stance="confirm", note="第二条表态")
+
+    ok = r1.get("status") == "pending" and r2.get("status") == "converged"
+    return ok, (f"first={r1.get('status')} second={r2.get('status')} "
+                f"(expect pending, converged)")
+
+
+def guard_retrieve_by_id_respects_viewer() -> Tuple[bool, str]:
+    """retrieve(<id>) must apply the same trust filter as the list path.
+
+    The id path ran a bare "SELECT * FROM memories WHERE id = ?" with no
+    trust check, so a private memory could be read by anyone who knew or
+    guessed its id — the list path already filtered through
+    _filter_by_trust().
+
+    The "other" agent must be a REGISTERED one: an unknown agent defaults
+    to the most permissive read level (_get_agent_read_level returns
+    "private"), which would hide the very difference this guard is about.
+    """
+    _fresh_db()
+    from memall.core.db import init_db
+    from memall.core.thin_waist import capture, retrieve
+
+    init_db()
+    mid = capture("私有可见性验证：这条记忆的可见性为 private，只有属主应当读到它。",
+                  level="P2", category="general", project="g",
+                  agent_name="owner_bot", owner="老陈")
+    # a second capture registers "other_bot" in identities, giving it a
+    # read level of its own ("shared") instead of the unknown-agent default
+    capture("对照用的普通记忆，用于给 other_bot 建立身份记录，内容足够长以便通过质量门。",
+            level="P2", category="general", project="g",
+            agent_name="other_bot", owner="老陈")
+
+    blocked = retrieve(mid, viewer="other_bot")
+    allowed = retrieve(mid, viewer="owner_bot")
+    ok = blocked is None and allowed is not None
+    return ok, (f"other_bot={'sees' if blocked else 'blocked'} "
+                f"owner_bot={'sees' if allowed else 'blocked'} "
+                f"(expect blocked, sees)")
+
+
 def guard_fallback_produces_self_evolution() -> Tuple[bool, str]:
     """The in-process fallback must be ABLE to produce L9/L10.
 
@@ -1884,6 +1953,81 @@ def guard_msg_tool_wired() -> Tuple[bool, str]:
                 f"(err={err!r}), clean_error_without_bus={clean_error}")
 
 
+def guard_precise_task_handoff() -> Tuple[bool, str]:
+    """The four-step precise hand-off must work end to end (design #1000007).
+
+    1. identity: a call WITHOUT agent_name still resolves to the session agent
+       (28 tool models never declared agent_name - F3);
+    2. assignee: a dispatched L5 card records who it is addressed to;
+    3. push: the notification carries [ID | title | state], queried fresh;
+    4. claim: only the addressee may accept, and done leaves the queue.
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.mcp.adapter import handle_call
+    from memall.mcp.notify import build_notice
+    from memall.mcp.session_identity import bind_handshake_agent, reset
+
+    init_db()
+    A, B, C = "gpm", "gdev", "gother"
+    reset()
+    bind_handshake_agent(A)
+    cap = json.loads(handle_call("memall_write", {
+        "action": "capture", "level": "L5", "category": "task",
+        "agent_name": B, "owner": "老陈", "project": "g",
+        "subject": "[守卫] 精确任务交接",
+        "content": "守卫用任务卡：验证 assignee 定向、通知栏带内容、精确接取与闭环。",
+        "metadata": json.dumps({"status": "active"})}))
+    tid = cap.get("id")
+    if not tid:
+        return False, f"capture failed: {cap}"
+
+    conn = get_conn()
+    meta = json.loads(conn.execute(
+        "SELECT metadata FROM memories WHERE id=?", (tid,)).fetchone()[0])
+    conn.close()
+    assignee_ok = (meta.get("assignee") or "").lower() == B.lower()
+
+    # (3) notification addressed to B, with id + title + state, no agent_name
+    reset()
+    bind_handshake_agent(B)
+    notice = build_notice(B)
+    notice_ok = (str(tid) in notice and "待认领" in notice
+                 and "[守卫] 精确任务交接" in notice)
+
+    # (4a) a stranger cannot claim
+    reset()
+    bind_handshake_agent(C)
+    denied = json.loads(handle_call("memall_write",
+                                    {"action": "task_claim", "task_id": tid}))
+    denied_ok = denied.get("status") == "forbidden"
+
+    # (4b) the addressee can, and gets the body
+    reset()
+    bind_handshake_agent(B)
+    claimed = json.loads(handle_call("memall_write",
+                                     {"action": "task_claim", "task_id": tid}))
+    claim_ok = (claimed.get("status") == "claimed"
+                and claimed.get("claimed_by") == B
+                and "守卫用任务卡" in (claimed.get("content") or ""))
+
+    # (3b) the notice now reports the claimed state
+    claimed_notice_ok = "已认领" in build_notice(B)
+
+    # (4c) closing it removes it from the queue
+    handle_call("memall_write", {"action": "update", "memory_id": tid,
+                                 "agent_name": B,
+                                 "metadata": json.dumps({"status": "done"})})
+    closed_ok = str(tid) not in build_notice(B)
+
+    ok = (assignee_ok and notice_ok and denied_ok and claim_ok
+          and claimed_notice_ok and closed_ok)
+    return ok, (f"assignee={assignee_ok} notice={notice_ok} "
+                f"stranger_forbidden={denied_ok} claim={claim_ok} "
+                f"claimed_state={claimed_notice_ok} closed={closed_ok}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -1933,12 +2077,15 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "session_note_acknowledged": guard_session_note_acknowledged,
     "session_note_not_shared_across_agents": guard_session_note_not_shared_across_agents,
     "convergence_rule_respected": guard_convergence_rule_respected,
+    "confirm_path_honours_rule": guard_confirm_path_honours_rule,
+    "retrieve_by_id_respects_viewer": guard_retrieve_by_id_respects_viewer,
     "fallback_produces_self_evolution": guard_fallback_produces_self_evolution,
     "busy_timeout_survives_concurrency": guard_busy_timeout_survives_concurrency,
     "update_can_complete_tasks": guard_update_can_complete_tasks,
     "lazy_tools_always_loadable": guard_lazy_tools_always_loadable,
     "discussion_stays_l5": guard_discussion_stays_l5,
     "discussion_reminders_and_responses": guard_discussion_reminders_and_responses,
+    "precise_task_handoff": guard_precise_task_handoff,
 }
 
 # Full test files run as subprocesses when no guard name is given.

@@ -15,6 +15,11 @@ def handle_create(arguments: dict) -> str:
         creator=arguments.get("agent_name", "system"),
         participants=arguments.get("participants", []),
         timeout_hours=arguments.get("timeout_hours", 24),
+        # The schema always advertised this (models.py: DiscussionCreateInput)
+        # but the handler dropped it, so every discussion was created with the
+        # default "everyone must respond" rule and a stale roster made
+        # convergence impossible.  Pass it through.
+        convergence_rule=arguments.get("convergence_rule", "unanimous"),
     )
     return json.dumps(result, ensure_ascii=False, default=str)
 

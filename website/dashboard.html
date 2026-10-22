@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MemALL · 数据看板</title>
+<meta name="description" content="MemALL 记忆系统 Web 看板：总览、记忆浏览、混合检索、知识图谱、Agent 联邦与自进化管线。连接本地网关 127.0.0.1:9920，无网关时自动进入演示模式。">
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='none' stroke='%2358a6ff' stroke-width='3'/><circle cx='16' cy='16' r='5' fill='%23bc8cff'/></svg>">
+<link rel="stylesheet" href="assets/styles.css">
+<link rel="stylesheet" href="assets/dashboard.css">
+</head>
+<body>
+<div class="dash">
+  <aside class="side">
+    <a class="logo" href="./"><span class="logo-mark"></span>MemALL</a>
+    <nav>
+      <a href="#overview" data-r="overview">📊 总览</a>
+      <a href="#memories" data-r="memories">🧠 记忆</a>
+      <a href="#search" data-r="search">🔍 检索</a>
+      <a href="#graph" data-r="graph">🕸️ 图谱</a>
+      <a href="#agents" data-r="agents">🛰️ Agents</a>
+      <a href="#pipeline" data-r="pipeline">♻️ 管线</a>
+    </nav>
+    <div class="foot">
+      <a href="./">← 返回官网</a><br>
+      Multi-agent Memory OS<br>本地网关 · 数据不出机器
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <h1>数据看板</h1>
+      <div class="conn">
+        <span class="status-pill" id="conn"><span class="dot"></span>连接中…</span>
+        <input type="text" id="api-url" value="http://127.0.0.1:9920" aria-label="网关地址" spellcheck="false">
+        <button class="btn btn-sm" id="reconnect">连接</button>
+        <button class="btn btn-sm" id="demo-btn">演示模式</button>
+      </div>
+    </div>
+    <div id="view"></div>
+  </main>
+</div>
+<script type="module" src="assets/dashboard.js"></script>
+</body>
+</html>

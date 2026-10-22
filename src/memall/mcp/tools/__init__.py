@@ -80,6 +80,11 @@ def _handle_write(args: dict) -> str:
         # Lives on memall_write — it WRITES a row to search_interactions, so it
         # must not sit behind memall_read's readOnlyHint=true.
         return retrieve.handle_record_interaction(args)
+    elif action == "task_claim":
+        # Accept a task card addressed to me (design #1000007).  Refuses a
+        # claim from any agent the card was not addressed to.
+        from memall.mcp.tools import tasks_handlers
+        return tasks_handlers.handle_task_claim(args, args.get("agent_name", ""))
     raise ValueError(f"memall_write: unknown action '{action}'")
 
 
@@ -87,7 +92,7 @@ registry.register(ToolDef(
     name="memall_write",
     description="Write/capture/search/update memories, create connections, manage forgetting & ops. Actions: capture | smart_store | store_batch | batch_capture | update | connect | forget | ops | record_interaction | quick (快速记)",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["capture", "smart_store", "store_batch", "batch_capture", "update", "connect", "forget", "ops", "record_interaction", "quick", "记一下", "快速记", "随手记"]},
+        "action": {"type": "string", "enum": ["capture", "smart_store", "store_batch", "batch_capture", "update", "connect", "forget", "ops", "record_interaction", "task_claim", "quick", "记一下", "快速记", "随手记"]},
         "content": {"type": "string", "description": "Memory content"},
         "owner": {"type": "string"},
         "agent_name": {"type": "string"},
@@ -171,6 +176,10 @@ def _handle_read(args: dict) -> str:
         return federation.handle_conflicts(args)
     elif action == "recap":
         return retrieve.handle_recap(args)
+    elif action == "task_list":
+        # Only the cards addressed to me (design #1000007).
+        from memall.mcp.tools import tasks_handlers
+        return tasks_handlers.handle_task_list(args, args.get("agent_name", ""))
     raise ValueError(f"memall_read: unknown action '{action}'")
 
 
@@ -178,7 +187,7 @@ registry.register(ToolDef(
     name="memall_read",
     description="Search/retrieve memories, trace provenance, explore graph, timeline, federated queries, natural language chat search, post-compaction recap. Actions: retrieve | search | unified_search | chat | vector_search | hybrid_search | batch_search | trace | traverse | timeline | fed_query | fed_conflicts | recap",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["retrieve", "search", "unified_search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "batch_search", "trace", "traverse", "timeline", "fed_query", "fed_conflicts", "recap"]},
+        "action": {"type": "string", "enum": ["retrieve", "search", "unified_search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "batch_search", "trace", "traverse", "timeline", "fed_query", "fed_conflicts", "recap", "task_list"]},
         "query": {"type": "string", "description": "Search query"},
         "queries": {"type": "array", "items": {"type": "string"}, "description": "Queries for batch_search"},
         "mode": {"type": "string", "enum": ["auto", "direct", "fts5", "vector", "hybrid"]},

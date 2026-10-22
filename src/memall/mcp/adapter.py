@@ -108,6 +108,23 @@ def handle_call(tool_name: str, arguments: dict) -> str:
             arguments = dict(arguments)
             arguments["__extra_args__"] = extra
 
+    # ── F3: restore the caller's identity after validation ──────────────
+    # validate_tool_input drops fields the action's model does not declare,
+    # and 28 models never declared agent_name — so every routing decision
+    # below (ensure_session_started, the notification bar, agent isolation)
+    # silently saw an empty identity.  The identity is now bound once at MCP
+    # handshake time and re-attached here, so a client is addressable no
+    # matter which tool it calls.  An explicit agent_name still wins.
+    try:
+        from memall.mcp.session_identity import identify
+
+        _caller = identify(arguments) or ""
+        if _caller and not arguments.get("agent_name"):
+            arguments = dict(arguments)
+            arguments["agent_name"] = _caller
+    except Exception:
+        logger.debug("session identity resolution failed", exc_info=True)
+
     # Session-based tools (memall_system actions) that should not auto-start sessions
     _SESSION_SKIP_TOOLS = frozenset({"ping"})
     _SESSION_SKIP_ACTIONS = frozenset({"session_start", "session_end", "session_summary", "onboarding"})

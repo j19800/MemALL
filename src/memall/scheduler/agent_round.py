@@ -51,9 +51,20 @@ def get_active_agents() -> list[str]:
 def notify_pending_tasks(agent_name: str) -> list[dict]:
     """Check active L5 tasks assigned to *agent_name* and create P2 reminders.
 
-    Dedup: one reminder per task, keyed by the reminder body's content_hash
-    (the body is deterministic per (task, agent)).  If the reminder row is
-    later forgotten or archived, the row is gone and a fresh one is created.
+    Dedup: one reminder per (task, agent) pair, keyed by the task id recorded
+    in the reminder's metadata — NOT by the body's content_hash.  The body is
+    deterministic per (task, agent), so its hash is deterministic too, and
+    content_hash carries a PERMANENT UNIQUE constraint; keying on the hash
+    made the reminder's identity depend on the *body format*, so any change to
+    that format re-notified every task that already had a reminder (the five
+    reminders written before the body gained its task-id suffix were all
+    re-notified as a second row for the same task).  The task id is the stable
+    identity of the pair.
+
+    Archived reminders still count as "already notified": they hold the
+    content_hash, so re-notifying them would raise the UNIQUE violation this
+    function exists to avoid.  Only a hard-deleted reminder frees the pair
+    for a fresh one.
 
     Note: the reminder table has no reader in the current codebase — the
     agent-facing list is the L5 task card itself, which auto_inject reads as
@@ -82,21 +93,27 @@ def notify_pending_tasks(agent_name: str) -> list[dict]:
             # erroring were exactly the only two with reminders older than
             # 6h).
             #
-            # Fix: dedup on hash *existence*, not on a time window.  The
-            # window becomes irrelevant, and if the reminder row is later
-            # forgotten/archived the row is gone and a fresh one is created
-            # — self-correcting, which the time window was not (it skipped
-            # re-notification for 6h after the reminder disappeared).
+            # The dedup key is the task id in the reminder's metadata, not the
+            # body's hash.  Keying on the hash ties the reminder's identity to
+            # the body format: when the body gained its task-id suffix, every
+            # reminder written in the old format hashed differently and each
+            # of those tasks got a SECOND reminder row for the same task.
+            # The task id is what identifies the (task, agent) pair, and it
+            # does not change when the body format does.
             #
-            # The task id goes into the body so that two DIFFERENT tasks
+            # The task id also goes into the body so that two DIFFERENT tasks
             # sharing a subject still get their own reminder: without it the
             # bodies would hash identically and the second task would be
-            # silently dropped.
+            # silently dropped by the content_hash UNIQUE constraint.
             content = (f"[待办任务] {t['subject']} — 分配给: {agent_name} "
                        f"(task #{t['id']})")[:2000]
             h = hashlib.sha256(content.encode("utf-8")).hexdigest()
             existing = conn.execute(
-                "SELECT id FROM memories WHERE content_hash = ?", (h,)
+                "SELECT id FROM memories "
+                "WHERE category = 'task_pending' "
+                "AND json_extract(metadata, '$.task_id') = ? "
+                "AND COALESCE(memory_status, '') != 'archived'",
+                (t["id"],),
             ).fetchone()
             if existing:
                 continue

@@ -106,30 +106,45 @@ def consume_session_note(agent_name: str = "") -> str | None:
     The note stays pending until :func:`ack_session_note` is called, so a
     client that times out mid-response can retry and still receive the
     context (audit P2-12: "consume-and-drop without ACK" lost the session
-    note permanently on a timeout).  ``agent_name`` is optional for
-    backwards compatibility: when omitted the oldest pending note is
-    returned.
+    note permanently on a timeout).
+
+    The note belongs to ONE agent.  This used to fall back to "the oldest
+    pending note" when the caller passed no name, so a call that arrived
+    without an identity took another agent's note — and the matching
+    :func:`ack_session_note` then dropped it, so the rightful owner never
+    received it and the wrong agent received it in full.  That is an
+    identity violation (AGENTS.md §三.4 "身份锁定"), not a delivery quirk:
+    the injected context carries the other agent's persona, pending tasks and
+    reflections.
+
+    An unnamed caller now gets nothing.  A caller that knows who it is
+    passes the name and gets exactly its own note.
     """
-    if agent_name:
-        return _PENDING_SESSION_NOTES.get(agent_name)
-    if not _PENDING_SESSION_NOTES:
+    if not agent_name:
+        logger.warning(
+            "shared.py: session note requested without an agent name; "
+            "refusing to guess whose note to deliver"
+        )
         return None
-    oldest = next(iter(_PENDING_SESSION_NOTES))
-    return _PENDING_SESSION_NOTES[oldest]
+    return _PENDING_SESSION_NOTES.get(agent_name)
 
 
 def ack_session_note(agent_name: str = "") -> bool:
-    """Acknowledge delivery of a session note (drops it)."""
-    if agent_name:
-        popped = _PENDING_SESSION_NOTES.pop(agent_name, None) is not None
-        _NOTE_ACKED.add(agent_name)
-        return popped
-    if not _PENDING_SESSION_NOTES:
+    """Acknowledge delivery of a session note (drops it).
+
+    Like :func:`consume_session_note`, this only ever touches the named
+    agent's note.  The unnamed "oldest" fallback could drop a note that
+    belonged to a different agent than the one being acknowledged.
+    """
+    if not agent_name:
+        logger.warning(
+            "shared.py: session note ack without an agent name; "
+            "refusing to guess whose note to drop"
+        )
         return False
-    oldest = next(iter(_PENDING_SESSION_NOTES))
-    _PENDING_SESSION_NOTES.pop(oldest, None)
-    _NOTE_ACKED.add(oldest)
-    return True
+    popped = _PENDING_SESSION_NOTES.pop(agent_name, None) is not None
+    _NOTE_ACKED.add(agent_name)
+    return popped
 
 
 def pending_session_notes() -> dict:

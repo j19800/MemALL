@@ -38,7 +38,11 @@ LIFECYCLE_STATUSES = frozenset(
 )
 
 TASK_STATUSES = frozenset(
-    {"active", "done", "blocked", "resolved", "converged", "archived"}
+    # "claimed" is the accepted-but-not-delivered state: the assignee has
+    # taken the card (memall_write action=task_claim) and is working on it.
+    # It must stay in the queue, so readers treat active+claimed alike
+    # (design #1000007 state machine: active -> claimed -> done -> archived).
+    {"active", "claimed", "done", "blocked", "resolved", "converged", "archived"}
 )
 
 

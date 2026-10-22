@@ -1,6 +1,7 @@
 import json
 import logging
 import sys
+from memall.core.status import PENDING_TASKS, pending_tasks
 from memall.mcp.adapter import TOOL_DEFINITIONS, handle_call, _intercept, consume_session_note, _ensure_loaded
 from memall.mcp.shared import ack_session_note
 
@@ -175,6 +176,25 @@ def serve():
                 _client_version = client_info.get("version", "")
                 _log.info("Initialize from %s %s", _client_name, _client_version)
 
+                # ── Bind the agent identity ONCE for the whole session ──
+                # Routing (task delivery, notifications, isolation) needs to
+                # know who is talking, but 28 tool models never declared
+                # agent_name, so the per-call argument could not be trusted.
+                # Accept, in order of preference: an explicit
+                # params.agent_name, clientInfo.agent_name, clientInfo.name.
+                try:
+                    from memall.mcp.session_identity import bind_handshake_agent
+
+                    _agent = (params.get("agent_name")
+                              or client_info.get("agent_name")
+                              or client_info.get("name")
+                              or "")
+                    if _agent and _agent != "unknown":
+                        bind_handshake_agent(_agent)
+                        _log.info("Session identity bound: %s", _agent)
+                except Exception:
+                    _log.warning("session identity binding failed", exc_info=True)
+
                 # Validate protocol version
                 client_protocol = params.get("protocolVersion", "")
                 if client_protocol and client_protocol not in _SUPPORTED_PROTOCOL_VERSIONS:
@@ -305,42 +325,29 @@ def serve():
                         # explicitly query for pending items.
                         agent_name = arguments.get("agent_name", "")
                         if agent_name:
+                            # Shared, stateless notification bar (see
+                            # memall/mcp/notify.py).  Carries task IDs, titles
+                            # and states instead of a bare count, and is
+                            # queried fresh on every response so it can never
+                            # serve a stale queue.
                             try:
-                                from memall.core.db import get_conn as _get_conn
-                                _nconn = _get_conn()
-                                task_count = _nconn.execute(
-                                    "SELECT COUNT(*) as c FROM memories WHERE level='L5' AND category='task' "
-                                    "AND agent_name=? AND json_extract(metadata, '$.status')='active'",
-                                    (agent_name,),
-                                ).fetchone()["c"]
-                                disc_count = _nconn.execute(
-                                    "SELECT COUNT(*) as c FROM memories m WHERE level='L5' AND category='discussion' "
-                                    "AND json_extract(metadata, '$.status')='active' "
-                                    "AND json_extract(metadata, '$.participants') LIKE ? "
-                                    "AND m.id NOT IN (SELECT e.source_id FROM edges e JOIN memories r ON e.target_id=r.id "
-                                    "  WHERE e.relation_type='cites' AND json_extract(r.metadata, '$.agent_name')=?)",
-                                    (f'%"{agent_name}"%', agent_name),
-                                ).fetchone()["c"]
-                                _nconn.close()
-                                notes = []
-                                if task_count > 0:
-                                    notes.append(f"{task_count} 个待完成任务")
-                                if disc_count > 0:
-                                    notes.append(f"{disc_count} 个待回应讨论")
-                                if notes:
-                                    content.append({
-                                        "type": "text",
-                                        "text": f"[NOTIFICATION] {'，'.join(notes)}。"
-                                    })
-                            except Exception:
-                                _log.warning("server.py: silent error", exc_info=True)
+                                from memall.mcp.notify import build_notice
 
-                        session_note = consume_session_note()
+                                _notice = build_notice(agent_name)
+                                if _notice:
+                                    content.append({"type": "text", "text": _notice})
+                            except Exception:
+                                _log.warning("notify bar failed", exc_info=True)
+
+                        # The note belongs to the calling agent — pass its
+                        # identity so another agent's note can never be
+                        # delivered (or acked away) by mistake.
+                        session_note = consume_session_note(agent_name)
                         if session_note:
                             content.append({"type": "text", "text": session_note})
                             # delivered -> acknowledge (audit P2-12: a note
                             # dropped on read is lost on timeout)
-                            ack_session_note()
+                            ack_session_note(agent_name)
                         _respond({
                             "jsonrpc": "2.0", "id": req_id,
                             "result": {"content": content},

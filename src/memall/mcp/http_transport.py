@@ -16,6 +16,8 @@ from pathlib import Path
 
 from aiohttp import web
 
+from memall.core.status import PENDING_TASKS
+
 # Thread pool for synchronous tool calls (keeps event loop responsive)
 # Lazily initialized + re-created if shut down after a failed startup.
 _TOOL_EXECUTOR: concurrent.futures.ThreadPoolExecutor | None = None
@@ -229,30 +231,23 @@ async def handle_mcp_post(request: web.Request) -> web.Response:
             _intercept(tool_name, arguments, result_str)
             result_data = json.loads(result_str)
             content = [{"type": "text", "text": json.dumps(result_data, ensure_ascii=False)}]
-            # Agent notifications (DB query, also sync)
-            agent_name = arguments.get("agent_name", "")
-            if agent_name:
-                try:
-                    from memall.core.db import get_conn as _get_conn
-                    _nconn = _get_conn()
-                    task_count = _nconn.execute(
-                        "SELECT COUNT(*) as c FROM memories WHERE level='L5' AND category='task' "
-                        "AND agent_name=? AND json_extract(metadata, '$.status')='active'",
-                        (agent_name,),
-                    ).fetchone()["c"]
-                    _nconn.close()
-                    if task_count > 0:
-                        content.append({
-                            "type": "text",
-                            "text": f"[NOTIFICATION] 你有 {task_count} 个待完成任务。"
-                        })
-                except Exception:
-                    _log.warning("http_transport.py: silent error", exc_info=True)
-            session_note = consume_session_note()
+            # Shared, stateless notification bar (memall/mcp/notify.py):
+            # task IDs + titles + states, queried fresh every response.
+            try:
+                from memall.mcp.notify import build_notice
+
+                _notice = build_notice(arguments.get("agent_name", ""))
+                if _notice:
+                    content.append({"type": "text", "text": _notice})
+            except Exception:
+                _log.warning("notify bar failed", exc_info=True)
+            # Only the calling agent's own note may be delivered or acked
+            # (see memall.mcp.shared.consume_session_note).
+            session_note = consume_session_note(agent_name)
             if session_note:
                 content.append({"type": "text", "text": session_note})
                 # delivered -> acknowledge (audit P2-12)
-                ack_session_note()
+                ack_session_note(agent_name)
             return content
 
         try:

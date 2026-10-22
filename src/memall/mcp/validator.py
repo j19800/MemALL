@@ -29,6 +29,7 @@ from memall.mcp.models import (
     PersonaInput, PersonaProfileInput, PersonaSearchInput,
     ProfilePreloadInput, ReflectInteractMCPInput, RetrieveInput,
     RecordInteractionInput, RecapInput, RunPipelineInput, SecurityInput,
+    TaskClaimInput, TaskListInput,
     SessionEndInput, SessionStartInput,
     SessionSummaryInput, SmartStoreInput, StoreBatchInput, TimelineInput,
     TraceInput, TraverseInput, UnifiedSearchInput, UpdateInput,
@@ -49,6 +50,9 @@ _ACTION_MODELS: dict[tuple[str, str], type[BaseModel]] = {
     ("memall_write", "ops"): OpsInput,
     # memall_write — search-interaction telemetry (writes to search_interactions)
     ("memall_write", "record_interaction"): RecordInteractionInput,
+    # Precise task hand-off (design #1000007): claim validates that the
+    # card is addressed to the caller; list returns only my own cards.
+    ("memall_write", "task_claim"): TaskClaimInput,
     # memall_write — quick capture aliases
     ("memall_write", "quick"): CaptureInput,
     ("memall_write", "记一下"): CaptureInput,
@@ -72,6 +76,7 @@ _ACTION_MODELS: dict[tuple[str, str], type[BaseModel]] = {
     ("memall_read", "fed_query"): FedQueryInput,
     ("memall_read", "fed_conflicts"): FedConflictsInput,
     ("memall_read", "recap"): RecapInput,
+    ("memall_read", "task_list"): TaskListInput,
 
     # memall_persona
     ("memall_persona", "persona"): PersonaInput,

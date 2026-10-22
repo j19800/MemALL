@@ -37,11 +37,11 @@ from memall.cli.commands.gateway_commands import (
     cmd_gateway,
 )
 from memall.cli.commands.management_commands import (
-    cmd_start, cmd_stop, cmd_status, cmd_doctor, cmd_migrate,
+    cmd_start, cmd_start_gateway, cmd_stop, cmd_status, cmd_doctor, cmd_migrate,
     cmd_trust, cmd_identity_trust, cmd_identity_untrust,
     cmd_identity,
     cmd_graph_visualize, cmd_index, cmd_retrieve, cmd_onboarding,
-    cmd_serve, cmd_start, cmd_quickstart, cmd_db,
+    cmd_serve, cmd_quickstart, cmd_db,
     cmd_setup, cmd_register, cmd_uninstall, cmd_backup,
     cmd_restore, cmd_export, cmd_import, cmd_sync, cmd_mcp_connect,
     cmd_arcs, cmd_hook_list, cmd_hook_register,
@@ -316,7 +316,7 @@ def app():
 
     p_start = sub.add_parser("start-gateway", help="Start Gateway (HTTP + MCP) on port 9920")
     p_start.add_argument("--port", type=int, default=9920, help="Port (default 9920)")
-    p_start.set_defaults(func=cmd_start)
+    p_start.set_defaults(func=cmd_start_gateway)
 
     p_qs = sub.add_parser("quickstart", help="One-command setup: init DB + start gateway + configure MCP")
     p_qs.add_argument("--port", type=int, default=9920, help="Gateway port (default 9920)")

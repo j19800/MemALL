@@ -396,6 +396,25 @@ class RecapInput(BaseModel):
     limit: int = Field(5, ge=1, le=50)
 
 
+class TaskClaimInput(BaseModel):
+    """memall_write action=task_claim - accept a task card addressed to me.
+
+    agent_name is optional because the adapter re-attaches the session
+    identity; the claim itself validates that the card is addressed to the
+    caller, so a wrong caller is refused rather than silently allowed.
+    """
+    task_id: int = Field(..., ge=1, description="Task card id to claim")
+    agent_name: Optional[str] = Field(None, max_length=200)
+
+
+class TaskListInput(BaseModel):
+    """memall_read action=task_list - only the cards addressed to me."""
+    agent_name: Optional[str] = Field(None, max_length=200)
+    status: Optional[str] = Field(
+        None, description="open (default) | all | active | claimed | done")
+    limit: int = Field(20, ge=1, le=200)
+
+
 class FedInjectInput(BaseModel):
     agent_name: str = Field(..., min_length=1, max_length=200)
 

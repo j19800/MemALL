@@ -976,6 +976,13 @@ def _capture_inject_metadata(
             if data.category == "task" and not supplied:
                 data.metadata["status"] = "active"
                 supplied = None
+            # Make the dispatch target explicit (design #1000007): a task card
+            # is addressed to one agent and routing should not have to infer
+            # it from the owner field.  agent_name stays the fallback for
+            # every card written before this field existed.
+            if (data.category == "task" and not data.metadata.get("assignee")
+                    and data.agent_name):
+                data.metadata["assignee"] = data.agent_name
         elif isinstance(data.metadata, str):
             try:
                 parsed = json.loads(data.metadata or "{}")
@@ -2269,6 +2276,8 @@ def retrieve(query=None, viewer=None, **filters) -> list | Memory | None:
             row = cur.fetchone()
             if row:
                 result = _row_to_memory(row)
+                if viewer:
+                    result = (_filter_by_trust(conn, [result], viewer) or [None])[0]
                 dispatch_lifecycle(HOOK_POST_RETRIEVE, query=query, result=result)
                 return result
             dispatch_lifecycle(HOOK_POST_RETRIEVE, query=query, result=None)

@@ -217,7 +217,12 @@ def _pending_l5_for(conn, agent_name: str) -> tuple:
         rows = conn.execute(
             "SELECT id, content, summary, subject, metadata, category, level, created_at "
             "FROM memories "
-            "WHERE level = 'L5' AND LOWER(agent_name) = LOWER(?) "
+            # Addressed by assignee when present, agent_name otherwise.
+            # "assignee" is the explicit dispatch target (design #1000007);
+            # falling back to agent_name keeps every existing card working.
+            "WHERE level = 'L5' "
+            "AND COALESCE(LOWER(json_extract(metadata, '$.assignee')), "
+            "             LOWER(agent_name)) = LOWER(?) "
             f"AND {NOT_ARCHIVED} "
             "AND LENGTH(TRIM(content)) > 5 "
             "ORDER BY created_at DESC LIMIT 20",
@@ -233,7 +238,9 @@ def _pending_l5_for(conn, agent_name: str) -> tuple:
             # 缺省视为 active); an enveloped value is unwrapped before the
             # comparison so it is not silently dropped.
             status = task_status_of(raw_status) if raw_status else "active"
-            if status != "active":
+            # "claimed" is still owed work — it has been accepted but not
+            # delivered.  Only done/archived leave the queue.
+            if status not in ("active", "claimed"):
                 continue
             if r["category"] == "task":
                 pending_tasks.append({

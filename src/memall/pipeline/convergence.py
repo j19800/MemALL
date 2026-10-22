@@ -76,6 +76,7 @@ def create_discussion(
     participants: list | None = None,
     timeout_hours: int = 24,
     suggest: bool = False,
+    convergence_rule: str = "unanimous",
 ) -> dict:
     """Create a discussion as an L5 memory (category=discussion).
 
@@ -149,6 +150,10 @@ def create_discussion(
                 # cards.
                 "pinned_fields": ["category", "level"],
                 "participants": participants_list,
+                # When the discussion may converge.  Read by _rule_satisfied();
+                # "unanimous" (every participant must respond) is the default
+                # and the historical behaviour.
+                "convergence_rule": (convergence_rule or "unanimous").lower(),
                 "suggested_participants": suggested_participants,
                 "options": options or [],
                 "open_questions": open_questions or [],
@@ -396,13 +401,53 @@ def _converge_single(conn, disc: dict) -> dict:
             if a:
                 responded_agents.add(a)
         missing = [p for p in participants if p not in responded_agents]
-        if missing:
+        if missing and not _rule_satisfied(meta, responded_agents, participants):
             return {
                 "warning": f"waiting for participants: {missing}",
                 "participants": participants,
             }
 
     return converge_discussion(conn, disc, response_dicts, "confirmed")
+
+
+def _rule_satisfied(meta: dict, responded: set, participants: list) -> bool:
+    """Is the discussion's convergence rule met by the responses so far?
+
+    The rule lives in ``metadata.convergence_rule`` and used to be a dead
+    field: nothing read it, so a discussion only converged when EVERY
+    participant had responded.  That made a discussion with a stale roster
+    (an agent that had left the project, or one that had not yet been
+    invited) un-convergeable in principle — the missing agent was never
+    coming.
+
+    Rules:
+
+    ``unanimous`` (default)
+        Every participant must have responded.  This is the historical
+        behaviour, kept as the default so an existing discussion converges
+        exactly as it did before.
+    ``majority``
+        More than half of the participants must have responded.  A single
+        unresponsive agent can no longer hold a discussion open forever.
+    ``any``
+        One response is enough.  For a discussion nobody will ever join.
+
+    The rule only decides WHEN the discussion converges.  What it converges
+    TO is unchanged: :func:`converge_discussion` still records the real
+    stance distribution, and a discussion that converged with a dissent
+    still reports ``consensus=False`` and lists its dissenters.
+    """
+    rule = (meta.get("convergence_rule") or "unanimous").lower()
+    if rule not in ("unanimous", "majority", "any"):
+        rule = "unanimous"
+    if rule == "any":
+        return bool(responded)
+    if rule == "majority":
+        # More than half of the participants must have spoken.  Rounded up,
+        # so 3 participants need 2 and 5 participants need 3.
+        needed = len(participants) // 2 + 1
+        return len(responded) >= needed
+    return len(responded) >= len(participants)
 
 
 def confirm_discussion(
@@ -521,8 +566,9 @@ def confirm_discussion(
                 if a:
                     responded_agents.add(a)
             missing = [p for p in participants if p not in responded_agents]
-            if missing:
-                # Not all participants have responded yet — do NOT converge
+            # Same rule test as the sweep path, so both agree on when to close.
+            if missing and not _rule_satisfied(disc_meta, responded_agents, participants):
+                # Rule not satisfied — do NOT converge
                 conn.execute(
                     "UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
                     (json.dumps(disc_meta), now_iso(), discussion_id),

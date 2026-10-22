@@ -13,6 +13,7 @@ import os
 
 from aiohttp import web
 
+from memall.core.status import PENDING_TASKS
 from memall.mcp.shared import ack_session_note
 
 logger = logging.getLogger("memall.gateway.mcp")
@@ -136,25 +137,20 @@ class McpHandlersMixin:
                 content = [{"type": "text", "text": json.dumps(result_data, ensure_ascii=False)}]
                 agent_name = arguments.get("agent_name", "")
                 if agent_name:
+                    # Shared, stateless notification bar (memall/mcp/notify.py).
                     try:
-                        from memall.core.db import get_conn as _get_conn
-                        _nconn = _get_conn()
-                        task_count = _nconn.execute(
-                            "SELECT COUNT(*) as c FROM memories WHERE level='L5' AND category='task' "
-                            "AND agent_name=? AND json_extract(metadata, '$.status')='active'",
-                            (agent_name,),
-                        ).fetchone()["c"]
-                        _nconn.close()
-                        if task_count > 0:
-                            content.append({
-                                "type": "text",
-                                "text": f"[NOTIFICATION] 你有 {task_count} 个待完成任务。"
-                            })
+                        from memall.mcp.notify import build_notice
+
+                        _notice = build_notice(agent_name)
+                        if _notice:
+                            content.append({"type": "text", "text": _notice})
                     except Exception:
-                        logger.warning("MCP tool notification error", exc_info=True)
-                session_note = consume_session_note()
+                        logger.warning("notify bar failed", exc_info=True)
+                # Only the calling agent's own note may be delivered or acked
+                # (see memall.mcp.shared.consume_session_note).
+                session_note = consume_session_note(agent_name)
                 if session_note:
-                    ack_session_note()
+                    ack_session_note(agent_name)
                     content.append({"type": "text", "text": session_note})
                 return content
 

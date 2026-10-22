@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MemALL — Multi-agent Memory OS｜本地优先的 AI Agent 记忆操作系统</title>
+<meta name="description" content="MemALL 为 AI Agent 提供跨会话、跨工具的持久化记忆：14 级记忆生命周期、原生知识图谱、FTS5+向量混合检索、31 步自进化管线、多 Agent 联邦共享。SQLite 单文件，100% 本地运行，MCP 原生接入。">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='none' stroke='%2358a6ff' stroke-width='3'/><circle cx='16' cy='16' r='5' fill='%23bc8cff'/></svg>">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="logo" href="./"><span class="logo-mark"></span>MemALL</a>
+    <div class="nav-links">
+      <a href="#features">能力</a>
+      <a href="#levels">记忆层级</a>
+      <a href="#pipeline">管线</a>
+      <a href="#demo">在线演示</a>
+      <a href="#compare">对比</a>
+      <a href="#quickstart">快速开始</a>
+      <a class="btn btn-sm" href="dashboard.html">数据看板</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <canvas id="hero-graph" aria-hidden="true"></canvas>
+  <div class="hero-inner">
+    <div class="hero-badges" style="margin-bottom:22px">
+      <span class="badge"><span class="dot"></span>v0.1.68 持续迭代</span>
+      <span class="badge">MIT 开源</span>
+      <span class="badge">Python ≥ 3.10</span>
+      <span class="badge">零云端依赖</span>
+    </div>
+    <h1>让每个 Agent 都过目不忘</h1>
+    <p class="tagline"><b>MemALL</b> · Multi-agent Memory OS——本地优先的 AI Agent 记忆操作系统。
+      长期记忆、决策可追溯、多 Agent 记忆可共享，接入任意 MCP 客户端，告别每次对话从零开始。</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#quickstart">30 秒接入 →</a>
+      <a class="btn" href="#demo">试玩在线演示</a>
+      <a class="btn" href="https://github.com/j19800/MemALL" target="_blank" rel="noopener">GitHub</a>
+    </div>
+    <div class="terminal">
+      <div class="terminal-bar"><i></i><i></i><i></i></div>
+<pre><span class="c"># 安装、初始化、启动</span>
+<span class="p">$</span> pip install memall-os <span class="o">&& memall quickstart</span>
+<span class="c"># → 网关 127.0.0.1:9920 · MCP 就绪（stdio / HTTP）</span>
+<span class="p">$</span> <span class="o">/capture</span> "决定采用 aiohttp 网关：SSE 长连接需同进程复用事件循环"
+<span class="c">✓ #1041 已入库 → 管线自动定级 L4 · 建边 supersedes→#1039 · echo 61</span>
+<span class="p">$</span> <span class="o">/retrieve</span> "网关选型"
+<span class="c">✓ 混合检索命中 #1041（含决策上下文、被取代方案与复盘反思）</span></pre>
+    </div>
+  </div>
+</header>
+
+<section class="section" style="padding-top:24px">
+  <div class="wrap">
+    <div class="stats reveal" id="stats">
+      <div class="stat"><b>3+11</b><span>级记忆生命周期</span></div>
+      <div class="stat"><b>31<small style="font-size:14px">+5</small></b><span>管线步骤 自动运转</span></div>
+      <div class="stat"><b>7</b><span>MCP 工具 · ≈50 actions</span></div>
+      <div class="stat"><b>512</b><span>维本地向量 + RRF</span></div>
+      <div class="stat"><b>52</b><span>个 CLI 命令</span></div>
+      <div class="stat"><b>79</b><span>个测试文件 · 41 迁移</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="pain">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">为什么需要它</span>
+      <h2>Agent 有智商，没有记忆</h2>
+      <p>每一次新会话，它都不记得上周你们定过的架构决策、踩过的坑、你纠正过的偏好。
+        "Agent 健忘症"是 Loop Engineering 缺失的 Memory 基础设施层。</p>
+    </div>
+    <div class="grid grid-3">
+      <div class="card reveal"><div class="icon">🧩</div><h3>会话即失忆</h3><p>上下文窗口再大也是临时的。决策、教训、偏好散落在聊天记录里，无法跨会话、跨工具复用。</p></div>
+      <div class="card reveal"><div class="icon">📄</div><h3>Markdown 记忆不够用</h3><p>手写笔记没有检索质量、没有生命周期、没有关联——存进去容易，找回来靠运气，改错了没人知道。</p></div>
+      <div class="card reveal"><div class="icon">🤝</div><h3>多 Agent 各忘各的</h3><p>Claude、Codex、openCode 协同干活，却互相看不到对方的结论与冲突，重复讨论、口径漂移。</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="section section-alt" id="features">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">核心能力</span>
+      <h2>不只是存取，是一套记忆操作系统</h2>
+    </div>
+    <div class="grid grid-3">
+      <div class="card reveal"><div class="icon">🧠</div><h3>14 级记忆生命周期</h3><p>P0–P2 优先规划层 + L1–L11 语义层：事实、约定、决策、讨论、反思、偏好、蒸馏、洞察、领域情报。排除链分类器自动定级，CHECK 约束入库。</p></div>
+      <div class="card reveal"><div class="icon">🕸️</div><h3>原生知识图谱</h3><p>8 种类型化边（refines / cites / contradicts / supersedes…）+ 上位本体泛化遍历；管线按模式与相似度自动建边，决策弧跟踪每条 L4 决策的开放与闭合。</p></div>
+      <div class="card reveal"><div class="icon">🔍</div><h3>混合检索，可解释</h3><p>FTS5 全文 + sqlite-vec 512 维 KNN，真 RRF 融合（k=60）；默认走本地 ONNX INT8 重排器，无 GPU、无 PyTorch 也能重排。</p></div>
+      <div class="card reveal"><div class="icon">♻️</div><h3>31 步自进化管线</h3><p>记忆入库后自动富化、分类、建边、回声评分、时期检测、反思、蒸馏、整合、衰减、归档——每步幂等、带质量门、逐步提交。</p></div>
+      <div class="card reveal"><div class="icon">🌐</div><h3>多 Agent 联邦</h3><p>跨设备 UDP 发现与配对码握手，publish / query / conflicts / inject / deliver；冲突检测自动聚类矛盾记忆，跨 Agent 聚合产出 L10/L11。</p></div>
+      <div class="card reveal"><div class="icon">🔌</div><h3>MCP 原生</h3><p>7 个聚合工具端点、约 50 个 action，stdio 与 Streamable HTTP 双通道；Claude Desktop / Cursor / Cline / Qoder 三行配置即接即用。</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="levels">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">记忆模型</span>
+      <h2>每条记忆都知道自己是什么</h2>
+      <p>14 个层级由数据库 CHECK 约束强制，分类器按排除链 first-match-wins 定级；级别参与检索加权（L9–L11 天然更高权重）。</p>
+    </div>
+    <div class="levels reveal">
+      <div class="level"><span class="tag t-p">P0-P2</span><span class="name">规划层（优先级）</span><span class="eg">"v0.2.0 须在 11-15 前发布"</span></div>
+      <div class="level"><span class="tag t-a">L1</span><span class="name">原始事实</span><span class="eg">"用户报告登录 Bug #123"</span></div>
+      <div class="level"><span class="tag t-a">L2</span><span class="name">约定规范</span><span class="eg">"所有写入必须走 thin-waist 单入口"</span></div>
+      <div class="level"><span class="tag t-a">L3</span><span class="name">业务创意</span><span class="eg">"MemPort——跨系统记忆迁移工具"</span></div>
+      <div class="level"><span class="tag t-a">L4</span><span class="name">决策</span><span class="eg">"网关用 aiohttp，不用 FastAPI"</span></div>
+      <div class="level"><span class="tag t-b">L5</span><span class="name">讨论 / 共识</span><span class="eg">多 Agent 讨论自动收敛的结论</span></div>
+      <div class="level"><span class="tag t-b">L6</span><span class="name">自我反思</span><span class="eg">"本次会话哪里做对了、哪里要改"</span></div>
+      <div class="level"><span class="tag t-b">L7</span><span class="name">用户偏好</span><span class="eg">"回复保持简短、中文优先"</span></div>
+      <div class="level"><span class="tag t-b">L8</span><span class="name">边提升</span><span class="eg">被图谱 ≥3 条边反复引用的自动晋升</span></div>
+      <div class="level"><span class="tag t-c">L9</span><span class="name">同域蒸馏</span><span class="eg">"1.2 万会话 → 187 个知识节点"</span></div>
+      <div class="level"><span class="tag t-c">L10</span><span class="name">跨类别洞察</span><span class="eg">同 Agent 跨 ≥2 类目的整合洞察</span></div>
+      <div class="level"><span class="tag t-c">L11</span><span class="name">领域情报</span><span class="eg">跨项目 / 跨 Agent（≥5 方）复现的模式</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="section section-alt" id="pipeline">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">自进化管线</span>
+      <h2>存入之后，记忆继续生长</h2>
+      <p>31 个核心步骤 + 5 个可选步骤（以 <code style="font-family:var(--font-mono);color:var(--accent)">list_pipeline_steps()</code> 为准），
+        由 Hook 事件异步触发或手动运行。悬停查看每一步做什么——全部为确定性启发式实现，离线可跑、结果可复现。</p>
+    </div>
+    <div class="pipe-grid reveal" id="pipe-grid"></div>
+    <p class="hint" id="pipe-tip" style="min-height:22px;margin-top:16px;color:var(--fg-muted)">悬停任意步骤查看职责说明。</p>
+    <div class="pipe-legend reveal"><span><i style="background:var(--accent)"></i>核心步骤（默认全跑）</span><span><i style="background:var(--purple);opacity:.6"></i>可选步骤（按需开关）</span></div>
+  </div>
+</section>
+
+<section class="section" id="demo">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">在线演示</span>
+      <h2>不装任何东西，先体验一次</h2>
+      <p>下面是一台浏览器内的 MemALL 沙盒：15 条示例记忆 + 与生产代码一致的 RRF 融合排序（k=60）与层级加权。你的操作只影响本页。</p>
+    </div>
+    <div class="demo">
+      <div class="demo-pane reveal">
+        <h3>🔎 hybrid_search</h3>
+        <div class="field">
+          <input type="text" id="sim-q" placeholder="检索记忆…" aria-label="检索内容">
+          <button class="btn btn-primary" id="sim-run">检索</button>
+        </div>
+        <div class="demo-tabs" role="group" aria-label="示例查询">
+          <button class="demo-tab" data-q="OOM 修复">OOM 修复</button>
+          <button class="demo-tab" data-q="端口">端口口径</button>
+          <button class="demo-tab" data-q="蒸馏">蒸馏洞察</button>
+          <button class="demo-tab" data-q="偏好">用户偏好</button>
+        </div>
+        <div id="sim-out" aria-live="polite"></div>
+      </div>
+      <div class="demo-pane reveal">
+        <h3>✍️ memall_write · capture</h3>
+        <textarea id="cap-in" placeholder="例：决定检索默认开启 ONNX 重排，因为要在无 GPU 机器上跑。&#10;（含「决定/采用」→ L4，「偏好/习惯」→ L7，「反思/复盘」→ L6，「约定/规范」→ L2）"></textarea>
+        <div class="field" style="margin-top:10px">
+          <button class="btn btn-primary" id="cap-run" style="width:100%">capture 入库</button>
+        </div>
+        <div id="cap-out"><p class="hint">写入后观察管线动画：classify 排除链定级 → echo 评分 → link 自动建边 → embed_index 向量入索引。</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section section-alt" id="graph">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">知识图谱与检索</span>
+      <h2>找得回，还要串得起</h2>
+    </div>
+    <div class="grid grid-3">
+      <div class="card reveal"><div class="icon">🛤️</div><h3>8 种类型化边</h3><p><code>extends · contradicts · refines · cites · supersedes · related · updates · derives</code>，附本体层级（updates ⊃ supersedes）支持泛化遍历，从 Bug 一跳直达修复 PR 与复盘。</p></div>
+      <div class="card reveal"><div class="icon">🎯</div><h3>决策弧生命周期</h3><p>每条 L4 决策自动跟踪 <code>open → in_progress → closed</code>：L5 讨论推进、L6 反思闭合，未决策项以"债务"暴露，不会被悄悄遗忘。</p></div>
+      <div class="card reveal"><div class="icon">📈</div><h3>回声权重 Echo</h3><p>引用 25% + 访问 20% + 新近 20% + 层级 20% + 质量 15%，0–100 分。被反复使用的知识自动涨权保鲜，无人问津的进入衰减与 TTL 遗忘。</p></div>
+      <div class="card reveal"><div class="icon">🧮</div><h3>真 RRF 混合检索</h3><p>FTS5 词面命中与 vec0 语义近邻各取 rank，按 Σ 1/(60+rank) 融合；过滤器下推进 SQL，重排链三级降级，检索行为可用 <code>search_interactions</code> 遥测复盘。</p></div>
+      <div class="card reveal"><div class="icon">🈶</div><h3>中文原生</h3><p>嵌入式模型选 bge-small-zh（512 维），FTS5 对 CJK 逐字注入配合二元组召回，jieba 分词 + TF-IDF 供管线内相似度计算。</p></div>
+      <div class="card reveal"><div class="icon">🕰️</div><h3>时间维度</h3><p>双时态字段（valid_from / invalid_at）+ 日/周/月预聚合 + Epoch 时期分段（间隔 &gt;48h、类目漂移等 4 规则），"上个月那段日子"查得出来。</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="mcp">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">接入面</span>
+      <h2>7 个 MCP 工具，约 50 个 action</h2>
+      <p>每个端点是按域聚合的合并工具（action 派发），一次注册覆盖读写、图谱、人格、讨论、联邦、系统运维与 Hook 活动。</p>
+    </div>
+    <div class="tools reveal">
+      <div class="tool"><code>memall_write</code><span class="n">9 actions</span><ul><li>capture · smart_store</li><li>store_batch · update</li><li>connect · forget …</li></ul></div>
+      <div class="tool"><code>memall_read</code><span class="n">12 actions</span><ul><li>retrieve · hybrid_search</li><li>traverse · timeline · trace</li><li>fed_query · recap …</li></ul></div>
+      <div class="tool"><code>memall_persona</code><span class="n">4 actions</span><ul><li>persona · profile</li><li>identity · ask</li></ul></div>
+      <div class="tool"><code>memall_discussion</code><span class="n">3 actions</span><ul><li>create · respond</li><li>status（自动收敛）</li></ul></div>
+      <div class="tool"><code>memall_federation</code><span class="n">6 actions</span><ul><li>query · publish · inject</li><li>extract · deliver</li><li>conflicts</li></ul></div>
+      <div class="tool"><code>memall_system</code><span class="n">15 actions</span><ul><li>run_pipeline · distill</li><li>gateway · db · security</li><li>session_* · onboarding …</li></ul></div>
+      <div class="tool"><code>memall_hooks_recent</code><span class="n">1 action</span><ul><li>异步管线执行记录</li><li>通知与提醒检查</li></ul></div>
+    </div>
+    <p class="hint reveal" style="margin-top:18px">同一核心也暴露约 100 条 REST 路由（含 MCP Streamable HTTP <code style="font-family:var(--font-mono)">POST /mcp</code>）与 52 个 CLI 命令；网关仅绑定 127.0.0.1，Bearer token + CSRF + 100 req/60s 限流。</p>
+  </div>
+</section>
+
+<section class="section section-alt" id="compare">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">选型对比</span>
+      <h2>和其他记忆方案比一比</h2>
+    </div>
+    <div class="tbl-wrap reveal">
+      <table>
+        <thead><tr><th>维度</th><th>Mem0</th><th>Letta</th><th>Zep</th><th>手写 Markdown</th><th>MemALL</th></tr></thead>
+        <tbody>
+          <tr><td>记忆模型</td><td>user/session</td><td>agent/记忆块</td><td>session/摘要</td><td>无结构</td><td class="ours">3+11 共 14 级，DB 约束强制</td></tr>
+          <tr><td>知识图谱</td><td class="xk">—</td><td class="xk">—</td><td class="xk">部分</td><td class="xk">—</td><td class="ours"><span class="ck">✓</span> 8 种边 + 本体遍历 + 决策弧</td></tr>
+          <tr><td>自进化管线</td><td class="xk">—</td><td class="xk">—</td><td class="xk">—</td><td class="xk">手动</td><td class="ours"><span class="ck">✓</span> 31+5 步，幂等 + 质量门</td></tr>
+          <tr><td>混合检索</td><td>云侧</td><td>需外接</td><td>云侧</td><td class="xk">grep</td><td class="ours"><span class="ck">✓</span> FTS5+vec0 RRF，本地 ONNX 重排</td></tr>
+          <tr><td>多 Agent 共享</td><td class="xk">—</td><td>同 Agent</td><td class="xk">—</td><td class="xk">—</td><td class="ours"><span class="ck">✓</span> 联邦 + 冲突检测 + 主动推送</td></tr>
+          <tr><td>协议</td><td>REST</td><td>REST/gRPC</td><td>REST</td><td class="xk">—</td><td class="ours">MCP 原生（stdio + HTTP）</td></tr>
+          <tr><td>本地优先</td><td class="xk">云端为主</td><td>PostgreSQL</td><td class="xk">云端</td><td><span class="ck">✓</span></td><td class="ours"><span class="ck">✓</span> SQLite 单文件，数据不出机</td></tr>
+          <tr><td>重排门槛</td><td class="xk">—</td><td class="xk">—</td><td class="xk">—</td><td class="xk">—</td><td class="ours">INT8 ONNX，无需 GPU/PyTorch</td></tr>
+          <tr><td>开源程度</td><td>部分</td><td>MIT</td><td>部分</td><td class="xk">—</td><td class="ours">MIT 全开源</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="quickstart">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">快速开始</span>
+      <h2>三行命令，从此不忘</h2>
+    </div>
+    <div class="steps">
+      <div class="step reveal"><div>
+        <h3>安装</h3>
+        <p>核心包轻量、不含 AI 模型；按需加 extras（<code>full</code> 含可视化与 FAISS，<code>rerank</code> 含 CrossEncoder）。</p>
+        <pre>pip install memall-os<button class="btn btn-sm copy" data-copy="pip install memall-os">复制</button></pre>
+      </div></div>
+      <div class="step reveal"><div>
+        <h3>初始化并启动</h3>
+        <p>自动建库（41 个迁移）、启动网关、注册 MCP、打开浏览器。网关监听 <code>127.0.0.1:9920</code>。</p>
+        <pre>memall quickstart     <span style="color:var(--fg-soft)"># 或 memall init &amp;&amp; memall start</span><button class="btn btn-sm copy" data-copy="memall quickstart">复制</button></pre>
+      </div></div>
+      <div class="step reveal"><div>
+        <h3>接入你的 Agent</h3>
+        <p>任意 MCP 客户端加一段配置（stdio），或直连 <code>POST http://127.0.0.1:9920/mcp</code>。</p>
+        <pre>{ "mcpServers": { "memall": { "command": "memall", "args": ["serve"] } } }<button class="btn btn-sm copy" data-copy='{"mcpServers":{"memall":{"command":"memall","args":["serve"]}}}'>复制</button></pre>
+      </div></div>
+      <div class="step reveal"><div>
+        <h3>开始记忆</h3>
+        <p>写入即进入管线；检索带回记忆、上下文、时间线与关联。</p>
+        <pre>/capture "决定用 SQLite 单文件：零依赖、可备份、隐私不出本机"
+/retrieve "存储选型"<button class="btn btn-sm copy" data-copy='/capture "…" && /retrieve "…"'>复制</button></pre>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+<section class="section section-alt" id="faq">
+  <div class="wrap" style="max-width:820px">
+    <div class="section-head reveal"><span class="eyebrow">FAQ</span><h2>几个诚实的回答</h2></div>
+    <div class="faq reveal">
+      <details><summary>数据存在哪里？会上传云端吗？</summary><div class="a">全部存在本地 <code>~/.memall/memall.db</code>（SQLite 单文件），网关只绑定 127.0.0.1，联邦仅在局域网配对后通信。注意：当前版本没有静态加密，请把机器本身当作信任边界。</div></details>
+      <details><summary>管线需要 LLM 或联网吗？</summary><div class="a">不需要。31 个步骤全部是确定性启发式（正则、SQL、Jaccard、TF-IDF），离线可跑、结果可复现。向量嵌入用本地小模型（bge-small-zh，512 维），重排默认本地 ONNX INT8；接大模型增强属于可选外挂。</div></details>
+      <details><summary>说好的"30 步管线""11 层"，代码里到底是多少？</summary><div class="a">以运行时 <code>list_pipeline_steps()</code> 为准：31 个核心 + 5 个可选；层级为 P0–P2 + L1–L11 共 14 级。MCP 是 7 个聚合端点、约 50 个 action——本站所有数字直接从源码核对。</div></details>
+      <details><summary>百万条记忆扛得住吗？</summary><div class="a">FTS5 与 vec0 都是索引化的；当前默认路径面向十万级优化，百万级建议启用 FAISS extra 并调低同步重排。仓库内有压测与基准脚本可复现。</div></details>
+      <details><summary>和 Mem0 / Letta 怎么共存？</summary><div class="a">它们可作为上层框架保留，MemALL 只做记忆底座：通过 MCP 对任意 Agent 暴露同一份记忆。规划的 MemPort 工具将支持从它们一次性迁移。</div></details>
+      <details><summary>什么规模算"够用"？</summary><div class="a">单 Agent 个人助手也值得装——一次 capture 换回的是以后每次检索的上下文；多 Agent 团队收益随共享记忆数近似线性增长。</div></details>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="scenes">
+  <div class="wrap">
+    <div class="section-head reveal"><span class="eyebrow">适用场景</span><h2>谁在用 MemALL</h2></div>
+    <div class="grid grid-3">
+      <div class="card reveal"><div class="icon">🤖</div><h3>多 Agent 系统</h3><p>为编码助手、研究 Agent、运维 Bot 提供跨会话持久记忆，MCP 三行接入，不改一行框架代码。</p></div>
+      <div class="card reveal"><div class="icon">🔁</div><h3>Loop Engineering</h3><p>补上 Loop 六要素中的 Memory 层：每轮循环的决策、反思、偏好自动沉淀，下轮直接检索复用。</p></div>
+      <div class="card reveal"><div class="icon">⚙️</div><h3>长时自动化 / RPA</h3><p>跨 Run 持久化任务状态与失败教训，TTL 遗忘与自适应清理防止知识库无限膨胀。</p></div>
+      <div class="card reveal"><div class="icon">🗂️</div><h3>企业知识资产</h3><p>Agent 交互过程变成可审计、可追溯的知识：谁决定的、依据什么、后来反思出什么。</p></div>
+      <div class="card reveal"><div class="icon">💬</div><h3>Agent 协作决策</h3><p>多 Agent 讨论自动推进收敛，共识 capture 为决策记忆，跨 Agent 冲突自动检测留痕。</p></div>
+      <div class="card reveal"><div class="icon">🔬</div><h3>个人第二大脑</h3><p>配合 Obsidian 同步与导出工具，把与 AI 的共创沉淀为长期个人知识。</p></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-inner">
+    <span>MemALL · Multi-agent Memory OS — MIT License · Python ≥ 3.10 · Windows / macOS / Linux</span>
+    <span><a href="https://github.com/j19800/MemALL" target="_blank" rel="noopener">GitHub</a> · <a href="dashboard.html">数据看板</a> · <a href="#demo">在线演示</a></span>
+  </div>
+</footer>
+
+<script type="module" src="assets/landing.js"></script>
+</body>
+</html>

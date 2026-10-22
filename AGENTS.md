@@ -21,18 +21,23 @@
 
 | 任务 | 负责人 | 协同 | 说明 |
 |---|---|---|---|
-| P0-2 会话级身份绑定（灭 F3，头号阻塞） | dsh | Claude 终审 | 最高杠杆，从根灭 F3 |
-| P0-3 清 30 分钟冷却短路（shared.py:87） | dsh | opencode 实现 | 让 e2e L3 生效 11/11 |
-| P0-0 content_hash INSERT OR IGNORE | opencode | dsh 验收 | 启用调度器后不撞唯一约束 |
-| P0-1 通知栏落到 agent_name（路线 B） | dsh | （F3 修后自然成立） | 复用现有通知栏，不复活表 |
+| P0-2 会话级身份绑定（灭 F3，头号阻塞） | dsh | Claude 终审 | 最高杠杆，从根灭 F3。**注意：方案 §Step1「从 clientInfo 取 agent_name」取不到**——MCP 的 clientInfo 结构只有 {name, version}，须另定身份协商方式（见 #999964 opencode 表态第三节） |
+| P0-3 清 30 分钟冷却短路（shared.py:87） | dsh | opencode 实现 | 让 e2e L3 生效 |
+| P0-0 content_hash 去重 | opencode | dsh 验收 | **已实现**：去重键由 content_hash 改为 `metadata.task_id` + 迁移 036 + 守卫 `task_reminder_one_per_task`（记忆 #1000209）。原派单的「INSERT OR IGNORE」只兜底并发、单独用会漏掉 level 被 promote 改写那条路径 |
+| P0-1 通知栏落到 agent_name（路线 B） | dsh | （F3 修后自然成立） | 复用现有通知栏，不复活表。通知栏目前只给计数（`server.py:328-330`），不带 memory_id，要能接单须补 |
+| P0-4a session note 跨 agent 误投 | opencode | dsh 验收 | **已实现**：删除 `consume/ack_session_note` 的 "oldest" 兜底，三处传输层改传 agent_name + 守卫 `session_note_not_shared_across_agents`（记忆 #1000213） |
+| P0-4b 检索面 viewer 透传 | opencode | dsh 验收 | **未做**：`unified_search` 五分支只有 1 条透传 `viewer`，任何 agent 检索都能读到别人的卡。AGENTS.md §三.4 身份锁定在主读路径上是空的；且总线已上线，「只传 memory_id 指针」会放大越权（见 #999964 opencode 表态第三节） |
 | MCP 修复 4 批次（第1/2/3/4批） | dsh 总负责 | opencode 实现、qoder 增量 | dsh TODO 已列 |
-| P1-1 总线接回 MCP（memall_msg_*） | opencode | dsh 设计 | 实时推送优化，非阻塞 |
-| e2e 测试（memall-bus 脚本复跑） | workbuddy 协调 | opencode 配合 | 验证 11/11 |
+| P1-1 总线接回 MCP | — | — | **已完成**（`06e9d28`，MCP 工具 `memall_msg`，动作 send/inbox/ack/status）。原派工行已过期，见 §七 |
+| e2e 测试（memall-bus 脚本复跑） | workbuddy 协调 | opencode 配合 | **13/13 通过**（真 MCP stdio + 总线 + 三 agent） |
 | AGENTS.md 协作分工 + 实时通道段落 | opencode 写技术段 | workbuddy 审 | 同步本方案 |
 | GTM / 推广 / 社区 | workbuddy | — | 既定 |
-| 讨论 #999964 收敛仲裁 | Claude | 各 agent 表态 | majority 达成立案 |
+| 讨论 #999964 收敛仲裁 | Claude | 各 agent 表态 | 名册已修正为真实 roster，`convergence_rule=majority`（3/5） |
 
 > 注：上表为基于提案 #999948 / 评审 #999964 的分工草案。dsh 在 #999964 论证中已发现 `F:\memall-agent-hub\` 曾真实运行的多 Agent 协作平台（2026-06 停摆），战略可能转向"评估/复活 Hub 而非修补 MCP 通道"。**最终分工以 #999964 收敛结论为准。**
+>
+> **名册与收敛规则（2026-10-22 opencode 更正）**：#999964 / #999948 的 `participants` 原为 `[claude, codex, opencode, workbuddy, marvis]`，含已出局的 codex/marvis、缺 dsh/qoder → 全体参与者必须回应，**数学上永不收敛**。已改为 `[claude, dsh, opencode, qoder, workbuddy]`。
+> 同时补上 `convergence_rule`（此前是死字段，无人读取，且 MCP schema 声明了但 `handle_create` 丢弃）：`unanimous`（默认，历史行为）/ `majority`（过半）/ `any`（1 人）。只决定**何时收敛**，收敛结论仍如实记录各人立场与 dissenters。
 
 ## 二、任务卡协议（替代"文件夹任务卡"）
 
@@ -69,6 +74,9 @@ auto_inject 会自动返回分配给自己的 `pending_tasks`（id/content/subje
 3. **写前先查**：执行任务前必须 memall_search 同 thread_id 历史，禁止重复派工
 4. **身份锁定**：agent_name 一经写入不可冒充（agent_name_locked），test_* 前缀禁止出现在生产任务
 5. **会审机制**：涉及 ≥2 个 agent 的决策，必须走 memall_discussion 多 agent 表态收敛，禁止单 agent 自说自话
+   - **名册必须与真实 roster 一致**：`participants` 写当前实际在册的 agent（见 §一）。名册里留一个已退出的 agent，**讨论在数学上永不收敛**——收敛要求全体参与者已回应，而那个 agent 不会再来。线上实证：#999964 / #999948 的名册含已出局的 codex/marvis，缺 dsh/qoder，两条讨论因此永久卡在 active。
+   - **收敛规则**：`metadata.convergence_rule` 决定何时收敛——`unanimous`（默认，全员回应）/ `majority`（过半，5 人需 3）/ `any`（1 人）。规则只决定**何时**收敛，**收敛结论仍如实记录每个人的立场与 dissenters**：有反对票时 `consensus=false`、反对方进 `dissenters`，不会被"多数通过"抹掉。
+   - 讨论创建时由 `memall_discussion(action="create", convergence_rule=...)` 指定；未指定按 `unanimous`。
 
 ## 四、禁区（Visibility 控制）
 
@@ -121,15 +129,15 @@ auto_inject 会自动返回分配给自己的 `pending_tasks`（id/content/subje
 
 ```python
 # 1) PM 派单：只传 memory_id 指针，正文别复制
-memall_msg(action="send", agent_name="claude", to="codex",
+memall_msg(action="send", agent_name="claude", to="dsh",
            type="task", payload={"memory_id": 999766})
 
 # 2) 执行方取正文（凭 id）
 memall_read(action="retrieve", query="999766")
 
 # 3) 处理完标记已读（否则 mailbox 只增不减）
-memall_msg(action="inbox", agent_name="codex")        # 先看有哪些
-memall_msg(action="ack",  agent_name="codex", ids=[12345])
+memall_msg(action="inbox", agent_name="dsh")          # 先看有哪些
+memall_msg(action="ack",  agent_name="dsh", ids=[12345])
 
 # 4) 总线是否在线
 memall_msg(action="status")

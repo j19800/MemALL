@@ -953,7 +953,7 @@ def _serve_with_watch() -> None:
             pass
 
 
-def cmd_start(args):
+def cmd_start_gateway(args):
     """Start Gateway (HTTP + MCP) on port 9920. Keep running until Ctrl+C."""
     import time
     from memall.gateway import MemAllGateway
@@ -1437,4 +1437,4 @@ def cmd_quickstart(args):
     cmd_setup(setup_args)
 
     # 3) 启动 Gateway（阻塞运行，Ctrl+C 停止）
-    cmd_start(args)
+    cmd_start_gateway(args)
