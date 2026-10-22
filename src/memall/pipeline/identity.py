@@ -11,6 +11,7 @@ import re
 from datetime import datetime, timezone
 from collections import defaultdict
 from memall.core.db import get_conn
+from memall.core.pins import is_field_pinned
 
 # L1 identity signals: self-description, role, skill, habit
 _L1_PATTERNS = [
@@ -52,7 +53,8 @@ def identity_step() -> dict:
     try:
         now = datetime.now(timezone.utc).isoformat()
         rows = conn.execute(
-            "SELECT id, content, agent_name, level FROM memories WHERE COALESCE(memory_status, '') != 'archived' AND LENGTH(TRIM(content)) > 20 ORDER BY id"
+            "SELECT id, content, agent_name, level, metadata FROM memories "
+            "WHERE COALESCE(memory_status, '') != 'archived' AND LENGTH(TRIM(content)) > 20 ORDER BY id"
         ).fetchall()
 
         # Per-agent trait accumulation
@@ -70,6 +72,31 @@ def identity_step() -> dict:
                 agent_traits[agent]["memory_ids"].append(r["id"])
 
                 # Upgrade existing memory to L1 or L7 if not already terminal
+                #
+                # This step is a KEYWORD CLASSIFIER — the same class as
+                # classify_step and reflect_step — so it must honour the
+                # caller's explicit level.  It did not: a row whose level the
+                # caller pinned was relabelled anyway, because the guard was
+                # a hardcoded list of "terminal" levels that left P2/L1/L2
+                # unprotected.  Concretely: every discussion_response (written
+                # at P2) whose text happened to contain a first-person
+                # preference phrase ("我建议…", "我觉得更好…") was demoted to
+                # L1 — mislabelling a discussion reply as an identity signal
+                # and feeding that text into the agent's persona traits.
+                #
+                # memall.core.pins.is_field_pinned is the single contract
+                # for "the caller chose this level"; classify.py and
+                # reflect_step already consult it.  This was the third path
+                # that did not.
+                try:
+                    meta = json.loads(r["metadata"]) if r["metadata"] else {}
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+                if not isinstance(meta, dict):
+                    meta = {}
+                if is_field_pinned(meta, "level"):
+                    continue
+
                 if l1_matches and r["level"] not in ("L3", "L4", "L5", "L6", "L9", "L10", "L11"):
                     conn.execute("UPDATE memories SET level = 'L1', updated_at = ? WHERE id = ?", (now, r["id"]))
                 elif l7_matches and not l1_matches and r["level"] not in ("L3", "L4", "L5", "L6", "L9", "L10", "L11"):
