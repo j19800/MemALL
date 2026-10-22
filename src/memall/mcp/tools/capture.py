@@ -12,8 +12,15 @@ from memall.core.thin_waist import capture as do_capture
 _CAPTURE_FIELDS = (
     "content", "level", "owner", "agent_name", "creator", "subject",
     "project", "category", "stream", "summary", "occurred_at", "supersedes",
-    "confidence", "visibility", "metadata", "tags", "thread_id", "source_ids",
+    "confidence", "visibility", "metadata", "tags", "thread_id",
 )
+
+# ``source_ids`` was listed here but nothing persists it: the memories table
+# has no such column, capture()'s INSERT does not write it, and it is not in
+# ``_ALLOWED_UPDATE_FIELDS``.  It was therefore a field that looked supported
+# and silently did nothing.  Provenance edges are created with
+# ``memall_write action=connect`` instead, so this one is dropped from the
+# capture path and now reported as ignored rather than accepted-and-lost.
 
 
 def handle(arguments: dict) -> str:
@@ -35,6 +42,13 @@ def handle(arguments: dict) -> str:
     extra = arguments.get("__extra_args__") or {}
     ignored = sorted(set(extra) | (set(arguments) - set(_CAPTURE_FIELDS)
                                     - {"action", "__extra_args__"}))
+    # core.models.MemoryInput stores tags / supersedes as JSON *strings*
+    # (the DB columns are TEXT and sqlite3 cannot bind a list).  The MCP
+    # schema advertises tags as array<string>, so normalise here instead of
+    # letting a list reach the INSERT.
+    for _k in ("tags", "supersedes"):
+        if isinstance(payload.get(_k), (list, tuple)):
+            payload[_k] = json.dumps(list(payload[_k]), ensure_ascii=False)
     inp = MemoryInput(**payload)
 
     try:

@@ -204,6 +204,69 @@ _inject_cache: dict[str, dict] = {}
 _INJECT_CACHE_TTL = 300  # seconds
 
 
+def _pending_l5_for(conn, agent_name: str) -> tuple:
+    """Return (pending_tasks, l5_active_global) for an agent.
+
+    Kept separate from auto_inject so the cache-hit path can refresh just
+    this part.  See the cache comment below for why it must not be cached.
+    """
+    pending_tasks = []
+    l5_active_global = []
+    try:
+        rows = conn.execute(
+            "SELECT id, content, summary, subject, metadata, category, level, created_at "
+            "FROM memories "
+            "WHERE level = 'L5' AND LOWER(agent_name) = LOWER(?) "
+            "AND LENGTH(TRIM(content)) > 5 "
+            "ORDER BY created_at DESC LIMIT 20",
+            (agent_name,),
+        ).fetchall()
+        seen_subs = set()
+        for r in rows:
+            meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else r["metadata"]
+            if not isinstance(meta, dict):
+                meta = {}
+            status = meta.get("status") or "active"
+            if status != "active":
+                continue
+            if r["category"] == "task":
+                pending_tasks.append({
+                    "id": r["id"],
+                    "content": r["content"],
+                    "subject": r["subject"],
+                    "created_at": r["created_at"],
+                })
+            subj_key = (r["subject"] or "")[:40]
+            if subj_key in seen_subs:
+                continue
+            seen_subs.add(subj_key)
+            l5_active_global.append({
+                "id": r["id"],
+                "subject": r["subject"],
+                "summary": r["summary"] or r["content"][:200],
+                "assignee": meta.get("assignee", ""),
+                "depends_on": meta.get("depends_on", []),
+                "level_tag": {"P0": "(P0)", "P1": "(P1)", "P2": "(P2)"}.get(r["level"] or "", ""),
+                "created_at": r["created_at"],
+            })
+    except Exception:
+        logger.warning("auto_inject l5_tasks failed", exc_info=True)
+    return pending_tasks, l5_active_global
+
+
+def invalidate_inject_cache(agent_name: str = "") -> int:
+    """Drop the cached auto_inject payload (one agent, or all).
+
+    Call this after a write that changes an agent's task state, so the next
+    session_start does not hand back a stale task list.
+    """
+    if not agent_name:
+        n = len(_inject_cache)
+        _inject_cache.clear()
+        return n
+    return 1 if _inject_cache.pop(agent_name, None) is not None else 0
+
+
 def auto_inject(agent_name: str) -> dict:
     """Auto-inject Agent Profile + evolutionary context for session_start.
 
@@ -215,7 +278,34 @@ def auto_inject(agent_name: str) -> dict:
     now = datetime.now(timezone.utc)
     cached = _inject_cache.get(agent_name)
     if cached and (now - cached["cached_at"]).total_seconds() < _INJECT_CACHE_TTL:
-        return cached["data"]
+        # The cache exists to skip the expensive persona/distillation work,
+        # NOT to freeze the task list.  Serving a cached `pending_tasks` meant
+        # that a task card created or completed moments earlier was invisible
+        # for up to _INJECT_CACHE_TTL seconds: the agent kept seeing a
+        # finished task in its queue, and a freshly dispatched card never
+        # appeared at all.
+        #
+        # Two separate defects produced that (audit #999869):
+        #   1. handle_call runs ensure_session_started(agent, auto_inject=True)
+        #      BEFORE the tool, so the cache was populated with the task list
+        #      as it was *before* the capture that followed it.
+        #   2. nothing invalidated the cache when the task state changed.
+        #
+        # Fix: refresh the task list on every hit (one indexed query) and
+        # patch it into the cached payload.  The expensive parts stay cached.
+        try:
+            conn = get_conn()
+            try:
+                pending_tasks, l5_active_global = _pending_l5_for(conn, agent_name)
+            finally:
+                conn.close()
+            data = cached["data"]
+            data["pending_tasks"] = pending_tasks
+            data["l5_active_global"] = l5_active_global
+            return data
+        except Exception:
+            logger.warning("auto_inject cache refresh failed", exc_info=True)
+            return cached["data"]
 
     conn = get_conn()
     try:
@@ -335,47 +425,7 @@ def auto_inject(agent_name: str) -> dict:
         # category='task' only) and ``l5_active_global`` (id/subject/summary/
         # assignee/depends_on, any category, subject-deduplicated).  They used
         # to be two separate queries over the same rows.
-        pending_tasks = []
-        l5_active_global = []
-        try:
-            rows = conn.execute(
-                "SELECT id, content, summary, subject, metadata, category, level, created_at "
-                "FROM memories "
-                "WHERE level = 'L5' AND LOWER(agent_name) = LOWER(?) "
-                "AND LENGTH(TRIM(content)) > 5 "
-                "ORDER BY created_at DESC LIMIT 20",
-                (agent_name,),
-            ).fetchall()
-            seen_subs = set()
-            for r in rows:
-                meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else r["metadata"]
-                if not isinstance(meta, dict):
-                    meta = {}
-                status = meta.get("status") or "active"
-                if status != "active":
-                    continue
-                if r["category"] == "task":
-                    pending_tasks.append({
-                        "id": r["id"],
-                        "content": r["content"],
-                        "subject": r["subject"],
-                        "created_at": r["created_at"],
-                    })
-                subj_key = (r["subject"] or "")[:40]
-                if subj_key in seen_subs:
-                    continue
-                seen_subs.add(subj_key)
-                l5_active_global.append({
-                    "id": r["id"],
-                    "subject": r["subject"],
-                    "summary": r["summary"] or r["content"][:200],
-                    "assignee": meta.get("assignee", ""),
-                    "depends_on": meta.get("depends_on", []),
-                    "level_tag": {"P0": "(P0)", "P1": "(P1)", "P2": "(P2)"}.get(r["level"] or "", ""),
-                    "created_at": r["created_at"],
-                })
-        except Exception:
-            logger.warning("auto_inject l5_tasks failed", exc_info=True)
+        pending_tasks, l5_active_global = _pending_l5_for(conn, agent_name)
 
         # ── 6. Pending discussions for this agent ──
         pending_discussions = []

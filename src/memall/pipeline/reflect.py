@@ -16,7 +16,7 @@ def reflect_step() -> dict:
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT id, content, summary, agent_name, category, created_at, level FROM memories "
+            "SELECT id, content, summary, agent_name, category, created_at, level, metadata FROM memories "
             "WHERE level NOT IN ('L6', 'L7', 'L9', 'L11') AND stream = 'knowledge' "
             "AND LENGTH(TRIM(content)) > 10 "
             # Archived rows are soft-deleted — not material to reflect on.
@@ -25,6 +25,7 @@ def reflect_step() -> dict:
         ).fetchall()
         now = datetime.now(timezone.utc).isoformat()
         upgraded = 0
+        skipped_pinned = 0
         upgraded_ids = []
 
         # Cold-start: skip agents with < 50 total memories (长期 第7点)
@@ -40,7 +41,7 @@ def reflect_step() -> dict:
                     cold_start_agents.add(r["ag"])
         rows = [r for r in rows if (r["agent_name"] or "").lower() not in cold_start_agents]
         if not rows:
-            return {"upgraded_to_l6": 0, "scanned": 0, "positive_triggers": 0, "aggregated_groups": 0, "cold_skipped": len(cold_start_agents)}
+            return {"upgraded_to_l6": 0, "scanned": 0, "positive_triggers": 0, "aggregated_groups": 0, "cold_skipped": len(cold_start_agents), "skipped_pinned": 0}
 
         # Pre-compute agent focus areas (第三刀 第12点)
         focus_map = {}
@@ -48,6 +49,19 @@ def reflect_step() -> dict:
             ag = r["agent_name"] or ""
             if ag and ag not in focus_map:
                 focus_map[ag] = _agent_reflection_focus(conn, ag)
+
+        # The caller's explicit classification is a contract, not a hint:
+        # memall/core/pins.py records it in metadata.pinned_fields and both
+        # classifier paths (classify_step, event_processor._inline_classify)
+        # honour it.  reflect_step is a THIRD path that used to change level
+        # without checking — which erased the pin itself (it replaced the whole
+        # metadata column), so the protection survived exactly one pipeline
+        # cycle.  Audit P0: reflect.py:97 replaced metadata with a fresh
+        # {"l6_source", "quality"} dict, destroying every caller key
+        # (including metadata.status, which is what notify_pending_tasks
+        # selects on — so any L5 task row it touched vanished from the task
+        # chain).
+        from memall.core.pins import is_field_pinned
 
         for r in rows:
             text = (r["summary"] or "") + " " + (r["content"] or "")
@@ -86,6 +100,10 @@ def reflect_step() -> dict:
                 quality = "low"
 
             # First-person tone (第二刀 第5点)
+            # NOTE: `ag` must come from THIS row — it used to leak from the
+            # focus-map loop above, so every row got the last agent's focus
+            # tag.
+            ag = r["agent_name"] or ""
             agent_focus = focus_map.get(ag, "")
             focus_tag = f" {agent_focus}" if agent_focus else ""
             if is_correction:
@@ -93,9 +111,25 @@ def reflect_step() -> dict:
             else:
                 new_summary = f"[L6 反思{focus_tag}] 我注意到有个做法效果不错：{context_snippet[:150]}"
 
-            meta = {"l6_source": "reflect_step", "quality": quality}
+            # Merge into the existing metadata — never replace it.  Replacing
+            # the column is what erased pinned_fields, metadata.status and
+            # every caller-supplied key (audit P0).
+            try:
+                merged = json.loads(r["metadata"]) if r["metadata"] else {}
+            except (json.JSONDecodeError, TypeError):
+                merged = {}
+            if not isinstance(merged, dict):
+                merged = {}
+            merged["l6_source"] = "reflect_step"
+            merged["quality"] = quality
+
+            if is_field_pinned(merged, "level"):
+                # The caller chose this level explicitly; leave the row alone.
+                skipped_pinned += 1
+                continue
+
             conn.execute("UPDATE memories SET level='L6', summary=?, metadata=?, updated_at=? WHERE id=?",
-                         (new_summary, json.dumps(meta), now, r["id"]))
+                         (new_summary, json.dumps(merged, ensure_ascii=False), now, r["id"]))
             upgraded += 1
             upgraded_ids.append((r["id"], r["agent_name"] or "", r["category"] or "", r["created_at"] or ""))
 
@@ -113,6 +147,8 @@ def reflect_step() -> dict:
             "scanned": len(rows),
             "positive_triggers": positive_count,
             "aggregated_groups": aggregated,
+            # Rows whose level the caller pinned: left untouched on purpose.
+            "skipped_pinned": skipped_pinned,
         }
     finally:
         conn.close()

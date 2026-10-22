@@ -18,6 +18,35 @@ class CaptureInput(BaseModel):
     # Thread linking: MemoryInput supports thread_id but the validator used to
     # drop it silently, breaking reply-threading through the MCP surface.
     thread_id: Optional[int] = Field(None, ge=1)
+    # ── Fields the MCP schema advertises / capture.py supports but this model
+    # did not declare ─────────────────────────────────────────────────────
+    # Pydantic v2 drops undeclared fields (extra='ignore'), and
+    # validator.py then hands the handler only the validated subset.  These
+    # seven reached neither the handler nor the store: a client that passed
+    # `tags` — which the memall_write schema DOES advertise as
+    # array<string> — got it silently discarded, and the caller's tags were
+    # replaced by auto-derived keywords (so exact-tag search filters never
+    # matched MCP-written memories).
+    #
+    # This is the write-side twin of the read-side defect fixed in 203f03a
+    # (VectorSearchInput/UnifiedSearchInput did not declare `project`, so the
+    # validator stripped it and the MCP filters never applied).  That fix's
+    # acceptance check only verified that dropped fields were *reported* —
+    # not that supported fields *worked*.
+    #
+    # `visibility` is safe to expose: core/thin_waist._get_allowed_write_
+    # visibility clamps it to the agent's allowed write level (one stricter
+    # than its read level) for non-human agents.
+    creator: Optional[str] = Field(None, max_length=200)
+    confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
+    visibility: Optional[str] = Field(
+        None, pattern=r"^(public|shared|family|trusted|private)$")
+    stream: Optional[str] = Field(None, max_length=50)
+    occurred_at: Optional[str] = Field(None, max_length=64)
+    supersedes: Optional[Union[str, List[int]]] = Field(
+        None, description="JSON string or list of superseded memory ids")
+    tags: Optional[Union[str, List[str]]] = Field(
+        None, description="JSON string or list of tags")
 
 
 class QuickCaptureInput(BaseModel):

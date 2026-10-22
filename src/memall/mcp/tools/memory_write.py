@@ -146,4 +146,21 @@ def handle_update(arguments: dict) -> str:
               if k not in ("memory_id", "agent_name", "confirm", "dry_run")
               and v is not None}
     ok = update(mem_id, **fields)
+    if ok and "metadata" in fields:
+        # A task card that just changed state must not stay in the agent's
+        # cached view (auto_inject caches per agent for 300s).  The cache-hit
+        # path already refreshes the task list, but dropping the whole entry
+        # also rebuilds the counts shown in the injected context.
+        try:
+            from memall.mcp.federation_tools import invalidate_inject_cache
+            conn = get_conn()
+            try:
+                row = conn.execute(
+                    "SELECT agent_name FROM memories WHERE id = ?", (mem_id,)).fetchone()
+            finally:
+                conn.close()
+            if row and row["agent_name"]:
+                invalidate_inject_cache(row["agent_name"])
+        except Exception:
+            pass
     return json.dumps({"memory_id": mem_id, "updated": ok, "fields": list(fields.keys())})

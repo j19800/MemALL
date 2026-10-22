@@ -109,6 +109,15 @@ registry.register(ToolDef(
         "confirm": {"type": "boolean", "description": "Required to execute destructive ops (forget expired/low_value/all, ops merge/split/dedup/archive)"},
         "dry_run": {"type": "boolean", "description": "Preview-only pass for ops archive/dedup"},
         "tags": {"type": "array", "items": {"type": "string"}},
+        # ── capture 支持、此前既未声明也未上报的字段 ──
+        # 客户端照 schema 传了也不会生效（校验器在 handler 前剥离），
+        # 与 203f03a 修的读侧 project 缺陷同源。
+        "creator": {"type": "string", "description": "Who created this memory (provenance)"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "visibility": {"type": "string", "enum": ["public", "shared", "family", "trusted", "private"], "description": "Access level; non-human agents are clamped to their allowed write level"},
+        "stream": {"type": "string", "description": "knowledge (default) or ledger"},
+        "occurred_at": {"type": "string", "description": "Event time (ISO 8601); defaults to now"},
+        "supersedes": {"type": "array", "items": {"type": "integer"}, "description": "Ids of memories this one supersedes"},
         "dedup_threshold": {"type": "number"},
         "items": {"type": "array", "description": "Items for store_batch and batch_capture"},
         "delimiter": {"type": "string"},

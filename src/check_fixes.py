@@ -1219,6 +1219,192 @@ def guard_lazy_tools_always_loadable() -> Tuple[bool, str]:
     return ok, f"tools={n} offenders={offenders or 'none'}"
 
 
+def guard_reflect_merges_metadata() -> Tuple[bool, str]:
+    """reflect_step must MERGE into metadata, never replace the column.
+
+    Was: reflect.py wrote a fresh {"l6_source", "quality"} dict over the whole
+    column, erasing metadata.pinned_fields, metadata.status and every
+    caller-supplied key.  metadata.status is what notify_pending_tasks()
+    selects on, so any L5 task row reflect touched vanished from the task
+    chain — and the pin protection (audit P1-16) survived exactly one
+    pipeline cycle before erasing itself.
+    """
+    _fresh_db()
+    from memall.core.db import init_db, get_conn
+    from memall.core.thin_waist import capture
+    from memall.pipeline.reflect import reflect_step
+
+    init_db()
+    # reflect skips agents with < 20 memories (cold start), so pad first.
+    for i in range(21):
+        capture(f"填充用的普通记忆 {i}，内容足够长以便通过长度门槛，这里不含任何触发词。",
+                level="P2", category="general", project="g", agent_name="guard",
+                owner="老陈")
+    # No `level` argument on purpose: capture() records "level" as an explicit
+    # choice whenever the caller passes it at all (even the default "P2"),
+    # so passing it would pin the level and reflect would — rightly — skip
+    # the row, leaving the merge path untested.  category="decision" is a
+    # contract category, so only the category is pinned.
+    mid = capture("这里需要修正一下，之前写的实现有偏差，所以重新确认一遍结论。",
+                  category="decision", project="g", agent_name="guard",
+                  owner="老陈",
+                  metadata=json.dumps({"my_custom_key": "keep-me", "status": "active"}))
+    conn = get_conn()
+    row = conn.execute("SELECT metadata, level FROM memories WHERE id=?", (mid,)).fetchone()
+    conn.close()
+    before = json.loads(row["metadata"] or "{}")
+    if "pinned_fields" in before and "level" in before["pinned_fields"]:
+        return False, f"precondition failed: level unexpectedly pinned: {before}"
+
+    reflect_step()
+
+    conn = get_conn()
+    row = conn.execute("SELECT metadata, level FROM memories WHERE id=?", (mid,)).fetchone()
+    conn.close()
+    md = json.loads(row["metadata"] or "{}")
+    kept = (md.get("my_custom_key") == "keep-me"
+            and md.get("status") == "active"
+            and md.get("pinned_fields") == before.get("pinned_fields")
+            and md.get("l6_source") == "reflect_step"
+            and md.get("quality") is not None)
+    return kept, f"after reflect: level={row['level']} metadata={md}"
+
+
+def guard_reflect_honours_level_pin() -> Tuple[bool, str]:
+    """reflect_step must not relabel a row whose level the caller pinned.
+
+    Was: reflect changed level to L6 without checking
+    memall.core.pins.is_field_pinned — the third path that writes level,
+    after classify_step and event_processor._inline_classify, which both
+    honour the pin.
+    """
+    _fresh_db()
+    from memall.core.db import init_db, get_conn
+    from memall.core.thin_waist import capture
+    from memall.pipeline.reflect import reflect_step
+
+    init_db()
+    for i in range(21):
+        capture(f"填充用的普通记忆 {i}，内容足够长以便通过长度门槛，这里不含任何触发词。",
+                level="P2", category="general", project="g", agent_name="guard",
+                owner="老陈")
+    mid = capture("这里需要修正一下，之前写的实现有偏差，所以重新确认一遍结论。",
+                  level="L4", category="decision", project="g", agent_name="guard",
+                  owner="老陈")
+    conn = get_conn()
+    conn.execute("UPDATE memories SET metadata=? WHERE id=?",
+                 (json.dumps({"pinned_fields": ["category", "level"]}), mid))
+    conn.commit()
+    conn.close()
+
+    result = reflect_step()
+
+    conn = get_conn()
+    row = conn.execute("SELECT level, metadata FROM memories WHERE id=?", (mid,)).fetchone()
+    conn.close()
+    md = json.loads(row["metadata"] or "{}")
+    ok = row["level"] == "L4" and md.get("pinned_fields") == ["category", "level"]
+    return ok, (f"after reflect: level={row['level']} (expect L4), "
+                f"skipped_pinned={result.get('skipped_pinned')}")
+
+
+def guard_capture_declares_supported_fields() -> Tuple[bool, str]:
+    """CaptureInput must declare every field capture.py supports.
+
+    Pydantic v2 drops undeclared fields and validator.py hands the handler
+    only the validated subset, so a field the MCP schema advertises but the
+    model omits silently never reaches the store.  `tags` was the loudest
+    case: the schema advertises it as array<string>, and a caller that set
+    it got auto-derived keywords instead.
+    """
+    from memall.mcp.models import CaptureInput
+    from memall.mcp.tools.capture import _CAPTURE_FIELDS
+
+    declared = set(CaptureInput.model_fields.keys())
+    wanted = set(_CAPTURE_FIELDS) - {"action"}
+    missing = sorted(wanted - declared)
+    return not missing, (f"declared={len(declared)} supported={len(wanted)} "
+                         f"missing={missing or 'none'}")
+
+
+def guard_capture_tags_survive_validator() -> Tuple[bool, str]:
+    """A caller-supplied tag must reach the store through the MCP validator.
+
+    Was: the validator stripped `tags` before the handler ran, so the
+    caller's tags were replaced by auto-derived keywords — which also made
+    memall_read's exact-tag filter useless for MCP-written memories.
+    """
+    _fresh_db()
+    from memall.core.db import init_db, get_conn
+    from memall.mcp.validator import validate_tool_input
+    from memall.mcp.tools.capture import handle
+
+    init_db()
+    marker = "zzqxtag"
+    args = {"action": "capture", "content": "一条用于验证标签能否穿过校验器的记忆正文。",
+            "level": "L4", "category": "decision", "agent_name": "guard",
+            "project": "g", "tags": [marker]}
+    ok_valid, validated, err = validate_tool_input("memall_write", args)
+    if not ok_valid:
+        return False, f"validation failed: {err}"
+    raw = handle(validated)
+    payload = json.loads(raw)
+    if not payload.get("id"):
+        return False, f"capture rejected: {raw[:120]}"
+    conn = get_conn()
+    row = conn.execute("SELECT tags FROM memories WHERE id=?", (payload["id"],)).fetchone()
+    conn.close()
+    stored = json.loads(row["tags"] or "[]")
+    ok = marker in stored
+    return ok, f"stored tags={stored} (expect {marker!r} present)"
+
+
+def guard_inject_cache_refreshes_tasks() -> Tuple[bool, str]:
+    """auto_inject's cache must never serve a stale task list.
+
+    Was: the cache was keyed by agent with a 300s TTL and no invalidation,
+    so a task card created or completed moments earlier was invisible for up
+    to five minutes.  Worse, handle_call runs ensure_session_started
+    (auto_inject) BEFORE the tool, so the cache was warmed with the task
+    list as it was *before* the capture that followed it — the agent could
+    never see a freshly dispatched card.
+    """
+    _fresh_db()
+    from memall.core.db import init_db, get_conn
+    from memall.core.thin_waist import capture
+    from memall.mcp.federation_tools import auto_inject, invalidate_inject_cache
+
+    init_db()
+    # Warm the cache with an empty task list, exactly like handle_call does
+    # before dispatching the tool.
+    auto_inject("guard")
+    invalidate_inject_cache("guard")
+    auto_inject("guard")
+
+    mid = capture("一张刚建的任务卡，用于验证缓存是否会把它藏起来。",
+                  level="L5", category="task", project="g", agent_name="guard",
+                  owner="老陈", metadata=json.dumps({"status": "active"}))
+    conn = get_conn()
+    conn.execute("UPDATE memories SET metadata=? WHERE id=?",
+                 (json.dumps({"status": "active"}), mid))
+    conn.commit()
+    conn.close()
+
+    injected = auto_inject("guard")
+    pending = injected.get("pending_tasks", [])
+    seen = any(t.get("id") == mid for t in pending)
+
+    # And the other direction: a completed task must disappear immediately.
+    from memall.core.thin_waist import update
+    update(mid, metadata=json.dumps({"status": "done"}))
+    injected2 = auto_inject("guard")
+    still = any(t.get("id") == mid for t in injected2.get("pending_tasks", []))
+
+    ok = seen and not still
+    return ok, (f"新卡可见={seen} (expect True), 完成后仍列={still} (expect False), "
+                f"pending={len(pending)}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -1254,6 +1440,11 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "access_count_means_reads": guard_access_count_means_reads,
     "batch_search_is_semantic": guard_batch_search_is_semantic,
     "capture_ignores_foreign_fields": guard_capture_ignores_foreign_fields,
+    "reflect_merges_metadata": guard_reflect_merges_metadata,
+    "reflect_honours_level_pin": guard_reflect_honours_level_pin,
+    "capture_declares_supported_fields": guard_capture_declares_supported_fields,
+    "capture_tags_survive_validator": guard_capture_tags_survive_validator,
+    "inject_cache_refreshes_tasks": guard_inject_cache_refreshes_tasks,
     "session_cooldown_persisted": guard_session_cooldown_persisted,
     "session_note_acknowledged": guard_session_note_acknowledged,
     "fallback_produces_self_evolution": guard_fallback_produces_self_evolution,
