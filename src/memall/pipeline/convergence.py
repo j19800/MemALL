@@ -20,6 +20,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 
 from memall.core.db import get_conn
+from memall.core.status import pending_tasks
 from memall.pipeline.util import _smart_subject
 from memall.core.utils import now_iso, unwrap
 
@@ -137,6 +138,16 @@ def create_discussion(
         meta = json.dumps(
             {
                 "status": "active",
+                # A discussion is an L5 CONTRACT object: respond_discussion()
+                # looks it up as level='L5' AND category='discussion'.  The
+                # keyword classifier could rewrite that level (a long review
+                # body matches L6 markers), after which the lookup failed and
+                # the 会审 could never converge — observed on #999964, which
+                # turned into L6/conflict hours after creation while the
+                # original #999948 stayed L5.  Pin both fields so the
+                # capture-time pinning protects discussions exactly like task
+                # cards.
+                "pinned_fields": ["category", "level"],
                 "participants": participants_list,
                 "suggested_participants": suggested_participants,
                 "options": options or [],
@@ -266,7 +277,7 @@ def list_active_discussions() -> list[dict]:
         rows = conn.execute(
             "SELECT id, subject, content, metadata, created_at FROM memories "
             "WHERE level='L5' AND category='discussion' "
-            "AND json_extract(metadata, '$.status') = 'active' "
+            f"AND {pending_tasks()} "
             "ORDER BY created_at DESC LIMIT 1000",
         ).fetchall()
 
@@ -869,7 +880,7 @@ def resolve_pending_deliberations() -> dict:
     try:
         rows = conn.execute(
             "SELECT * FROM memories WHERE level='L5' AND category='discussion' "
-            "AND json_extract(metadata, '$.status') = 'active'",
+            f"AND {pending_tasks()}",
         ).fetchall()
 
         result: dict = {
@@ -934,7 +945,7 @@ def check_pending_discussions(agent_name: str) -> list[dict]:
             "SELECT DISTINCT m.* FROM memories m "
             "JOIN json_each(json_extract(m.metadata, '$.participants')) AS p "
             "WHERE m.level='L5' AND m.category='discussion' "
-            "AND json_extract(m.metadata, '$.status') = 'active' "
+            f"AND {pending_tasks('m')} "
             "AND LOWER(p.value) = LOWER(?)",
             (agent_name,),
         ).fetchall()

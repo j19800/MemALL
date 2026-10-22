@@ -1405,6 +1405,57 @@ def guard_inject_cache_refreshes_tasks() -> Tuple[bool, str]:
                 f"pending={len(pending)}")
 
 
+def guard_discussion_stays_l5() -> Tuple[bool, str]:
+    """A discussion must stay L5/discussion through a classifier pass.
+
+    respond_discussion() looks a discussion up as
+    level='L5' AND category='discussion'.  A long review body matches the L6
+    markers, so the keyword classifier could rewrite the level, after which
+    the lookup failed and the review could never converge — observed on
+    discussion #999964, which turned into L6/conflict hours after creation
+    while #999948 stayed L5.  create_discussion() now pins category+level.
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.pipeline.classify import classify_step
+    from memall.pipeline.convergence import create_discussion
+
+    init_db()
+    d = create_discussion(
+        title="守卫：讨论不得被降级",
+        background=(
+            "刻意包含 L6 诱饵词：反思 教训 认知 元反思 架构决策 系统性 模式识别 "
+            "洞察 归纳 抽象 长期 演化 认知偏差 归因 复盘 心智模型 范式 反模式 "
+            "权衡 取舍 根因 依赖 分层 边界 抽象层次。"),
+        participants=["g1", "g2"], creator="guardbot")
+    did = d.get("discussion_id") or d.get("memory_id")
+    if not did:
+        return False, f"create_discussion failed: {d}"
+
+    # classify_step() creates pipeline_cursors on first run; run it once so
+    # the rewind below has a table to update.
+    classify_step()
+    conn = get_conn()
+    conn.execute("UPDATE pipeline_cursors SET cursor_id = ? WHERE step='classify'",
+                 (did + 1,))
+    conn.commit()
+    conn.close()
+    classify_step()
+
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT level, category, metadata FROM memories WHERE id=?", (did,)).fetchone()
+    meta = json.loads(row["metadata"] or "{}")
+    conn.execute("UPDATE pipeline_cursors SET cursor_id = 7 WHERE step='classify'")
+    conn.execute("DELETE FROM memories WHERE id=?", (did,))
+    conn.commit()
+    conn.close()
+    ok = row["level"] == "L5" and row["category"] == "discussion"
+    return ok, (f"level={row['level']} category={row['category']} "
+                f"pinned={meta.get('pinned_fields')}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -1451,6 +1502,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "busy_timeout_survives_concurrency": guard_busy_timeout_survives_concurrency,
     "update_can_complete_tasks": guard_update_can_complete_tasks,
     "lazy_tools_always_loadable": guard_lazy_tools_always_loadable,
+    "discussion_stays_l5": guard_discussion_stays_l5,
 }
 
 # Full test files run as subprocesses when no guard name is given.
