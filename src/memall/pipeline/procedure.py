@@ -85,7 +85,17 @@ def procedure_step() -> dict:
             annotated += 1
 
             # Upgrade to L3 if not already at a higher/pipeline level
+            #
+            # The level rewrite has to respect pinned fields: a P2 row whose
+            # level the caller explicitly chose stays P2 even if its text
+            # happens to read like a procedure.  This mirrors the pin checks
+            # in classify_step / reflect_step / identity_step.  The guard
+            # procedure_honours_level_pin covers this path.
             if row["level"] in ("L1", "L2", "P2") and proc.get("step_count", 0) >= 3:
+                from memall.core.pins import is_field_pinned
+
+                if is_field_pinned(existing, "level"):
+                    continue
                 conn.execute(
                     "UPDATE memories SET level = 'L3' WHERE id = ?",
                     (row["id"],),

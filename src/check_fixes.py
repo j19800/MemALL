@@ -1064,6 +1064,64 @@ def guard_session_note_not_shared_across_agents() -> Tuple[bool, str]:
                 f"own=owner, other 完好）")
 
 
+def guard_convergence_rule_respected() -> Tuple[bool, str]:
+    """A discussion's convergence_rule must actually decide WHEN it converges.
+
+    ``metadata.convergence_rule`` was a dead field: nothing read it, so every
+    discussion required EVERY participant to respond.  With a roster that
+    included an agent who had left the project, the discussion could never
+    converge — the missing agent was never coming.  The MCP schema advertised
+    the field but ``handle_create`` dropped it, so a new discussion could not
+    even set it.
+
+    Rules: ``unanimous`` (default, historical behaviour) needs everyone;
+    ``majority`` needs more than half; ``any`` needs one response.  An
+    unrecognised value must fall back to the strict default rather than
+    silently loosening the requirement.
+    """
+    from memall.pipeline.convergence import _rule_satisfied
+
+    P = ["claude", "dsh", "opencode", "qoder", "workbuddy"]
+    maj = len(P) // 2 + 1
+
+    ok = True
+    detail = []
+
+    # unanimous: only the full roster satisfies it
+    for n in range(len(P)):
+        got = _rule_satisfied({"convergence_rule": "unanimous"},
+                              set(P[:n]), P)
+        want = (n == len(P))
+        ok = ok and got == want
+        detail.append(f"unanimous@{n}={got}")
+
+    # majority: more than half
+    for n in range(len(P) + 1):
+        got = _rule_satisfied({"convergence_rule": "majority"},
+                              set(P[:n]), P)
+        want = (n >= maj)
+        ok = ok and got == want
+        detail.append(f"majority@{n}={got}")
+
+    # any: one response is enough
+    any_ok = (_rule_satisfied({"convergence_rule": "any"}, set(), P) is False
+              and _rule_satisfied({"convergence_rule": "any"}, set(P[:1]), P) is True)
+
+    # an unknown / missing rule must not loosen the requirement
+    strict = (_rule_satisfied({"convergence_rule": "garbage"}, set(P[:2]), P) is False
+              and _rule_satisfied({}, set(P[:2]), P) is False
+              and _rule_satisfied({"convergence_rule": None}, set(P[:2]), P) is False)
+
+    # a 4-agent roster needs 3 responses for a majority
+    P4 = ["a", "b", "c", "d"]
+    four = (_rule_satisfied({"convergence_rule": "majority"}, set(P4[:2]), P4) is False
+            and _rule_satisfied({"convergence_rule": "majority"}, set(P4[:3]), P4) is True)
+
+    ok = ok and any_ok and strict and four
+    return ok, (f"{' '.join(detail)} | any={any_ok} strict_fallback={strict} "
+                f"even_roster={four}")
+
+
 def guard_fallback_produces_self_evolution() -> Tuple[bool, str]:
     """The in-process fallback must be ABLE to produce L9/L10.
 
@@ -1743,6 +1801,39 @@ def guard_identity_honours_level_pin() -> Tuple[bool, str]:
     return ok, f"after identity_step: level={row['level']} (expect P2, was demoted to L1)"
 
 
+def guard_procedure_honours_level_pin() -> Tuple[bool, str]:
+    """procedure_step must not upgrade a row whose level the caller pinned.
+
+    procedure_step is a regex keyword extractor (step markers: "1. …",
+    "首先", "然后", "Step N", …).  When it finds three or more markers in a
+    P2 / L1 / L2 row it rewrites the level to L3 — the FIFTH path that
+    rewrites level without consulting the pin.  classify / reflect / identity
+    are guarded; procedure was not.
+
+    Evidence this was biting in production: the opencode discussion response
+    #1000201 (written P2, pinned) was found at L3 after the pipeline ran,
+    purely because its text contained several "然后/首先" markers.
+    """
+    _fresh_db()
+    from memall.core.db import init_db, get_conn
+    from memall.core.thin_waist import capture
+    from memall.pipeline.procedure import procedure_step
+
+    init_db()
+    text = ("操作步骤：1. 先确认配置；2. 然后重启服务；3. 最后核对日志。"
+            "整个过程首先备份数据库，之后逐台灰度。")
+    mid = capture(text, level="P2", category="procedure", project="g",
+                  agent_name="guard", owner="老陈",
+                  metadata=json.dumps({"pinned_fields": ["category", "level"]}))
+    procedure_step()
+    conn = get_conn()
+    row = conn.execute("SELECT level FROM memories WHERE id=?", (mid,)).fetchone()
+    conn.close()
+    ok = row["level"] == "P2"
+    return ok, (f"after procedure_step: level={row['level']} "
+                f"(expect P2 — 5 step markers would otherwise upgrade to L3)")
+
+
 def guard_msg_tool_wired() -> Tuple[bool, str]:
     """memall_msg must be registered, validated, and fail cleanly without a bus.
 
@@ -1837,9 +1928,11 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "task_reminder_one_per_task": guard_task_reminder_one_per_task,
     "identity_honours_level_pin": guard_identity_honours_level_pin,
     "msg_tool_wired": guard_msg_tool_wired,
+    "procedure_honours_level_pin": guard_procedure_honours_level_pin,
     "session_cooldown_persisted": guard_session_cooldown_persisted,
     "session_note_acknowledged": guard_session_note_acknowledged,
     "session_note_not_shared_across_agents": guard_session_note_not_shared_across_agents,
+    "convergence_rule_respected": guard_convergence_rule_respected,
     "fallback_produces_self_evolution": guard_fallback_produces_self_evolution,
     "busy_timeout_survives_concurrency": guard_busy_timeout_survives_concurrency,
     "update_can_complete_tasks": guard_update_can_complete_tasks,
