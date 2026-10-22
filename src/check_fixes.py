@@ -1019,6 +1019,51 @@ def guard_session_note_acknowledged() -> Tuple[bool, str]:
                 f"acked={acked} dropped={gone}")
 
 
+def guard_session_note_not_shared_across_agents() -> Tuple[bool, str]:
+    """A session note must reach its OWN agent and nobody else.
+
+    The note carries one agent's persona, pending tasks and reflections.
+    ``consume_session_note()`` used to fall back to "the oldest pending
+    note" when the caller passed no name, and ``ack_session_note()`` dropped
+    that same oldest note — so a call arriving without an identity delivered
+    another agent's context in full AND destroyed the rightful owner's copy
+    (the owner would never receive it).  That is an identity violation
+    (AGENTS.md §三.4 身份锁定), not a delivery quirk.
+
+    An unnamed caller must now get nothing, and a named caller must get
+    exactly its own note.
+    """
+    from memall.mcp import shared
+
+    shared._PENDING_SESSION_NOTES.clear()
+    shared._NOTE_ACKED.clear()
+    shared._PENDING_SESSION_NOTES["owner"] = "owner 的上下文"
+    shared._PENDING_SESSION_NOTES["other"] = "other 的上下文"
+
+    # An unnamed caller must not receive anyone's note.
+    unnamed = shared.consume_session_note("")
+    unnamed_ack = shared.ack_session_note("")
+
+    # A named caller gets its own note, and only its own.
+    own = shared.consume_session_note("owner")
+    other_seen = shared.consume_session_note("other")
+    other_still = shared._PENDING_SESSION_NOTES.get("other")
+
+    # The rightful owner acks; the other agent's note is untouched.
+    acked = shared.ack_session_note("owner")
+    owner_gone = "owner" not in shared._PENDING_SESSION_NOTES
+    other_intact = shared._PENDING_SESSION_NOTES.get("other") == "other 的上下文"
+
+    ok = (unnamed is None and unnamed_ack is False
+          and own == "owner 的上下文" and other_seen == "other 的上下文"
+          and other_still == "other 的上下文"
+          and acked and owner_gone and other_intact)
+    return ok, (f"unnamed={unnamed!r} unnamed_ack={unnamed_ack} own={own!r} "
+                f"other={other_seen!r} owner_dropped={owner_gone} "
+                f"other_intact={other_intact}（期望 unnamed=None/False, "
+                f"own=owner, other 完好）")
+
+
 def guard_fallback_produces_self_evolution() -> Tuple[bool, str]:
     """The in-process fallback must be ABLE to produce L9/L10.
 
@@ -1698,6 +1743,56 @@ def guard_identity_honours_level_pin() -> Tuple[bool, str]:
     return ok, f"after identity_step: level={row['level']} (expect P2, was demoted to L1)"
 
 
+def guard_msg_tool_wired() -> Tuple[bool, str]:
+    """memall_msg must be registered, validated, and fail cleanly without a bus.
+
+    The bus is an independent resident process, so the guard cannot require it
+    to be running — it checks the three things that must hold offline:
+      1. the tool is in tools/list (so an agent can discover it),
+      2. the validator accepts its actions (an undeclared action would be
+         rejected before the handler ever runs — the P0-2 defect class),
+      3. with no bus running the handler returns a structured error with
+         guidance, not a traceback, and the main chain (auto_inject) is
+         unaffected.
+    """
+    import memall.mcp.adapter  # noqa: F401
+    from memall.mcp.adapter import TOOL_DEFINITIONS
+    from memall.mcp.validator import validate_tool_input
+    from memall.mcp.tools.msg import handle
+
+    memall.mcp.adapter._ensure_loaded()
+    names = {d.get("name") for d in TOOL_DEFINITIONS}
+    registered = "memall_msg" in names
+
+    ok_valid, _data, err = validate_tool_input(
+        "memall_msg", {"action": "send", "agent_name": "x", "to": "y",
+                        "payload": {"memory_id": 1}})
+    validated = ok_valid
+
+    # Point the client at a port nothing listens on -> must be a clean error.
+    old = os.environ.get("MEMALL_BUS_PORT")
+    os.environ["MEMALL_BUS_PORT"] = "9"
+    try:
+        raw = handle({"action": "send", "agent_name": "x", "to": "y",
+                      "payload": {"memory_id": 1}})
+    finally:
+        if old is None:
+            os.environ.pop("MEMALL_BUS_PORT", None)
+        else:
+            os.environ["MEMALL_BUS_PORT"] = old
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        payload = {}
+    clean_error = (payload.get("status") == "error"
+                   and "bus unavailable" in str(payload.get("error", "")).lower()
+                   and payload.get("delivered") is False)
+
+    ok = registered and validated and clean_error
+    return ok, (f"registered={registered}, validator_accepts={validated} "
+                f"(err={err!r}), clean_error_without_bus={clean_error}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -1741,8 +1836,10 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "task_reminder_no_hash_collision": guard_task_reminder_no_hash_collision,
     "task_reminder_one_per_task": guard_task_reminder_one_per_task,
     "identity_honours_level_pin": guard_identity_honours_level_pin,
+    "msg_tool_wired": guard_msg_tool_wired,
     "session_cooldown_persisted": guard_session_cooldown_persisted,
     "session_note_acknowledged": guard_session_note_acknowledged,
+    "session_note_not_shared_across_agents": guard_session_note_not_shared_across_agents,
     "fallback_produces_self_evolution": guard_fallback_produces_self_evolution,
     "busy_timeout_survives_concurrency": guard_busy_timeout_survives_concurrency,
     "update_can_complete_tasks": guard_update_can_complete_tasks,

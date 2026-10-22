@@ -32,7 +32,7 @@ from memall.mcp.models import (
     SessionEndInput, SessionStartInput,
     SessionSummaryInput, SmartStoreInput, StoreBatchInput, TimelineInput,
     TraceInput, TraverseInput, UnifiedSearchInput, UpdateInput,
-    VectorSearchInput, HooksRecentInput,
+    VectorSearchInput, HooksRecentInput, MsgInput,
 )
 
 # Consolidated tools dispatch by "action" field — map (tool_name, action) → model
@@ -143,6 +143,14 @@ TOOL_VALIDATORS: dict[str, type[BaseModel]] = {}
 _TOOL_ONLY_MODELS: dict[str, type[BaseModel]] = {
     "memall_hooks_recent": HooksRecentInput,
 }
+
+# memall_msg — the bus tool dispatches by "action" too (send/inbox/ack/status)
+_ACTION_MODELS.update({
+    ("memall_msg", "send"): MsgInput,
+    ("memall_msg", "inbox"): MsgInput,
+    ("memall_msg", "ack"): MsgInput,
+    ("memall_msg", "status"): MsgInput,
+})
 
 
 def _pick_model(tool_name: str, params: Dict[str, Any]):

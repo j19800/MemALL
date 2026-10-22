@@ -18,6 +18,7 @@ from . import reflect
 from . import onboarding
 from . import index
 from . import distill
+from . import msg
 
 
 # ──────────────────────────────────────────────
@@ -589,4 +590,33 @@ registry.register(ToolDef(
     }},
     handler=_handle_hooks,
     annotations={"readOnlyHint": True, "idempotentHint": True},
+))
+
+
+# ──────────────────────────────────────────────
+# 7. memall_msg — 实时总线（memall-bus）投递
+# ──────────────────────────────────────────────
+# L5 任务卡是唯一事实源；总线只负责「告诉对方有这张卡」。载荷建议只带
+# memory_id 指针，正文用 memall_read 取 —— 这样两个库不会各存一份任务
+# 状态，重复投递也能按 memory_id 幂等去重。
+
+registry.register(ToolDef(
+    name="memall_msg",
+    description=(
+        "Real-time delivery over the memall-bus (an independent resident "
+        "process). The L5 task card stays the single source of truth — the "
+        "bus carries a POINTER (memory_id), not the task body. Actions: "
+        "send | inbox | ack | status"
+    ),
+    input_schema={"type": "object", "properties": {
+        "action": {"type": "string", "enum": ["send", "inbox", "ack", "status"]},
+        "agent_name": {"type": "string", "description": "Calling agent (also the bus identity)"},
+        "to": {"type": "string", "description": "Recipient agent (send action)"},
+        "payload": {"type": "object", "description": "Message payload — prefer {memory_id: N}"},
+        "type": {"type": "string", "description": "Message type: task | ack | report | verdict | msg"},
+        "ids": {"type": "array", "items": {"type": "integer"},
+                "description": "Message ids to mark read (ack action)"},
+    }},
+    handler=msg.handle,
+    annotations={"readOnlyHint": False, "idempotentHint": False},
 ))

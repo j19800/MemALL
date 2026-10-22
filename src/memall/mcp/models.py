@@ -715,3 +715,19 @@ class DigestInput(BaseModel):
 
 class HooksRecentInput(BaseModel):
     n: int = Field(10, ge=1, le=100)
+
+
+class MsgInput(BaseModel):
+    """memall_msg — real-time delivery over the memall-bus.
+
+    The L5 task card (memories table) stays the single source of truth; the
+    bus carries a POINTER (memory_id), not the task body.  ``agent_name`` is
+    not just bookkeeping: the bus derives the SENDER from the authenticated
+    connection, so a client cannot claim to be someone else.
+    """
+    action: str = Field("inbox", pattern=r"^(send|inbox|ack|status)$")
+    agent_name: str = Field("", max_length=200)
+    to: str = Field("", max_length=200)
+    payload: Optional[Dict[str, Any]] = None
+    type: str = Field("msg", max_length=50)
+    ids: Optional[List[int]] = None
