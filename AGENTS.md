@@ -7,13 +7,32 @@
 
 | Agent | 角色 | 职责 | 禁区 |
 |-------|------|------|------|
-| claude | PM | 拆单派工、方案评审、讨论收敛、最终验收 | 不写实现代码 |
-| codex | EM | 工程实现、重构、性能、部署 | 不做产品决策 |
-| opencode | 内容 | 文档、教程、社区内容 | 不碰核心代码 |
-| workbuddy | GTM | 调研、竞品分析、发布系统、运营数据 | 不直接改 MemALL 源码 |
-| marvis | 腾讯助手 | 腾讯生态协同、外部对接 | 不参与内部工程 |
+| Claude | PM / 中枢 | 项目总控、架构终审、优先级拍板、讨论收敛仲裁、跨 agent 协调 | 不写实现代码 |
+| dsh | EM / 架构 | 技术方案设计、MCP 修复批次编排与落地、核心代码改动（F3 身份绑定、P0-3 冷却短路）主导 | 不做产品决策 |
+| opencode | 实现主力 / 桥梁 | 具体编码（P0-0 content_hash、安全治理、overhead 优化）、跨 agent 衔接、AGENTS.md 技术段维护 | 不拍板产品/架构方向 |
+| qoder | 编码（TBD） | 增量实现、单元测试、重构，承接 opencode 之外产能；首轮任务后回填画像定级 | 待画像回填后扩责 |
+| workbuddy | GTM / 评审 | 推广运营、技术评审报告、e2e 测试协调、讨论发起与论证组织、收敛结论写回 | 不直接改 MemALL 源码（调研/评审/测试除外） |
 
 **老陈 = 人类总闸**。P0 级任务卡必须人工确认后才可执行；agent 之间不得互相授权升级。
+
+> ⚠️ **2026-10-22 更新**：上方 roster 已替换为真实接入的 `Claude / dsh / opencode / qoder / workbuddy`，**取代过时的 `claude / codex / opencode(内容) / workbuddy / marvis`**（codex、marvis 已出局；opencode 实证为实现/桥梁而非"内容"）。能力依据与详细分析见 `D:\Agent项目\Claw\memall-bus\agent能力分析与分工-多Agent自动协作项目.md`。
+
+### 1.1 当前项目任务派发（草案，待 #999964 收敛确认）
+
+| 任务 | 负责人 | 协同 | 说明 |
+|---|---|---|---|
+| P0-2 会话级身份绑定（灭 F3，头号阻塞） | dsh | Claude 终审 | 最高杠杆，从根灭 F3 |
+| P0-3 清 30 分钟冷却短路（shared.py:87） | dsh | opencode 实现 | 让 e2e L3 生效 11/11 |
+| P0-0 content_hash INSERT OR IGNORE | opencode | dsh 验收 | 启用调度器后不撞唯一约束 |
+| P0-1 通知栏落到 agent_name（路线 B） | dsh | （F3 修后自然成立） | 复用现有通知栏，不复活表 |
+| MCP 修复 4 批次（第1/2/3/4批） | dsh 总负责 | opencode 实现、qoder 增量 | dsh TODO 已列 |
+| P1-1 总线接回 MCP（memall_msg_*） | opencode | dsh 设计 | 实时推送优化，非阻塞 |
+| e2e 测试（memall-bus 脚本复跑） | workbuddy 协调 | opencode 配合 | 验证 11/11 |
+| AGENTS.md 协作分工 + 实时通道段落 | opencode 写技术段 | workbuddy 审 | 同步本方案 |
+| GTM / 推广 / 社区 | workbuddy | — | 既定 |
+| 讨论 #999964 收敛仲裁 | Claude | 各 agent 表态 | majority 达成立案 |
+
+> 注：上表为基于提案 #999948 / 评审 #999964 的分工草案。dsh 在 #999964 论证中已发现 `F:\memall-agent-hub\` 曾真实运行的多 Agent 协作平台（2026-06 停摆），战略可能转向"评估/复活 Hub 而非修补 MCP 通道"。**最终分工以 #999964 收敛结论为准。**
 
 ## 二、任务卡协议（替代"文件夹任务卡"）
 
@@ -55,7 +74,7 @@ auto_inject 会自动返回分配给自己的 `pending_tasks`（id/content/subje
 
 | 禁区 | 规则 |
 |------|------|
-| 生产源码 | 仅 claude/codex 可写，workbuddy/marvis 只读 |
+| 生产源码 | 仅 Claude/dsh/opencode 可写（qoder 定级后加入），workbuddy 只读（调研/评审/测试除外） |
 | 商业/定价数据 | visibility 限制，仅老陈 + workbuddy |
 | API 密钥/凭证 | 严禁入记忆库（例外：老陈明确要求归档的凭证表） |
 | 他人项目数据 | 不读不写不引用 |
@@ -85,13 +104,38 @@ auto_inject 会自动返回分配给自己的 `pending_tasks`（id/content/subje
 > `D:\Agent项目\Claw\memall-bus\技术报告-多Agent即时通讯总线-供Agent调研学习.md`
 > 代码：`D:\Agent项目\Claw\memall-bus\`（纯标准库 asyncio+sqlite3，**零外部依赖**，**16/16 精确测试通过**，协议 v2）。
 
-- **当前状态**：原型已实证可用（在线延迟 p50≈0.75ms/p99≈1.31ms、真并发 1917 msg/s、离线 mailbox 不丢、服务重启不丢、1MB 完整），**尚未接回主库 MCP server（P1 待做）**。
+- **当前状态**：原型已实证可用（在线延迟 p50≈0.75ms/p99≈1.31ms、真并发 1917 msg/s、离线 mailbox 不丢、服务重启不丢、1MB 完整），**已接回主库（`memall_msg` 工具，MemALL 仓 `06e9d28`）**；**总线进程本身尚未纳入任何启动/保活流程**，需手工起 `python memall_bus.py`。
 - **协议**：TCP 行分隔 JSON（127.0.0.1:8770）；op 含 hello/publish/inbox/ack/ping；响应用 req_id 三队列路由（实时推送 / inbox 历史 / 请求回包）；hello 回包带 `proto` 版本号（当前 v2），客户端校验不匹配即失败。
 - **六条修复底线（改代码前必跑 test_suite.py）**：① 单连接禁止多协程抢读 reader；② inbox 响应必须带 req_id 与实时推送区分；③ asyncio readline 默认 64KB 行限制，大 payload 须设 limit=16MB；④ **实时推送必须带 mailbox 行 id**（否则收到即无法 ack → read 永不置位 → L2/L3 必然双投）；⑤ **publish 的 from 必须由服务端从连接身份取，inbox 只能读自己的**（v1 无鉴权，实证可越权读 + 冒充 agent）；⑥ **重置 bus.db 必须连 -wal/-shm 一起删**（WAL 残留会让已清空的邮箱冒出旧消息）。
 - **鉴权模型（v2）**：`~/.memall/bus_token` 是 installation token（安装级共享密钥），`~/.memall/bus_agents/<agent>.token` 是 per-agent token（绑定身份，防 agent 间冒充）。生产环境须用 `python bus_admin.py enroll <agent>...` **预登记**，消除首次登记的抢占窗口。边界：installation token 挡不住同 OS 用户的其他进程，与 MemALL HTTP gateway token 同一信任级别。
-- **接回主库设计**：MCP 新增 `memall_msg_send` / `memall_msg_inbox`；AGENTS 派单改为 publish 实时推；与 auto_inject 拉取共读 mailbox，去重靠 status/read。**建议总线只传 `memory_id` 指针、不复制任务卡正文**——L5 卡保持唯一事实源，避免两库两份状态跨库不一致。
+- **接回主库（已完成，MemALL 仓 `06e9d28`）**：MCP 新增 **`memall_msg`** 工具，动作 `send` / `inbox` / `ack` / `status`。
+  - **形态**：做成一个工具带 action，而非卡里原写的两个工具 —— 本仓工具一律「分组 + action」（`memall_write` 有 12 个 action），线上的行为等价；另加 `ack`（否则 mailbox 只增不减）与 `status`（诊断总线是否在线）。
+  - **载荷只传 `memory_id` 指针、不复制任务卡正文** —— L5 卡保持唯一事实源，避免两库两份状态跨库不一致；接收方凭 id 用 `memall_read` 取正文。
+  - **同步 socket 实现，不用 asyncio**：MCP 的 handler 是同步的（`mcp/server.py` 的 `_read_request` 读 stdin 循环），在 MCP 层跑 asyncio 每次调用都要新建事件循环 + 新建连接 + 走一遍握手。每次调用一条短连接，零事件循环耦合、零线程泄漏。
+  - **总线不可用时给清晰报错**（含启动提示），且 **auto_inject 拉模式主链路完全不受影响**。
+  - **实测**：`memall-bus/e2e_collaboration.py` 真 MCP stdio 协议 + 总线 + 三 agent **13/13 通过**（含「MCP 工具派单 → 总线 → 收件方实时收到，pushed=1」与「MCP 工具收单 + ack，ack 后再拉为 0」）；守卫 `msg_tool_wired`。
 - **⚠️ 部署形态更正**：v1 报告写的「塞进 MemALL MCP server 作为 asyncio 协程」**前提是错的**——stdio MCP server 是**同步** stdin JSON-RPC 循环，且由每个客户端会话**各 spawn 一个**（短命、正是孤儿进程问题的来源）。推荐**独立常驻进程**；若要复用进程，宿主应是 aiohttp 的 HTTP gateway 而非 stdio server。
-- **开放调研项**：同用户恶意进程的信任模型（需 OS 级隔离，待老陈拍板）、常驻封装与看门狗、跨机后端（Redis/NATS）、去重幂等精确规则、A2A 互通桥接——详见报告第 8 节。
+- **开放调研项**：同用户恶意进程的信任模型（需 OS 级隔离，待老陈拍板）、**总线进程的启动/保活与 token 预登记的运维流程**（当前需手工起）、跨机后端（Redis/NATS）、去重幂等精确规则、A2A 互通桥接——详见报告第 8 节。
+
+### 7.1 使用总线（agent 侧）
+
+```python
+# 1) PM 派单：只传 memory_id 指针，正文别复制
+memall_msg(action="send", agent_name="claude", to="codex",
+           type="task", payload={"memory_id": 999766})
+
+# 2) 执行方取正文（凭 id）
+memall_read(action="retrieve", query="999766")
+
+# 3) 处理完标记已读（否则 mailbox 只增不减）
+memall_msg(action="inbox", agent_name="codex")        # 先看有哪些
+memall_msg(action="ack",  agent_name="codex", ids=[12345])
+
+# 4) 总线是否在线
+memall_msg(action="status")
+```
+
+**收件方想收到实时推送（毫秒级）而不仅是 mailbox 兜底**，需要保持一条到总线的长连接（agent 宿主侧的常驻连接）。只靠 `memall_msg action=inbox` 拉取属于「自动通知 + 手动拉取」，是 mailbox 语义，不是推送语义。
 
 
 _本协议自身也是记忆：level=L4, category=decision, project=memall。修改须走 memall_discussion 收敛 + 老陈批准。_
