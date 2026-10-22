@@ -6,6 +6,26 @@
 
 ---
 
+## ✅ 修复状态（2026-10-22 更新）
+
+老陈授权 opencode 直接实施（AGENTS.md 角色表外的一次例外授权），三个缺陷**已全部修复并合入 `4bf3085`**。
+
+| 缺陷 | 状态 | 修复方式 | 守卫 |
+|---|---|---|---|
+| A `reflect_step` 覆盖 metadata + 绕过钉住 | ✅ 已修 | 改为**合并** metadata；改 level 前查 `is_field_pinned`，被钉住则整行跳过 | `reflect_merges_metadata`<br>`reflect_honours_level_pin` |
+| B `CaptureInput` 未声明 capture 支持的字段 | ✅ 已修 | `CaptureInput` 补声明 7 个字段；MCP schema 补上此前连 schema 都没有的 6 个；`capture.py` 归一 list→JSON 字符串 | `capture_declares_supported_fields`<br>`capture_tags_survive_validator` |
+| C `auto_inject` 缓存返回陈旧任务表 | ✅ 已修 | 缓存命中时**重查任务表**并 patch 进缓存（缓存只为省掉 persona/蒸馏这些昂贵查询，不该冻结任务表）；新增 `invalidate_inject_cache()`，写侧显式失效 | `inject_cache_refreshes_tasks` |
+
+**验证**：45/45 guards + 4 个 suite 全绿（exit 0）；端到端 `memall-bus/e2e_collaboration.py`（真 MCP stdio 协议 + 总线 + 三 agent）**10/11 → 11/11**。
+
+**顺带修掉的相邻 bug**：`reflect.py` 里 `focus_map.get(ag, "")` 的 `ag` 是上方循环泄漏的变量，导致每行都拿到最后一个 agent 的 focus 标签。
+
+**口径修正**：缺陷 B 原本写"8 个字段"，实际是 **7 个**——第 8 个 `source_ids` 是死字段（无表列、`capture()` 的 INSERT 不写、也不在 `_ALLOWED_UPDATE_FIELDS` 里），已从 capture 路径移除并改为如实上报为 ignored；溯源边用 `memall_write action=connect` 建。
+
+**遗留（不在本次范围）**：已被 reflect 破坏的历史行（595 条带 `l6_source`、其中 404 条 metadata 只剩两个键）的**原 metadata 无法从代码恢复**，需从备份库还原；`~/.memall/` 下有多个历史备份可作为还原源。
+
+---
+
 ## 摘要
 
 2026-10-21 的全量读取暴露出两个此前未被发现的契约缺陷：
