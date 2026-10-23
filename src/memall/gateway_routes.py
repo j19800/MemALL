@@ -110,8 +110,18 @@ class RoutesMixin:
         app.router.add_delete("/v30api/memories/{memory_id}", lambda r: v30.handle_delete_memory(r, self))
         app.router.add_post("/v30api/memories", lambda r: v30.handle_create_memory(r, self))
         app.router.add_put("/v30api/memories/{memory_id}", lambda r: v30.handle_update_memory(r, self))
+        # Memory Explorer (frontend/explorer.html + read-only JSON API)
+        import memall.gateway_explorer as explorer
+        app.router.add_get("/explorer", lambda r: explorer.handle_page(r, self))
+        app.router.add_get("/api/explorer/memories", lambda r: explorer.handle_list(r, self))
+        app.router.add_get("/api/explorer/memories/{memory_id}", lambda r: explorer.handle_detail(r, self))
+        app.router.add_get("/api/explorer/facets", lambda r: explorer.handle_facets(r, self))
+        app.router.add_get("/api/explorer/stats", lambda r: explorer.handle_stats(r, self))
+        app.router.add_get("/api/explorer/graph", lambda r: explorer.handle_graph(r, self))
+        app.router.add_get("/api/explorer/timeline", lambda r: explorer.handle_timeline(r, self))
         # Frontend
-        app.router.add_get("/", self._handle_serve_frontend)
+        app.router.add_get("/", lambda r: explorer.handle_root(r, self))
+        app.router.add_get("/classic", self._handle_serve_frontend)
         app.router.add_get("/api/routes", self._handle_api_routes)
         # Static file mounts
         _frontend_dir = Path(__file__).resolve().parent.parent.parent / "frontend"

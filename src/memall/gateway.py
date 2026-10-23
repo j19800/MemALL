@@ -73,6 +73,7 @@ _SPA_PAGE_PATHS = frozenset({
     "/dashboard", "/graph", "/artifact", "/features", "/recent", "/todos",
     "/v30", "/timeline", "/timeline/api", "/db/stats", "/agents",
     "/debt/stats", "/reflection/dashboard", "/ask", "/migrations/status",
+    "/explorer", "/classic",
 })
 
 
