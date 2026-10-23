@@ -2162,6 +2162,69 @@ def guard_precise_task_handoff() -> Tuple[bool, str]:
                 f"claimed_state={claimed_notice_ok} closed={closed_ok}")
 
 
+def guard_task_cards_always_visible() -> Tuple[bool, str]:
+    """A task card must never become invisible to the delivery paths.
+
+    Both the notification bar (mcp/notify.py) and the task view (mcp/tasks.py)
+    select category='task'.  Task cards written before metadata.pinned_fields
+    existed had their category rewritten by the keyword classifier, so eleven
+    live "[任务] …" cards with a valid assignee and status=active sat in the
+    store where nobody could see them - work addressed to an agent that no
+    delivery path would ever surface (migration 037 repairs the data; this
+    guard keeps the invariant).
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.core.thin_waist import capture
+    from memall.mcp.notify import build_notice
+    from memall.mcp.tasks import list_tasks
+
+    init_db()
+    cap = capture("守卫用任务卡：必须能被通知栏与任务视图同时看见，"
+                  "标题以 [任务] 开头并带 assignee。",
+                  level="L5", category="task", project="g", agent_name="visagent",
+                  owner="老陈", metadata=json.dumps({"status": "active"}))
+    if not isinstance(cap, int):
+        return False, f"capture failed: {cap}"
+
+    conn = get_conn()
+    orphan = conn.execute(
+        "SELECT COUNT(*) FROM memories WHERE level='L5' AND subject LIKE '[任务]%' "
+        "AND category != 'task' AND COALESCE(memory_status,'') != 'archived'"
+    ).fetchone()[0]
+    pinned = json.loads(conn.execute(
+        "SELECT metadata FROM memories WHERE id=?", (cap,)).fetchone()[0]).get(
+            "pinned_fields")
+    conn.close()
+
+    notice = build_notice("visagent") or ""
+    listed = list_tasks("visagent", status="open").get("total", 0)
+    ok = orphan == 0 and listed >= 1 and "visagent" and str(cap) in notice
+    return ok, (f"orphan_cards={orphan} pinned={pinned} "
+                f"task_list={listed} in_notice={str(cap) in notice}")
+
+
+def guard_stdio_reads_utf8() -> Tuple[bool, str]:
+    """The stdio server must decode stdin as UTF-8, not the locale codec.
+
+    serve() used to reconfigure only sys.stdout.  On a Windows GBK console the
+    request frames were decoded with the locale codec, so any Chinese in a
+    call (task subject, discussion body, search query) arrived mojibake - agents
+    worked around it by passing Chinese through temp files instead of stdio.
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent / "memall/mcp/server.py").read_text(
+        encoding="utf-8")
+    i = src.find("def serve(")
+    body = src[i:i + 2000] if i >= 0 else src
+    has_loop = 'for _stream_name in ("stdout", "stdin")' in body
+    stdin_named = "stdin" in body
+    ok = has_loop and stdin_named
+    return ok, f"both_pipes_reconfigured={has_loop} stdin_mentioned={stdin_named}"
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -2222,6 +2285,8 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "discussion_stays_l5": guard_discussion_stays_l5,
     "discussion_reminders_and_responses": guard_discussion_reminders_and_responses,
     "precise_task_handoff": guard_precise_task_handoff,
+    "task_cards_always_visible": guard_task_cards_always_visible,
+    "stdio_reads_utf8": guard_stdio_reads_utf8,
 }
 
 # Full test files run as subprocesses when no guard name is given.

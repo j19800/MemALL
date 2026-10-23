@@ -120,11 +120,17 @@ def serve():
     Implements required lifecycle per MCP 2025-03-26 spec:
       initialize → [initialized notification] → tools/list → tools/call
     """
-    # Force UTF-8 on stdout to prevent UnicodeEncodeError on Windows GBK consoles
-    try:
-        sys.stdout.reconfigure(encoding='utf-8')
-    except AttributeError:
-        pass  # Python < 3.7 or non-TTY streams that don't support reconfigure
+    # Force UTF-8 on BOTH pipes.  This used to fix only stdout, so on a
+    # Windows GBK console the JSON-RPC frames we READ were decoded with the
+    # locale codec: any Chinese in a request (a task subject, a discussion
+    # body, a search query) arrived mojibake or raised, which is why agents
+    # resorted to passing Chinese through temp files instead of stdio.
+    for _stream_name in ("stdout", "stdin"):
+        try:
+            getattr(sys, _stream_name).reconfigure(
+                encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass  # Python < 3.7, or a stream that cannot be reconfigured
     _ensure_logging()
     _start_polling_consumers()
     # Audit P0-1: the capture-triggered lightweight pipeline skips distill
