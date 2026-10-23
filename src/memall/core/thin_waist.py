@@ -2166,6 +2166,28 @@ def update(memory_id: int, **fields) -> bool:
                 "UPDATE memories SET arc_status = 'open' WHERE id = ?", (memory_id,)
             )
 
+        # Generic update is a second way to reach a terminal state
+        # (update(status='resolved'/'done'/'archived')).  Leaving the
+        # reminder behind tells agent_round the task was already notified
+        # FOREVER - the (task, agent) pair is permanently muted, so a card
+        # that is later re-opened can never be reminded again.  Close it here
+        # as well; the lifecycle helpers do the same for their own paths.
+        if existing["level"] == "L5":
+            try:
+                final = conn.execute(
+                    "SELECT metadata FROM memories WHERE id = ?", (memory_id,)
+                ).fetchone()
+                fmeta = json.loads(final["metadata"] or "{}") if final else {}
+                if (isinstance(fmeta, dict)
+                        and task_status_of(fmeta.get("status")) in
+                        ("resolved", "done", "archived", "converged")):
+                    conn.execute(
+                        "DELETE FROM memories WHERE category = 'task_pending' "
+                        "AND json_extract(metadata, '$.task_id') = ?",
+                        (memory_id,))
+            except Exception:
+                logger.debug("terminal reminder cleanup failed", exc_info=True)
+
         conn.commit()
 
         # Auto-refresh embedding when content changes

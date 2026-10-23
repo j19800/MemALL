@@ -137,6 +137,32 @@ def acknowledge_task(task_id: int) -> dict:
         conn.close()
 
 
+def close_task_reminders(conn, task_id: int) -> int:
+    """Delete the outstanding reminder rows for *task_id*.  Returns the count.
+
+    Reminders are keyed by task id and are PERMANENTLY satisfied once written:
+    ``agent_round`` treats any existing reminder (even an archived one) as
+    "already notified", because its body's content_hash carries a unique
+    constraint.  So a reminder left behind by a task that is later resolved
+    does not merely become stale — it SILENTLY BLOCKS every future reminder
+    for that task.  Measured: create card -> notify (1 reminder) -> resolve
+    (reminder stays) -> reopen to active -> notify -> still 1, no new row;
+    archiving the stale row does not help either.  Only a hard delete frees
+    the (task, agent) pair.
+
+    Called from every terminal transition so that re-opening a task can be
+    notified again.
+    """
+    try:
+        cur = conn.execute(
+            "DELETE FROM memories WHERE category = 'task_pending' "
+            "AND json_extract(metadata, '$.task_id') = ?", (task_id,))
+        return cur.rowcount or 0
+    except Exception:
+        logger.debug("close_task_reminders(%s) failed", task_id, exc_info=True)
+        return 0
+
+
 def resolve_task(task_id: int, result: str = "") -> dict:
     """Mark a task as resolved (done).  Optional result text is stored."""
     conn = get_conn()
@@ -164,8 +190,10 @@ def resolve_task(task_id: int, result: str = "") -> dict:
             "UPDATE memories SET metadata=?, updated_at=?, arc_status='closed' WHERE id=?",
             (json.dumps(meta, ensure_ascii=False), now, task_id),
         )
+        closed = close_task_reminders(conn, task_id)
         conn.commit()
-        return {"task_id": task_id, "resolved_at": now}
+        return {"task_id": task_id, "resolved_at": now,
+                "reminders_closed": closed}
     finally:
         conn.close()
 
@@ -195,8 +223,12 @@ def block_task(task_id: int, reason: str) -> dict:
             "UPDATE memories SET metadata=?, updated_at=? WHERE id=?",
             (json.dumps(meta, ensure_ascii=False), now, task_id),
         )
+        # A blocked card is no longer owed work, so its outstanding reminder
+        # would keep pointing at something that needs a human, not the agent.
+        closed = close_task_reminders(conn, task_id)
         conn.commit()
-        return {"task_id": task_id, "blocked_at": now}
+        return {"task_id": task_id, "blocked_at": now,
+                "reminders_closed": closed}
     finally:
         conn.close()
 

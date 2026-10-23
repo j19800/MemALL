@@ -2225,6 +2225,75 @@ def guard_stdio_reads_utf8() -> Tuple[bool, str]:
     return ok, f"both_pipes_reconfigured={has_loop} stdin_mentioned={stdin_named}"
 
 
+def guard_task_terminal_closes_reminder() -> Tuple[bool, str]:
+    """A terminal transition must close the task's reminder rows.
+
+    agent_round treats ANY existing reminder for a task id as "already
+    notified" — even an archived one, because the reminder body's content_hash
+    carries a unique constraint.  So a reminder left behind by a resolved task
+    does not just go stale: it permanently mutes the (task, agent) pair.
+    Measured before the fix: create -> notify (1 row) -> resolve (row stays)
+    -> reopen to active -> notify -> still 1 row, no new one; archiving the
+    stale row did not help either.  Only a hard delete frees the pair.
+
+    The closure now runs on resolve_task, block_task, and the generic
+    update(status=resolved/done/archived) path, so re-opening a task can be
+    notified again.
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.core.thin_waist import capture, update
+    from memall.pipeline.task_lifecycle import block_task, resolve_task
+    from memall.scheduler.agent_round import notify_pending_tasks
+
+    init_db()
+    AG = "termprobe"
+
+    def reminders(tid):
+        conn = get_conn()
+        try:
+            return [r[0] for r in conn.execute(
+                "SELECT id FROM memories WHERE category = 'task_pending' "
+                "AND json_extract(metadata, '$.task_id') = ?", (tid,)).fetchall()]
+        finally:
+            conn.close()
+
+    def make(tag):
+        return capture(f"守卫卡 {tag}：终态必须关闭提醒，重开必须能再次提醒。",
+                       level="L5", category="task", agent_name=AG,
+                       owner="老陈", project="g", subject=f"[守卫] {tag}",
+                       metadata=json.dumps({"status": "active"}))
+
+    # resolve path
+    t1 = make("resolve")
+    notify_pending_tasks(AG)
+    first = reminders(t1)
+    resolve_task(t1)
+    after_resolve = reminders(t1)
+    update(t1, metadata=json.dumps({"status": "active"}))
+    notify_pending_tasks(AG)
+    reopened = reminders(t1)
+    reopen_new = bool(reopened) and set(reopened) != set(first)
+
+    # block path
+    t2 = make("block")
+    notify_pending_tasks(AG)
+    block_task(t2, reason="守卫")
+    after_block = reminders(t2)
+
+    # generic update path
+    t3 = make("update")
+    notify_pending_tasks(AG)
+    update(t3, metadata=json.dumps({"status": "resolved"}))
+    after_update = reminders(t3)
+
+    ok = (bool(first) and after_resolve == [] and reopen_new
+          and after_block == [] and after_update == [])
+    return ok, (f"resolve_closed={not after_resolve} reopen_renotified={reopen_new} "
+                f"block_closed={not after_block} update_closed={not after_update}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -2287,6 +2356,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "precise_task_handoff": guard_precise_task_handoff,
     "task_cards_always_visible": guard_task_cards_always_visible,
     "stdio_reads_utf8": guard_stdio_reads_utf8,
+    "task_terminal_closes_reminder": guard_task_terminal_closes_reminder,
 }
 
 # Full test files run as subprocesses when no guard name is given.
