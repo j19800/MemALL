@@ -154,6 +154,12 @@ def create_discussion(
                 # "unanimous" (every participant must respond) is the default
                 # and the historical behaviour.
                 "convergence_rule": (convergence_rule or "unanimous").lower(),
+                # The deadline lives in metadata: it was a parameter that went
+                # only to the Lark notification, so nothing could ever read it
+                # (a dead field, like convergence_rule used to be).  It is now
+                # the escape hatch for the action-item gate below - past this
+                # deadline a silent assignee can no longer freeze a discussion.
+                "timeout_hours": int(timeout_hours),
                 "suggested_participants": suggested_participants,
                 "options": options or [],
                 "open_questions": open_questions or [],
@@ -401,7 +407,8 @@ def _converge_single(conn, disc: dict) -> dict:
             if a:
                 responded_agents.add(a)
         missing = [p for p in participants if p not in responded_agents]
-        if missing and not _rule_satisfied(meta, responded_agents, participants):
+        if missing and not _rule_satisfied(meta, responded_agents, participants,
+                                           created_at=disc.get("created_at")):
             return {
                 "warning": f"waiting for participants: {missing}",
                 "participants": participants,
@@ -410,7 +417,69 @@ def _converge_single(conn, disc: dict) -> dict:
     return converge_discussion(conn, disc, response_dicts, "confirmed")
 
 
-def _rule_satisfied(meta: dict, responded: set, participants: list) -> bool:
+def _pending_action_item_owners(meta: dict, responded: set,
+                                agreeing: set) -> list:
+    """Action-item assignees who are participants and have not spoken yet.
+
+    A discussion must not close while someone it assigned work to has not
+    given a stance.  Measured on #1000375: it converged 9 minutes after
+    creation on 3/5 votes, while its own action_items named ``dsh`` as the
+    prerequisite reviewer — the prerequisite was still being produced, so the
+    reviewer could only deliver outside the thread and the converged
+    conclusion never contained the defects that review found.
+
+    Only assignees who are BOTH participants and not yet responders block
+    convergence; an assignee who is not on the roster is somebody else's
+    commitment and must not freeze the discussion.
+    """
+    items = meta.get("action_items") or []
+    if not isinstance(items, list):
+        return []
+    roster = {p.strip().lower() for p in (meta.get("participants") or [])
+              if isinstance(p, str)}
+    answered = {a.strip().lower() for a in (set(responded) | set(agreeing))
+                if isinstance(a, str)}
+    pending = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        who = (item.get("assigned_to") or "").strip()
+        if not who:
+            continue
+        low = who.lower()
+        if low in roster and low not in answered:
+            pending.append(who)
+    return pending
+
+
+def _discussion_deadline_passed(meta: dict, created_at) -> bool:
+    """True once the discussion is older than its ``timeout_hours``.
+
+    ``timeout_hours`` was stored at creation and read by nothing — a dead
+    field — so there was no escape hatch for a discussion stalled on an
+    unresponsive assignee.  It is the deadline now: past it, the
+    action-item gate stops blocking (otherwise a single silent assignee could
+    freeze a discussion forever, which is the same failure the ``majority``
+    rule was introduced to fix).
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        hours = int(meta.get("timeout_hours") or 24)
+        if hours <= 0 or not created_at:
+            return False
+        started = created_at
+        if isinstance(started, str):
+            started = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) >= started + timedelta(hours=hours)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _rule_satisfied(meta: dict, responded: set, participants: list,
+                    created_at=None, agreeing: set | None = None) -> bool:
     """Is the discussion's convergence rule met by the responses so far?
 
     The rule lives in ``metadata.convergence_rule`` and used to be a dead
@@ -437,6 +506,14 @@ def _rule_satisfied(meta: dict, responded: set, participants: list) -> bool:
     stance distribution, and a discussion that converged with a dissent
     still reports ``consensus=False`` and lists its dissenters.
     """
+    # Gate first: a discussion cannot close while an assignee it named as a
+    # prerequisite has not spoken, UNLESS its own timeout_hours has elapsed.
+    if not _discussion_deadline_passed(meta, created_at):
+        pending_owners = _pending_action_item_owners(
+            meta, responded, agreeing or set())
+        if pending_owners:
+            return False
+
     rule = (meta.get("convergence_rule") or "unanimous").lower()
     if rule not in ("unanimous", "majority", "any"):
         rule = "unanimous"
@@ -567,7 +644,9 @@ def confirm_discussion(
                     responded_agents.add(a)
             missing = [p for p in participants if p not in responded_agents]
             # Same rule test as the sweep path, so both agree on when to close.
-            if missing and not _rule_satisfied(disc_meta, responded_agents, participants):
+            if missing and not _rule_satisfied(disc_meta, responded_agents,
+                                               participants,
+                                               created_at=disc.get("created_at")):
                 # Rule not satisfied — do NOT converge
                 conn.execute(
                     "UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
@@ -867,8 +946,15 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
                 "source_decision": l4_id,
             }
         )
+        # INSERT OR IGNORE, like every other content-hash keyed insert in this
+        # module: _insert_or_reuse_id() below is written to turn a duplicate
+        # into "reuse the existing row", but a plain INSERT raises
+        # UNIQUE constraint failed: memories.content_hash before it is ever
+        # reached.  Consequence: converging a discussion whose action item
+        # text repeats (the same discussion converged twice, or two
+        # discussions with the same title) crashed the whole convergence.
         cur = conn.execute(
-            """INSERT INTO memories
+            """INSERT OR IGNORE INTO memories
                (content, content_hash, level, owner, agent_name, subject,
                 category, project, summary, occurred_at, created_at, updated_at,
                 supersedes, confidence, visibility, metadata, arc_status)

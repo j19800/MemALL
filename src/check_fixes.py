@@ -2294,6 +2294,92 @@ def guard_task_terminal_closes_reminder() -> Tuple[bool, str]:
                 f"block_closed={not after_block} update_closed={not after_update}")
 
 
+def guard_convergence_waits_for_action_items() -> Tuple[bool, str]:
+    """A discussion must not close while an action-item assignee has not spoken.
+
+    Measured on #1000375: it converged 9 minutes after creation on 3/5 votes,
+    although its own action_items named dsh as the PREREQUISITE reviewer.  The
+    prerequisite was still being produced, so the reviewer could only deliver
+    outside the thread and the converged conclusion never contained the four
+    defects that review found (one of which, a resolved task permanently
+    muting its reminders, turned out to be a real bug).
+
+    The gate only blocks assignees who are ALSO participants; an assignee who
+    is not on the roster is another team's commitment and must not freeze the
+    discussion.  ``timeout_hours`` - stored but read by nothing until now - is
+    the deadline past which the gate stops blocking, so one silent assignee
+    cannot hold a discussion open forever (the failure that added the
+    ``majority`` rule in the first place).
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.pipeline.convergence import confirm_discussion, create_discussion
+
+    init_db()
+
+    def status_of(did):
+        conn = get_conn()
+        try:
+            raw = conn.execute("SELECT metadata FROM memories WHERE id = ?",
+                               (did,)).fetchone()
+        finally:
+            conn.close()
+        if not raw:
+            return "gone"
+        m = json.loads(raw[0] or "{}")
+        return m.get("status")
+
+    # (1) prerequisite assignee silent -> must NOT converge
+    d1 = create_discussion(title="守卫：前置未交付", background="门控验证。",
+                           participants=["ga", "gb", "gc", "gd"],
+                           action_items=[{"assigned_to": "gd",
+                                          "description": "前置评审"}],
+                           convergence_rule="majority", creator="guardbot")
+    did1 = d1.get("discussion_id") or d1.get("memory_id")
+    for ag in ("ga", "gb", "gc"):
+        confirm_discussion(discussion_id=did1, agent_name=ag,
+                           stance="confirm", note=f"{ag} ok")
+    blocked = status_of(did1) == "active"
+
+    # (2) once the prerequisite speaks it may converge
+    confirm_discussion(discussion_id=did1, agent_name="gd",
+                       stance="confirm", note="前置已交付")
+    released = status_of(did1) == "converged"
+
+    # (3) an assignee OUTSIDE the roster must not block
+    d2 = create_discussion(title="守卫：名册外指派", background="不应阻塞。",
+                           participants=["ga", "gb"],
+                           action_items=[{"assigned_to": "outsider",
+                                          "description": "外部依赖"}],
+                           convergence_rule="any", creator="guardbot")
+    did2 = d2.get("discussion_id") or d2.get("memory_id")
+    confirm_discussion(discussion_id=did2, agent_name="ga",
+                       stance="confirm", note="ok")
+    not_blocked = status_of(did2) == "converged"
+
+    # (4) past timeout_hours the gate stops blocking
+    d3 = create_discussion(title="守卫：超时逃生", background="超时后可收敛。",
+                           participants=["ga", "gb"],
+                           action_items=[{"assigned_to": "gb",
+                                          "description": "前置"}],
+                           convergence_rule="any", timeout_hours=1,
+                           creator="guardbot")
+    did3 = d3.get("discussion_id") or d3.get("memory_id")
+    conn = get_conn()
+    conn.execute("UPDATE memories SET created_at = datetime('now', '-2 hours') "
+                 "WHERE id = ?", (did3,))
+    conn.commit()
+    conn.close()
+    confirm_discussion(discussion_id=did3, agent_name="ga",
+                       stance="confirm", note="ok")
+    timeout_ok = status_of(did3) == "converged"
+
+    ok = blocked and released and not_blocked and timeout_ok
+    return ok, (f"blocked={blocked} released={released} "
+                f"outsider_ignored={not_blocked} timeout_escape={timeout_ok}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -2357,6 +2443,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "task_cards_always_visible": guard_task_cards_always_visible,
     "stdio_reads_utf8": guard_stdio_reads_utf8,
     "task_terminal_closes_reminder": guard_task_terminal_closes_reminder,
+    "convergence_waits_for_action_items": guard_convergence_waits_for_action_items,
 }
 
 # Full test files run as subprocesses when no guard name is given.
