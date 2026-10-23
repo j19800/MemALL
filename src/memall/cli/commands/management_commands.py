@@ -811,15 +811,36 @@ def cmd_onboarding(args):
 # cmd_serve
 # ──────────────────────────────────────────────
 
+def _redirect_logs_to_stderr() -> None:
+    """Move CLI-installed stdout log handlers onto stderr.
+
+    ``log_setup.configure()`` (called at CLI import) binds its StreamHandler
+    to *sys.stdout*, but in MCP stdio mode stdout carries the JSON-RPC
+    frames — one log line in between desynchronises the protocol.  Any other
+    entry point keeps stdout logging; only the stdio server re-points it.
+    """
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        if (isinstance(h, logging.StreamHandler)
+                and getattr(h, "stream", None) is sys.stdout):
+            try:
+                h.setStream(sys.stderr)
+            except Exception:
+                root.removeHandler(h)
+
+
 def cmd_serve(args):
     if args.http:
         from memall.gateway import MemAllGateway
         MemAllGateway(port=args.port).start()
-    elif getattr(args, "watch", False):
-        _serve_with_watch()
     else:
-        from memall.mcp.server import serve
-        serve()
+        # stdout belongs to the MCP transport (see _redirect_logs_to_stderr).
+        _redirect_logs_to_stderr()
+        if getattr(args, "watch", False):
+            _serve_with_watch()
+        else:
+            from memall.mcp.server import serve
+            serve()
 
 
 def _serve_with_watch() -> None:
@@ -851,22 +872,10 @@ def _serve_with_watch() -> None:
     pkg_dir = Path(memall.__file__).parent
 
     # ── stdout belongs to the MCP transport ──────────────────────────────
-    # The CLI calls log_setup.configure(), which installs a StreamHandler on
-    # *sys.stdout*.  In watch mode stdout carries the child's JSON-RPC
-    # frames, so a single log line corrupts the protocol (verified: the
-    # watcher's first "watch mode: server pid=…" line landed on stdout).
-    # Re-point every stdout handler at stderr, and give this module its own
-    # stderr handler that does not propagate back to the root.
-    _stdout_handlers = [
-        h for h in logging.getLogger().handlers
-        if isinstance(h, logging.StreamHandler)
-        and getattr(h, "stream", None) is sys.stdout
-    ]
-    for h in _stdout_handlers:
-        try:
-            h.setStream(sys.stderr)
-        except Exception:
-            logging.getLogger().removeHandler(h)
+    # In watch mode stdout carries the child's JSON-RPC frames, so the same
+    # stdio rule as plain ``serve`` applies (verified: the watcher's first
+    # "watch mode: server pid=…" line landed on stdout and corrupted it).
+    _redirect_logs_to_stderr()
 
     _log = logging.getLogger("memall.serve.watch")
     _log.propagate = False
