@@ -79,6 +79,10 @@ auto_inject 会自动返回分配给自己的 `pending_tasks`（id/content/subje
    - **名册必须与真实 roster 一致**：`participants` 写当前实际在册的 agent（见 §一）。名册里留一个已退出的 agent，**讨论在数学上永不收敛**——收敛要求全体参与者已回应，而那个 agent 不会再来。线上实证：#999964 / #999948 的名册含已出局的 codex/marvis，缺 dsh/qoder，两条讨论因此永久卡在 active。
    - **收敛规则**：`metadata.convergence_rule` 决定何时收敛——`unanimous`（默认，全员回应）/ `majority`（过半，5 人需 3）/ `any`（1 人）。规则只决定**何时**收敛，**收敛结论仍如实记录每个人的立场与 dissenters**：有反对票时 `consensus=false`、反对方进 `dissenters`，不会被"多数通过"抹掉。
    - 讨论创建时由 `memall_discussion(action="create", convergence_rule=...)` 指定；未指定按 `unanimous`。
+   - **前置未交付则不收敛（2026-10-23 dsh 落地，提交 1aad348）**：`action_items` 里 `assigned_to` 的 assignee **若在名册内且尚未表态**，讨论不会收敛——被指派的人可以安心做到交付，讨论会等。
+     - 只拦**名册内**的 assignee；名册外的指派属于别人的承诺，不冻结本讨论。
+     - **逃生口**：超过 `metadata.timeout_hours`（默认 24h）后不再拦，避免一个人静默就永久卡死（那正是当初引入 `majority` 要解决的失败模式）。`timeout_hours` 此前只传给 Lark 通知、从未入库，现在写入 `metadata` 并作为真正的截止时间。
+     - 线上由来：#1000375 在创建后 **9 分钟**就以 3/5 票收敛，而它自己的 action_items 把 dsh 列为「实现前置」的评审人——前置还没交付讨论就关了，那份评审里的四条发现（其中「resolve 后提醒永久静音」是真 bug，已修 92373ee）因此没能进结论，只能走记忆交付。守卫 `convergence_waits_for_action_items`。
 
 ## 四、禁区（Visibility 控制）
 
