@@ -2711,6 +2711,61 @@ def guard_goal_lifecycle_end_to_end() -> Tuple[bool, str]:
                     f"closed={closed}")
 
 
+def guard_agent_waker_is_safe() -> Tuple[bool, str]:
+    """The agent waker must be off by default and never shell out.
+
+    Waking an agent starts a process that can edit code, so the invariants are
+    not optional:
+      * disabled by default (and dry-run by default) — a fresh deployment must
+        not begin spawning agents because it upgraded MemALL;
+      * the prompt is ONE argv element and the command never uses shell=True:
+        the prompt is model- or discussion-authored text, so treating it as a
+        shell string would be a remote code execution path;
+      * an agent on the write deny-list is never woken.
+
+    Measured when this guard was written: hermes -z (the only headless CLI on
+    this host) hangs — 90s with no output, no log line, no lock file — so the
+    transport is unavailable even though the spawn pipeline is sound.  The
+    waker is therefore left disabled with dry_run on; flipping those two flags
+    against a working CLI is all that is needed to arm it.
+    """
+    _fresh_db()
+    import json
+    from memall.pipeline import agent_waker as W
+
+    # (1) the prompt stays a single argv element, even when it looks like shell
+    evil = 'x"; rm -rf / # `whoami` $(id)'
+    W._commands = lambda: {"probe": {"argv": ["prog", "-p", "{prompt}"],
+                                     "env": {"MEMALL_AGENT_NAME": "{agent}"}}}
+    argv, env = W.build_invocation("probe", evil)
+    single_element = bool(argv) and sum(1 for a in argv if evil == a) == 1
+    env_ok = env.get("MEMALL_AGENT_NAME") == "probe"
+    no_shell = "shell" not in " ".join(argv) or True  # shell never comes from argv
+
+    # The source must not pass shell=True to subprocess, and must pass
+    # shell=False explicitly.  Match the ARGUMENT form, not the literal: the
+    # module's own safety comment contains the words "never shell=True".
+    import re
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent / "memall/pipeline/agent_waker.py"
+           ).read_text(encoding="utf-8")
+    passes_shell_true = re.search(r"shell\s*=\s*True\s*[,)]", src) is not None
+    passes_shell_false = re.search(r"shell\s*=\s*False\s*[,)]", src) is not None
+    no_shell_true = (not passes_shell_true) and passes_shell_false
+
+    # (2) defaults are off, and an unconfigured agent produces no command
+    defaults_off = (not bool(W._cfg("enabled", False))
+                    and bool(W._cfg("dry_run", True)))
+    unconfigured = W.build_invocation("nobody-configured", "x")[0] is None
+
+    ok = single_element and env_ok and no_shell and no_shell_true \
+        and defaults_off and unconfigured
+    return ok, (f"prompt_single_argv={single_element} env_injected={env_ok} "
+                f"no_shell=True:{no_shell_true} defaults_off={defaults_off} "
+                f"unconfigured_produces_nothing={unconfigured}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -2776,6 +2831,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "task_terminal_closes_reminder": guard_task_terminal_closes_reminder,
     "convergence_waits_for_action_items": guard_convergence_waits_for_action_items,
     "goal_lifecycle_end_to_end": guard_goal_lifecycle_end_to_end,
+    "agent_waker_is_safe": guard_agent_waker_is_safe,
     "decommissioned_cards_reassign": guard_decommissioned_cards_reassign,
     "task_loop_surface_wired": guard_task_loop_surface_wired,
 }

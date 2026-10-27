@@ -171,6 +171,7 @@ def deliver_goal_prompts() -> dict:
         return {"delivered": 0, "actions": tick.get("actions", []),
                 "note_api": "unavailable"}
 
+    pending_prompts = []
     for act in tick.get("actions", []):
         agent = (act.get("agent") or "").strip()
         if not agent:
@@ -184,10 +185,26 @@ def deliver_goal_prompts() -> dict:
             key = f"goal:{act.get('goal_id')}:{act.get('action')}"
             if push_session_note(agent, msg, dedup_key=key):
                 delivered += 1
+                pending_prompts.append(act)
         except Exception:
             logger.debug("goal prompt delivery failed for %s", agent, exc_info=True)
+
+    # A note only reaches an agent that makes a tool call LATER.  With no live
+    # session nothing moves, which is what made the loop "半自动".  Try to wake
+    # the agent's own CLI so the hand-off actually advances.  Off by default
+    # (agents.wake.enabled=false) and dry-run by default: this starts a process
+    # that can edit code.
+    woke = {"woke": [], "skipped": []}
+    if pending_prompts:
+        try:
+            from memall.pipeline.agent_waker import wake_for_actions
+
+            woke = wake_for_actions(pending_prompts)
+        except Exception:
+            logger.debug("agent wake failed", exc_info=True)
+
     return {"delivered": delivered, "goals": tick.get("goals", 0),
-            "actions": tick.get("actions", [])}
+            "actions": tick.get("actions", []), "wake": woke}
 
 
 def run_fallback_once(force: bool = False) -> dict:
