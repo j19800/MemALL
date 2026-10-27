@@ -465,7 +465,12 @@ class HtmlHandlersMixin:
         if active_tasks:
             items += "<h2>Active ({})</h2>".format(len(active_tasks))
             for t in active_tasks:
-                ack_mark = "ack" if t.get("acknowledged_at") else "unack"
+                # A card the assignee has taken shows "claimed"; the ack/unack
+                # marker used to read acknowledged_at, but acknowledge_task is
+                # no longer on the tool surface (design #1000539 AC6) — reading
+                # it would pin every card to "unack" forever.  claimed_by is
+                # the real "someone took this" signal.
+                ack_mark = "claimed" if t.get("claimed_by") else "unclaimed"
                 age = (t.get("created_at") or "")[:10]
                 items += _task_card(t["task_id"], t["subject"], t["agent_name"], "active", ack_mark + " (" + age + ")")
 

@@ -69,7 +69,14 @@ def notify_pending_tasks(agent_name: str) -> list[dict]:
     Note: the reminder table has no reader in the current codebase — the
     agent-facing list is the L5 task card itself, which auto_inject reads as
     ``pending_tasks``.  This table is a notification copy, not the source of
-    truth.
+    truth (design #1000539: reminder rows are dedup bookkeeping; delivery is
+    auto_inject (pull) plus the per-response notification bar (live query),
+    and terminal transitions hard-delete the rows via close_task_reminders).
+    State semantics for readers of the card itself: ``claimed`` is deliberately
+    NOT nudged — pending_tasks() matches status='active' only, so once an
+    agent claims a card the scheduler stops reminding.  A claimed-then-stuck
+    card stays visible only through the notification bar (queried fresh on
+    every tool response); no background round will re-surface it.
     """
     now = datetime.now(timezone.utc)
     with pool_conn() as conn:
