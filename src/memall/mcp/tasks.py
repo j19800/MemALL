@@ -81,6 +81,41 @@ def claim_task(task_id: int, agent_name: str) -> dict:
                     "assignee": meta.get("assignee") or row["agent_name"],
                     "caller": agent_name}
 
+        # ── dependency gate ───────────────────────────────────────────
+        # depends_on was stored and displayed but never enforced, so an agent
+        # could claim a downstream card before its input existed.  Measured:
+        # B (depends_on=[A], A still active) was claimed successfully.  That
+        # is parallelism, not collaboration - a claim is a promise that the
+        # prerequisites are done, so a violated promise must fail loudly.
+        deps = meta.get("depends_on") or []
+        if isinstance(deps, (str, int)):
+            deps = [deps]
+        blocking = []
+        for d in deps:
+            try:
+                did = int(d)
+            except (TypeError, ValueError):
+                continue
+            # NOTE: _NOT_ARCHIVED is written against the alias `m`, so this
+            # query must alias the table too — without it SQLite raises
+            # "no such column: m.memory_status" and the whole claim fails.
+            drow = conn.execute(
+                "SELECT m.id, m.subject, m.metadata FROM memories m "
+                "WHERE m.id = ? AND " + _NOT_ARCHIVED, (did,)).fetchone()
+            if not drow:
+                continue  # dependency deleted: nothing left to wait for
+            dmeta = _meta_of(drow["metadata"])
+            dstatus = _status_of(dmeta.get("status"))
+            if dstatus not in ("done", "resolved", "archived", "converged",
+                               "verified"):
+                blocking.append({"task_id": drow["id"],
+                                 "subject": drow["subject"],
+                                 "status": dstatus})
+        if blocking:
+            return {"status": "blocked_by_dependency", "task_id": task_id,
+                    "reason": "prerequisites are not complete yet",
+                    "blocked_by": blocking}
+
         now = datetime.now(timezone.utc).isoformat()
         already = meta.get("claimed_by")
         meta["status"] = "claimed"

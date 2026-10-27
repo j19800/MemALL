@@ -21,6 +21,9 @@ anything in :data:`CONTRACT_CATEGORIES` was by definition not a default.
 # material. "task" rows feed notify_pending_tasks, "discussion*" rows feed the
 # convergence/trace chain, and so on.
 CONTRACT_CATEGORIES = frozenset({
+    # A goal card carries a phase machine; the classifier rewriting its
+    # category/level would make the driver lose track of it entirely.
+    "goal",
     "task",
     "discussion",
     "discussion_response",

@@ -145,12 +145,62 @@ def claim_run(min_age_seconds: int = 900) -> bool:
                 pass
 
 
+def deliver_goal_prompts() -> dict:
+    """Drive the goal lifecycle: tell each agent the ONE next thing it must do.
+
+    This is what makes collaboration automatic for session-based agents.  They
+    are not resident, so the system cannot call them; instead the driver
+    computes whose turn it is and leaves a session note, which the agent
+    receives on its next tool call (memall/mcp/shared + adapter injection).
+    Idempotent: the note is keyed by goal+action, so a repeated tick with no
+    state change does not pile up duplicates.
+    """
+    try:
+        from memall.core.db import get_conn
+        from memall.pipeline.goals import goal_tick
+
+        tick = goal_tick()
+    except Exception:
+        logger.debug("goal tick failed", exc_info=True)
+        return {"delivered": 0, "error": "tick failed"}
+
+    delivered = 0
+    try:
+        from memall.mcp.shared import push_session_note
+    except Exception:
+        return {"delivered": 0, "actions": tick.get("actions", []),
+                "note_api": "unavailable"}
+
+    for act in tick.get("actions", []):
+        agent = (act.get("agent") or "").strip()
+        if not agent:
+            continue
+        msg = act.get("message") or ""
+        if not msg:
+            continue
+        try:
+            # keyed delivery: the same goal+action is not re-queued while the
+            # previous prompt is still pending
+            key = f"goal:{act.get('goal_id')}:{act.get('action')}"
+            if push_session_note(agent, msg, dedup_key=key):
+                delivered += 1
+        except Exception:
+            logger.debug("goal prompt delivery failed for %s", agent, exc_info=True)
+    return {"delivered": delivered, "goals": tick.get("goals", 0),
+            "actions": tick.get("actions", [])}
+
+
 def run_fallback_once(force: bool = False) -> dict:
     """Run distill + integrate if there is work. Returns a small report."""
+    # The goal driver runs on EVERY tick regardless of distillation work:
+    # a pending hand-off is never "no work".
+    goal_result = deliver_goal_prompts()
+
     events = pending_event_count()
     distillable = has_distillable_input()
     if not force and not events and not distillable:
-        return {"ran": False, "reason": "no work", "events": events}
+        return {"ran": False, "reason": "no work", "events": events,
+                "goals": goal_result}
     # ``force`` also bypasses the "a pipeline ran recently" guard (used by
     # the acceptance check and by manual ops); it still never runs
     # concurrently with another live run.

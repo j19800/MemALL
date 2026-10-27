@@ -396,6 +396,38 @@ class RecapInput(BaseModel):
     limit: int = Field(5, ge=1, le=50)
 
 
+class GoalWriteInput(BaseModel):
+    """memall_write action=goal_* - the goal lifecycle surface.
+
+    One permissive model for the family: the sub-action decides which fields
+    matter, and the handlers validate them (a child without acceptance
+    criteria is rejected with a reason, not a pydantic error).
+    """
+    goal_id: Optional[int] = Field(None, ge=1)
+    memory_id: Optional[int] = Field(None, ge=1)
+    objective: Optional[str] = Field(None, max_length=4000)
+    content: Optional[str] = Field(None, max_length=4000)
+    acceptance: Optional[str] = Field(None, max_length=2000)
+    owner_agent: Optional[str] = Field(None, max_length=200)
+    goal_owner: Optional[str] = Field(None, max_length=200)
+    verifier: Optional[str] = Field(None, max_length=200)
+    participants: Optional[List[str]] = None
+    children: Optional[List[Dict[str, Any]]] = Field(
+        None, description="Decomposition: [{title, detail, assignee, acceptance, depends_on_idx}]")
+    discussion_id: Optional[int] = Field(None, ge=1)
+    passed: Optional[bool] = None
+    verdict: Optional[str] = Field(None, max_length=2000)
+    note: Optional[str] = Field(None, max_length=2000)
+    agent_name: Optional[str] = Field(None, max_length=200)
+
+
+class GoalStatusInput(BaseModel):
+    """memall_read action=goal_status - one goal, or every goal's next action."""
+    goal_id: Optional[int] = Field(None, ge=1)
+    memory_id: Optional[int] = Field(None, ge=1)
+    agent_name: Optional[str] = Field(None, max_length=200)
+
+
 class TaskClaimInput(BaseModel):
     """memall_write action=task_claim - accept a task card addressed to me.
 
@@ -413,6 +445,37 @@ class TaskListInput(BaseModel):
     status: Optional[str] = Field(
         None, description="open (default) | all | active | claimed | done")
     limit: int = Field(20, ge=1, le=200)
+
+
+class TaskResolveInput(BaseModel):
+    """memall_write action=task_resolve - close a task card as done (#1000539).
+
+    Writes through task_lifecycle.resolve_task (the single terminal path that
+    also closes the card's reminders).  ``agent_name`` is optional because the
+    adapter re-attaches the session identity; the lifecycle gate then refuses
+    a caller the card was not addressed to.
+    """
+    task_id: int = Field(..., ge=1, description="Task card id to resolve")
+    memory_id: Optional[int] = Field(
+        None, ge=1, description="Legacy alias of task_id")
+    result: str = Field("", max_length=4000,
+                        description="Closure evidence stored on resolve")
+    agent_name: Optional[str] = Field(None, max_length=200)
+
+
+class TaskBlockInput(BaseModel):
+    """memall_write action=task_block - mark a card blocked, needs a human.
+
+    ``reason`` is required: a blocked card with no reason tells the owner
+    nothing, and the whole point of surfacing blocked state is to route the
+    question to a human.
+    """
+    task_id: int = Field(..., ge=1, description="Task card id to block")
+    memory_id: Optional[int] = Field(
+        None, ge=1, description="Legacy alias of task_id")
+    reason: str = Field(..., min_length=1, max_length=1000,
+                        description="Why the card is blocked, needs a human")
+    agent_name: Optional[str] = Field(None, max_length=200)
 
 
 class FedInjectInput(BaseModel):

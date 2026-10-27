@@ -2162,6 +2162,115 @@ def guard_precise_task_handoff() -> Tuple[bool, str]:
                 f"claimed_state={claimed_notice_ok} closed={closed_ok}")
 
 
+def guard_task_loop_surface_wired() -> Tuple[bool, str]:
+    """task_resolve / task_block are on the MCP surface, gated like claim.
+
+    #1000539: task_lifecycle's acknowledge/resolve/block had NO entry point
+    (agents hand-wrote metadata.status through the generic update, bypassing
+    the state machine), and none of the three had a caller parameter — any
+    agent could resolve another agent's card. The fix puts resolve/block on
+    memall_write as actions, routes them through task_lifecycle (single
+    terminal path: closes reminders), and gates the caller exactly like
+    claim_task.  ack is deliberately NOT exposed (it leaves status=active and
+    clashes with the scheduler nudge — see acknowledge_task's docstring).
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.mcp.adapter import handle_call
+    from memall.mcp.session_identity import bind_handshake_agent, reset
+    from memall.scheduler.agent_round import notify_pending_tasks
+
+    init_db()
+    A, B, C = "looppm", "loopdev", "loopother"
+    reset(); bind_handshake_agent(A)
+    cap = json.loads(handle_call("memall_write", {
+        "action": "capture", "level": "L5", "category": "task",
+        "agent_name": B, "owner": "老陈", "project": "g",
+        "subject": "[守卫] 闭环入口",
+        "content": "守卫用任务卡：验证 task_resolve/task_block 上线且按归属拦截。",
+        "metadata": json.dumps({"status": "active", "assignee": B})}))
+    tid = cap.get("id")
+    if not tid:
+        return False, f"capture failed: {cap}"
+
+    def meta_of():
+        conn = get_conn()
+        try:
+            return json.loads(conn.execute(
+                "SELECT metadata FROM memories WHERE id=?", (tid,)).fetchone()[0])
+        finally:
+            conn.close()
+
+    def reminders(task_id=None):
+        # Takes the id explicitly: the reminder-closure assertion below operates
+        # on tid2, and the previous version closed over `tid`, so it checked the
+        # wrong card (and reported a false failure once resolve() really started
+        # deleting reminders).
+        target = tid if task_id is None else task_id
+        conn = get_conn()
+        try:
+            return [r[0] for r in conn.execute(
+                "SELECT id FROM memories WHERE category = 'task_pending' "
+                "AND json_extract(metadata, '$.task_id') = ?", (target,)).fetchall()]
+        finally:
+            conn.close()
+
+    # block: stranger refused
+    reset(); bind_handshake_agent(C)
+    denied_block = json.loads(handle_call(
+        "memall_write", {"action": "task_block", "task_id": tid,
+                         "reason": "越权尝试"}))
+    block_denied_ok = denied_block.get("status") == "forbidden"
+
+    # block: reason is required (structured validation error, not silent pass)
+    reset(); bind_handshake_agent(B)
+    no_reason = json.loads(handle_call(
+        "memall_write", {"action": "task_block", "task_id": tid}))
+    reason_required_ok = "error" in no_reason
+
+    # block: addressee succeeds, state lands
+    blocked = json.loads(handle_call(
+        "memall_write", {"action": "task_block", "task_id": tid,
+                         "reason": "等外部接口"}))
+    block_ok = (blocked.get("task_id") == tid
+                and meta_of().get("status") == "blocked")
+
+    # resolve from blocked is legal (resolve accepts active/blocked/claimed)
+    resolved = json.loads(handle_call(
+        "memall_write", {"action": "task_resolve", "task_id": tid,
+                         "result": "守卫闭环"}))
+    resolve_ok = (resolved.get("task_id") == tid
+                  and meta_of().get("status") == "resolved")
+    evidence_ok = meta_of().get("resolution") == "守卫闭环"
+
+    # a stranger cannot resolve someone else's live card
+    tid2 = json.loads(handle_call("memall_write", {
+        "action": "capture", "level": "L5", "category": "task",
+        "agent_name": B, "owner": "老陈", "project": "g",
+        "subject": "[守卫] 闭环入口二",
+        "content": "守卫用任务卡二：验证陌生人不得 resolve 他人活跃卡。",
+        "metadata": json.dumps({"status": "active", "assignee": B})}))["id"]
+    reset(); bind_handshake_agent(C)
+    denied_resolve = json.loads(handle_call(
+        "memall_write", {"action": "task_resolve", "task_id": tid2}))
+    resolve_denied_ok = denied_resolve.get("status") == "forbidden"
+
+    # terminal path also closes reminders (AC5 reuse, not a second writer)
+    reset(); bind_handshake_agent(B)
+    notify_pending_tasks(B)
+    had = bool(reminders(tid2))
+    handle_call("memall_write", {"action": "task_resolve", "task_id": tid2})
+    closed = reminders(tid2) == []
+    reminder_ok = had and closed
+
+    ok = (block_denied_ok and reason_required_ok and block_ok and resolve_ok
+          and evidence_ok and resolve_denied_ok and reminder_ok)
+    return ok, (f"block_forbidden={block_denied_ok} reason_required={reason_required_ok} "
+                f"block={block_ok} resolve={resolve_ok} evidence={evidence_ok} "
+                f"resolve_forbidden={resolve_denied_ok} reminders_closed={reminder_ok}")
+
+
 def guard_task_cards_always_visible() -> Tuple[bool, str]:
     """A task card must never become invisible to the delivery paths.
 
@@ -2380,6 +2489,228 @@ def guard_convergence_waits_for_action_items() -> Tuple[bool, str]:
                 f"outsider_ignored={not_blocked} timeout_escape={timeout_ok}")
 
 
+def guard_decommissioned_cards_reassign() -> Tuple[bool, str]:
+    """Migration 038 re-routes a departed agent's cards, idempotently.
+
+    #1000532: claude left the roster with 4 active L5 task cards, and the MCP
+    surface has no executable reassignment path — update strips agent_name
+    (memory_write.py) and enforce_agent_ownership blocks non-supervisors from
+    even writing metadata. The repair lives in migration 038; this guard pins
+    its three contract properties:
+      * the mapped ids move (agent_name + metadata.assignee);
+      * audit fields make it reversible (previous_assignee + reassigned_*);
+      * it is idempotent (a second apply touches nothing) and a subject is
+        never rewritten ([任务] is the visibility predicate).
+    """
+    _fresh_db()
+    import json
+    import importlib.util
+    from pathlib import Path
+    from memall.core.db import get_conn, init_db
+    from memall.core.thin_waist import capture
+
+    init_db()
+    spec_path = (Path(__file__).resolve().parent
+                 / "memall/migrations/038_reassign_decommissioned_agent_cards.py")
+    if not spec_path.exists():
+        return False, "migration 038 file missing"
+    spec = importlib.util.spec_from_file_location("m038", spec_path)
+    m038 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m038)
+
+    conn = get_conn()
+    seeded = []
+    try:
+        # Seed claude-addressed task cards at the ids the migration maps.
+        for owner_after in ("dsh", "opencode", "workbuddy"):
+            cap = capture(
+                f"守卫用移卡：模拟 claude 退出名册后需要移交的任务卡（{owner_after}）。",
+                level="L5", category="task", project="g", agent_name="claude",
+                owner="老陈",
+                metadata=json.dumps({"status": "active", "assignee": "claude"}))
+            seeded.append(cap)
+        # A row the id-map must NOT touch: not in _REASSIGN.
+        bystander = capture(
+            "守卫用旁观卡：不在决策 #1000527 授权清单内，迁移不得顺手改写。",
+            level="L5", category="task", project="g", agent_name="claude",
+            owner="老陈", metadata=json.dumps({"status": "active",
+                                               "assignee": "claude"}))
+        seeded.append(bystander)
+        # Force one seeded id onto the map so apply() has a live target.
+        mapped_id = next(i for i in m038._REASSIGN)
+        conn.execute("UPDATE memories SET id = ? WHERE id = ?",
+                     (mapped_id, seeded[0]))
+        conn.commit()
+        subject_before = conn.execute(
+            "SELECT subject FROM memories WHERE id = ?",
+            (mapped_id,)).fetchone()[0]
+
+        m038.apply(conn)
+        row = conn.execute(
+            "SELECT agent_name, metadata, subject FROM memories WHERE id = ?",
+            (mapped_id,)).fetchone()
+        meta = json.loads(row[1] or "{}")
+        moved = row[0] == m038._REASSIGN[mapped_id]
+        assignee_moved = meta.get("assignee") == m038._REASSIGN[mapped_id]
+        audited = (meta.get("previous_assignee") == "claude"
+                   and meta.get("reassigned_by") and meta.get("reassigned_at"))
+        subject_kept = row[2] == subject_before
+        bystander_untouched = conn.execute(
+            "SELECT agent_name FROM memories WHERE id = ?",
+            (bystander,)).fetchone()[0] == "claude"
+
+        m038.apply(conn)  # idempotent second run
+        meta2 = json.loads(conn.execute(
+            "SELECT metadata FROM memories WHERE id = ?",
+            (mapped_id,)).fetchone()[0])
+        idempotent = meta2.get("previous_assignee") == "claude"  # not overwritten with the new owner
+    finally:
+        conn.close()
+
+    ok = (moved and assignee_moved and audited and subject_kept
+          and bystander_untouched and idempotent)
+    return ok, (f"moved={moved} assignee={assignee_moved} audit={audited} "
+                f"subject_kept={subject_kept} bystander={bystander_untouched} "
+                f"idempotent={idempotent}")
+
+
+def guard_goal_lifecycle_end_to_end() -> Tuple[bool, str]:
+    """One objective must travel the whole chain and land verified.
+
+    The requirement: 给一个 agent 发布任务 -> 它拆解 -> 与其他 agent 论证 ->
+    分配各自的任务 -> 执行 -> 验收落地.  Nothing drove that sequence before:
+    each agent could see its own queue but nothing knew what the whole
+    objective needed next.
+
+    This asserts the seven properties that make it real, in one pass:
+      1. a goal starts at ``intake`` and the driver asks its owner to decompose;
+      2. decomposition is rejected for a child without acceptance criteria;
+      3. finalize is BLOCKED while the deliberation has not converged;
+      4. once converged, finalize materialises cards with the dependency chain;
+      5. a card whose prerequisites are unfinished cannot be claimed
+         (``blocked_by_dependency``) and can be once they are done;
+      6. the producer may not verify its own delivery (§五);
+      7. a non-producer's approval closes the goal.
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.mcp.adapter import handle_call
+    from memall.pipeline.goals import goal_tick
+
+    init_db()
+    PM, W1, W2, VER = "gpm", "gw1", "gw2", "gvr"
+
+    def call(tool, args):
+        return json.loads(handle_call(tool, args))
+
+    def phase(gid):
+        conn = get_conn()
+        try:
+            raw = conn.execute("SELECT metadata FROM memories WHERE id=?",
+                               (gid,)).fetchone()
+        finally:
+            conn.close()
+        m = json.loads(raw[0] or "{}") if raw else {}
+        return m.get("phase")
+
+    # (1) intake + driver points at the owner
+    created = call("memall_write", {"action": "goal_create", "agent_name": PM,
+                                    "objective": "守卫目标：验证全链路",
+                                    "acceptance": "可验证", "verifier": VER})
+    gid = created.get("goal_id")
+    if not gid:
+        return False, f"goal_create failed: {created}"
+    started = phase(gid) == "intake"
+    tick0 = goal_tick()
+    points_at_owner = any(a.get("goal_id") == gid and a.get("action") == "decompose"
+                          for a in tick0.get("actions", []))
+
+    # (2) a child without acceptance is rejected
+    bad = call("memall_write", {"action": "goal_decompose", "agent_name": PM,
+                                "goal_id": gid,
+                                "children": [{"title": "无验收", "detail": "d",
+                                              "assignee": W1, "depends_on_idx": []}]})
+    rejected = bad.get("status") == "rejected"
+
+    # (2b) a proper decomposition is accepted
+    ok = call("memall_write", {"action": "goal_decompose", "agent_name": PM,
+                               "goal_id": gid, "children": [
+        {"title": "甲", "detail": "d", "assignee": W1, "acceptance": "甲达标",
+         "depends_on_idx": []},
+        {"title": "乙", "detail": "d", "assignee": W2, "acceptance": "乙达标",
+         "depends_on_idx": [0]}]})
+    decomposed = ok.get("status") == "decomposed"
+
+    disc = call("memall_discussion", {"action": "create", "agent_name": PM,
+                                      "title": "守卫目标分工论证",
+                                      "background": "验证用",
+                                      "participants": [PM, W1, W2, VER],
+                                      "convergence_rule": "majority"})
+    did = disc.get("discussion_id") or disc.get("memory_id")
+    call("memall_write", {"action": "goal_deliberate", "agent_name": PM,
+                          "goal_id": gid, "discussion_id": did})
+
+    # (3) finalize blocked before convergence
+    pre = call("memall_write", {"action": "goal_finalize", "agent_name": PM,
+                                "goal_id": gid})
+    blocked_before = pre.get("status") == "blocked"
+
+    for ag in (W1, W2, VER):
+        call("memall_discussion", {"action": "respond", "discussion_id": did,
+                                   "agent_name": ag, "stance": "agree",
+                                   "arguments": f"{ag} ok"})
+
+    # (4) finalize materialises the chain
+    fin = call("memall_write", {"action": "goal_finalize", "agent_name": PM,
+                                "goal_id": gid})
+    tasks = fin.get("tasks") or []
+    chain_ok = (fin.get("status") == "assigned" and len(tasks) == 2
+                and tasks[1].get("depends_on") == [tasks[0]["task_id"]])
+    k0 = tasks[0]["task_id"] if tasks else 0
+    k1 = tasks[1]["task_id"] if len(tasks) > 1 else 0
+
+    # (5) dependency gate
+    gate = call("memall_write", {"action": "task_claim", "agent_name": W2,
+                                 "task_id": k1})
+    gate_blocks = (gate.get("status") == "blocked_by_dependency"
+                   and bool(gate.get("blocked_by")))
+
+    call("memall_write", {"action": "task_claim", "agent_name": W1, "task_id": k0})
+    call("memall_write", {"action": "update", "memory_id": k0, "agent_name": W1,
+                          "metadata": json.dumps({"status": "done"})})
+    gate_open = call("memall_write", {"action": "task_claim", "agent_name": W2,
+                                      "task_id": k1}).get("status") == "claimed"
+    call("memall_write", {"action": "update", "memory_id": k1, "agent_name": W2,
+                          "metadata": json.dumps({"status": "done"})})
+
+    req = call("memall_write", {"action": "goal_request_verification",
+                                "agent_name": PM, "goal_id": gid})
+    in_review = req.get("status") == "verifying"
+
+    # (6) the producer cannot self-verify
+    self_ver = call("memall_write", {"action": "goal_verify", "agent_name": W1,
+                                     "goal_id": gid, "passed": True,
+                                     "verdict": "self"})
+    self_blocked = self_ver.get("status") == "forbidden"
+
+    # (7) an independent verifier closes it
+    done = call("memall_write", {"action": "goal_verify", "agent_name": VER,
+                                 "goal_id": gid, "passed": True,
+                                 "verdict": "checked"})
+    closed = done.get("status") == "closed" and phase(gid) == "closed"
+
+    ok_all = (started and points_at_owner and rejected and decomposed
+              and blocked_before and chain_ok and gate_blocks and gate_open
+              and in_review and self_blocked and closed)
+    return ok_all, (f"intake={started} driver={points_at_owner} "
+                    f"reject_no_acceptance={rejected} decomposed={decomposed} "
+                    f"blocked_before_converge={blocked_before} chain={chain_ok} "
+                    f"dep_gate={gate_blocks} dep_opens={gate_open} "
+                    f"review={in_review} self_verify_blocked={self_blocked} "
+                    f"closed={closed}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -2444,6 +2775,9 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "stdio_reads_utf8": guard_stdio_reads_utf8,
     "task_terminal_closes_reminder": guard_task_terminal_closes_reminder,
     "convergence_waits_for_action_items": guard_convergence_waits_for_action_items,
+    "goal_lifecycle_end_to_end": guard_goal_lifecycle_end_to_end,
+    "decommissioned_cards_reassign": guard_decommissioned_cards_reassign,
+    "task_loop_surface_wired": guard_task_loop_surface_wired,
 }
 
 # Full test files run as subprocesses when no guard name is given.

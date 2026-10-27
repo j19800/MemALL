@@ -16,6 +16,9 @@ _AUTO_START_CACHE: dict[str, str] = {}
 # overwritten whenever a second agent started a session in the same process,
 # so one agent's injected context could be delivered to another.  Keyed by
 # agent name, each entry is consumed exactly once.
+import threading as _threading
+
+_NOTE_LOCK = _threading.Lock()
 _PENDING_SESSION_NOTES: dict[str, str] = {}
 # Unacked notes (audit P2-12): consume_session_note() used to pop the note
 # and lose it if the response never reached the client.  A note now stays
@@ -100,6 +103,34 @@ def ensure_session_started(agent_name: str, auto_inject: bool = True) -> None:
         logger.warning("shared.py: silent error", exc_info=True)
 
 
+# Dedup keys for notes pushed by the goal driver, so a repeating tick does not
+# queue the same prompt over and over while it is still unread.
+_NOTE_DEDUP: dict[str, set] = {}
+
+
+def push_session_note(agent_name: str, text: str, dedup_key: str = "") -> bool:
+    """Queue a note for *agent_name* to receive on its next tool call.
+
+    Returns False when the same ``dedup_key`` is already pending for that agent
+    (the driver ticks on a timer; without this an unread prompt would be
+    re-queued every five minutes).
+    """
+    agent = (agent_name or "").strip()
+    body = (text or "").strip()
+    if not agent or not body:
+        return False
+    with _NOTE_LOCK:
+        if dedup_key:
+            keys = _NOTE_DEDUP.setdefault(agent, set())
+            if dedup_key in keys:
+                return False
+            keys.add(dedup_key)
+        existing = _PENDING_SESSION_NOTES.get(agent, "")
+        _PENDING_SESSION_NOTES[agent] = (existing + "\n" + body) if existing else body
+        _NOTE_ACKED.discard(agent)
+    return True
+
+
 def consume_session_note(agent_name: str = "") -> str | None:
     """Return this agent's pending session note WITHOUT consuming it.
 
@@ -121,7 +152,7 @@ def consume_session_note(agent_name: str = "") -> str | None:
     passes the name and gets exactly its own note.
     """
     if not agent_name:
-        logger.warning(
+        logger.debug(
             "shared.py: session note requested without an agent name; "
             "refusing to guess whose note to deliver"
         )
@@ -137,13 +168,18 @@ def ack_session_note(agent_name: str = "") -> bool:
     belonged to a different agent than the one being acknowledged.
     """
     if not agent_name:
-        logger.warning(
+        logger.debug(
             "shared.py: session note ack without an agent name; "
             "refusing to guess whose note to drop"
         )
         return False
-    popped = _PENDING_SESSION_NOTES.pop(agent_name, None) is not None
-    _NOTE_ACKED.add(agent_name)
+    with _NOTE_LOCK:
+        popped = _PENDING_SESSION_NOTES.pop(agent_name, None) is not None
+        _NOTE_ACKED.add(agent_name)
+        # Free the dedup keys: "delivered" is not "done".  If the agent read the
+        # prompt but did not act on it, the driver must be able to re-issue it
+        # on a later tick — otherwise a single ack silently kills the hand-off.
+        _NOTE_DEDUP.pop(agent_name, None)
     return popped
 
 

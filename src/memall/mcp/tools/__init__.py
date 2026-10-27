@@ -80,19 +80,42 @@ def _handle_write(args: dict) -> str:
         # Lives on memall_write — it WRITES a row to search_interactions, so it
         # must not sit behind memall_read's readOnlyHint=true.
         return retrieve.handle_record_interaction(args)
+    elif action in ("goal_create", "goal_decompose", "goal_deliberate",
+                    "goal_finalize", "goal_request_verification", "goal_verify"):
+        from memall.mcp.tools import goals_handlers
+        _h = {
+            "goal_create": goals_handlers.handle_goal_create,
+            "goal_decompose": goals_handlers.handle_goal_decompose,
+            "goal_deliberate": goals_handlers.handle_goal_deliberate,
+            "goal_finalize": goals_handlers.handle_goal_finalize,
+            "goal_request_verification": goals_handlers.handle_goal_request_verification,
+            "goal_verify": goals_handlers.handle_goal_verify,
+        }[action]
+        return _h(args, args.get("agent_name", ""))
     elif action == "task_claim":
         # Accept a task card addressed to me (design #1000007).  Refuses a
         # claim from any agent the card was not addressed to.
         from memall.mcp.tools import tasks_handlers
         return tasks_handlers.handle_task_claim(args, args.get("agent_name", ""))
+    elif action == "task_resolve":
+        # Close a task card as done (design #1000539).  Writes through
+        # task_lifecycle (single terminal path: closes reminders too) and
+        # refuses a non-addressee caller.  There is NO task_ack action — ack
+        # would leave status=active and clash with the scheduler nudge.
+        from memall.mcp.tools import tasks_handlers
+        return tasks_handlers.handle_task_resolve(args, args.get("agent_name", ""))
+    elif action == "task_block":
+        # Mark a task card blocked, needing human input (design #1000539).
+        from memall.mcp.tools import tasks_handlers
+        return tasks_handlers.handle_task_block(args, args.get("agent_name", ""))
     raise ValueError(f"memall_write: unknown action '{action}'")
 
 
 registry.register(ToolDef(
     name="memall_write",
-    description="Write/capture/search/update memories, create connections, manage forgetting & ops. Actions: capture | smart_store | store_batch | batch_capture | update | connect | forget | ops | record_interaction | quick (快速记)",
+    description="Write/capture/search/update memories, create connections, manage forgetting & ops. Actions: capture | smart_store | store_batch | batch_capture | update | connect | forget | ops | record_interaction | task_claim | task_resolve | task_block | quick (快速记)",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["capture", "smart_store", "store_batch", "batch_capture", "update", "connect", "forget", "ops", "record_interaction", "task_claim", "quick", "记一下", "快速记", "随手记"]},
+        "action": {"type": "string", "enum": ["capture", "smart_store", "store_batch", "batch_capture", "update", "connect", "forget", "ops", "record_interaction", "task_claim", "task_resolve", "task_block", "quick", "记一下", "快速记", "随手记"]},
         "content": {"type": "string", "description": "Memory content"},
         "owner": {"type": "string"},
         "agent_name": {"type": "string"},
@@ -133,6 +156,13 @@ registry.register(ToolDef(
         "interaction_type": {"type": "string", "enum": ["click", "dwell", "impression", "copy", "skip"], "description": "Kind of search interaction (record_interaction)"},
         "dwell_ms": {"type": "integer", "description": "Dwell time in ms (record_interaction, interaction_type=dwell)"},
         "rank_position": {"type": "integer", "description": "1-based rank of the clicked result (record_interaction)"},
+        # task_claim / task_resolve / task_block — the card's memory id and
+        # the resolve/block payload.  Undeclared fields are stripped by the
+        # validator before the handler sees them (the F3 class of defect), so
+        # they must be on the schema or task_id would silently vanish.
+        "task_id": {"type": "integer", "description": "L5 task card id (task_claim/task_resolve/task_block)"},
+        "result": {"type": "string", "description": "Closure evidence stored on resolve (task_resolve)"},
+        "reason": {"type": "string", "description": "Why the card is blocked, needs a human (task_block)"},
         "session_id": {"type": "string"},
     }, "required": ["action"]},
     handler=_handle_write,
@@ -176,6 +206,9 @@ def _handle_read(args: dict) -> str:
         return federation.handle_conflicts(args)
     elif action == "recap":
         return retrieve.handle_recap(args)
+    elif action == "goal_status":
+        from memall.mcp.tools import goals_handlers
+        return goals_handlers.handle_goal_status(args, args.get("agent_name", ""))
     elif action == "task_list":
         # Only the cards addressed to me (design #1000007).
         from memall.mcp.tools import tasks_handlers
@@ -187,7 +220,7 @@ registry.register(ToolDef(
     name="memall_read",
     description="Search/retrieve memories, trace provenance, explore graph, timeline, federated queries, natural language chat search, post-compaction recap. Actions: retrieve | search | unified_search | chat | vector_search | hybrid_search | batch_search | trace | traverse | timeline | fed_query | fed_conflicts | recap",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["retrieve", "search", "unified_search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "batch_search", "trace", "traverse", "timeline", "fed_query", "fed_conflicts", "recap", "task_list"]},
+        "action": {"type": "string", "enum": ["retrieve", "search", "unified_search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "batch_search", "trace", "traverse", "timeline", "fed_query", "fed_conflicts", "recap", "task_list", "goal_status"]},
         "query": {"type": "string", "description": "Search query"},
         "queries": {"type": "array", "items": {"type": "string"}, "description": "Queries for batch_search"},
         "mode": {"type": "string", "enum": ["auto", "direct", "fts5", "vector", "hybrid"]},
