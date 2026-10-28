@@ -164,6 +164,15 @@ def agent_round() -> dict:
          discussions needing a response (1h dedup built in).
       2. ``notify_pending_tasks(agent_name)`` — P2 reminders for
          active L5 tasks (6h dedup).
+    Then, once per round:
+      3. ``deliver_goal_prompts()`` — drive the goal lifecycle so a pending
+         goal hand-off does not have to wait for the 6h fallback tick (P0-①).
+         The agent_round cadence is 300s vs the fallback pipeline's 21600s, so
+         wiring goal delivery here cuts the worst-case collaboration lag from
+         6h to one agent_round.  Idempotent: the note is keyed by goal+action,
+         so a repeated tick with no state change does not pile up duplicates.
+         The wake side-effect stays config-gated (agents.wake.enabled defaults
+         to false, dry_run true), so this is safe on the lightweight cadence.
     """
     from memall.pipeline.convergence import check_pending_discussions
 
@@ -172,6 +181,7 @@ def agent_round() -> dict:
         "agents_checked": len(agents),
         "discussion_reminders": 0,
         "task_reminders": 0,
+        "goal_prompts": 0,
     }
 
     for name in agents:
@@ -187,12 +197,24 @@ def agent_round() -> dict:
         except Exception as e:
             logger.warning("agent_round: notify_pending_tasks(%s) error: %s", name, e)
 
-    if stats["discussion_reminders"] or stats["task_reminders"]:
+    # P0-①: goal delivery on the agent_round cadence.  Reuses the canonical
+    # driver (goal_tick + keyed session notes + config-gated wake) instead of
+    # duplicating the note-push logic.
+    try:
+        from memall.pipeline.fallback import deliver_goal_prompts
+        goal_result = deliver_goal_prompts()
+        stats["goal_prompts"] = goal_result.get("delivered", 0)
+    except Exception as e:
+        logger.warning("agent_round: deliver_goal_prompts error: %s", e)
+
+    if (stats["discussion_reminders"] or stats["task_reminders"]
+            or stats["goal_prompts"]):
         logger.info(
-            "agent_round: %d agents, %d discussion reminders, %d task reminders",
+            "agent_round: %d agents, %d discussion reminders, %d task reminders, %d goal prompts",
             stats["agents_checked"],
             stats["discussion_reminders"],
             stats["task_reminders"],
+            stats["goal_prompts"],
         )
 
     return stats

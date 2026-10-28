@@ -1,3 +1,10 @@
+## [Unreleased] - 2026-10-28
+
+### Added（P0-① goal 投递接入 agent_round 心跳）
+
+- **agent_round 驱动 goal 生命周期（P0-①，最高杠杆）**：`scheduler/agent_round.py` 的 `agent_round()` 原先只做 discussion + task 提醒，goal 投递完全依赖 6h 的 fallback 管线（`pipeline/fallback.py:deliver_goal_prompts`）。两者周期相差 72 倍（agent_round 300s vs fallback 21600s），协作滞后最长 6h。现每轮 agent_round 追加一次 `deliver_goal_prompts()`，goal 投递滞后从 6h 降到 5min。复用既有幂等投递（keyed session note，goal+action 去重），wake 副作用仍由 `agents.wake.enabled`（默认 false）+ dry_run 门控，轻量周期下安全。`agent_round()` 返回值新增 `goal_prompts` 字段。实测 `agent_round()` 返回 `{"agents_checked":70,"discussion_reminders":1,"task_reminders":6,"goal_prompts":0}`，goal 投递路径打通无异常。
+- 关联：讨论 #1000886、定稿 #1000933、复核 #1000941。P0 级，按 veto 模式即时通知老陈（24h 否决窗口）。
+
 ## [v0.1.68] - 2026-10-18
 
 ### Fixed（pipeline 步骤修复 — 第 3 批）
