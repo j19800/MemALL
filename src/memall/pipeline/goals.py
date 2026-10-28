@@ -449,10 +449,20 @@ def next_action(conn, goal: dict) -> Optional[dict]:
 
     if phase == "intake":
         return {"agent": owner, "goal_id": gid, "action": "decompose",
-                "message": f"[目标 #{gid}] 待你拆解：{meta.get('objective', '')[:60]}"}
+                "message": f"[目标 #{gid}] 待你拆解：{meta.get('objective', '')[:60]}",
+                "instruction": (
+                    f"调用 memall_write，参数：action=goal_decompose, goal_id={gid}, "
+                    "children=[{title, detail, assignee, acceptance, depends_on_idx}]。"
+                    "每个 child 必须有 acceptance（缺了会被拒绝）；"
+                    "depends_on_idx 是本列表内的 0 基下标。")}
     if phase == "decomposed":
         return {"agent": owner, "goal_id": gid, "action": "deliberate",
-                "message": f"[目标 #{gid}] 拆解已记录（{len(meta.get('plan') or [])} 项），请发起论证"}
+                "message": f"[目标 #{gid}] 拆解已记录（{len(meta.get('plan') or [])} 项），请发起论证",
+                "instruction": (
+                    "先调用 memall_discussion action=create（participants 用当前在册 agent，"
+                    "convergence_rule=majority）拿到 discussion_id；"
+                    f"再调用 memall_write，参数：action=goal_deliberate, goal_id={gid}, "
+                    "discussion_id=<上一步的 id>。")}
     if phase == "deliberating":
         did = int(meta.get("discussion_id") or 0)
         if not did:
@@ -463,19 +473,29 @@ def next_action(conn, goal: dict) -> Optional[dict]:
         dmeta = _meta_of(drow["metadata"]) if drow else {}
         if _status_of(dmeta.get("status")) == "converged":
             return {"agent": owner, "goal_id": gid, "action": "finalize",
-                    "message": f"[目标 #{gid}] 论证已收敛，请落任务卡"}
+                    "message": f"[目标 #{gid}] 论证已收敛，请落任务卡",
+                    "instruction": (
+                        f"调用 memall_write，参数：action=goal_finalize, goal_id={gid}。"
+                        "它会按已记录的 plan 生成任务卡（含 depends_on 与 acceptance）。")}
         return None  # discussion nudges are the discussion's own job
     if phase in ("assigned", "executing"):
         kids = _children(conn, gid)
         if kids and all(k["status"] in _CHILD_TERMINAL for k in kids):
             return {"agent": owner or "", "goal_id": gid,
                     "action": "request_verification",
-                    "message": f"[目标 #{gid}] 子任务已全部交付，请提交验收"}
+                    "message": f"[目标 #{gid}] 子任务已全部交付，请提交验收",
+                    "instruction": (
+                        f"调用 memall_write，参数：action=goal_request_verification, "
+                        f"goal_id={gid}。")}
         return None  # per-task nudges are the task board's job
     if phase == "verifying":
         verifier = (meta.get("verifier") or "").strip()
         return {"agent": verifier, "goal_id": gid, "action": "verify",
-                "message": f"[目标 #{gid}] 等待验收"}
+                "message": f"[目标 #{gid}] 等待验收",
+                "instruction": (
+                    f"调用 memall_read action=goal_status goal_id={gid} 复核子任务与交付，"
+                    f"再调用 memall_write，参数：action=goal_verify, goal_id={gid}, "
+                    "passed=true|false, verdict=<你的结论>。生产者不得验收。")}
     return None
 
 

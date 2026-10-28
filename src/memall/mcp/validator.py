@@ -81,7 +81,6 @@ _ACTION_MODELS: dict[tuple[str, str], type[BaseModel]] = {
     ("memall_read", "vector_search"): VectorSearchInput,
     ("memall_read", "hybrid_search"): UnifiedSearchInput,
     ("memall_read", "batch_search"): BatchSearchInput,
-    ("memall_read", "record_interaction"): RecordInteractionInput,
     ("memall_read", "trace"): TraceInput,
     ("memall_read", "traverse"): TraverseInput,
     ("memall_read", "timeline"): TimelineInput,

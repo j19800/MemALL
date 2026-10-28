@@ -212,8 +212,12 @@ def main():
     mcp_ro = handle_call("memall_read", {
         "action": "record_interaction", "query": "检索", "memory_id": ids[1],
     })
+    # Rejection may surface as {"status": "error"} or as a validator
+    # {"error": ...} depending on which layer refuses it first; the semantic
+    # that matters is that a read-only tool cannot record an interaction.
+    _ro = json.loads(mcp_ro)
     check("record_interaction rejected on read-only memall_read",
-          json.loads(mcp_ro).get("status") == "error", mcp_ro[:120])
+          _ro.get("status") == "error" or "error" in _ro, mcp_ro[:120])
 
     mcp_bad = handle_call("memall_read", {
         "action": "search", "query": "x", "facet_fields": ["nope"],

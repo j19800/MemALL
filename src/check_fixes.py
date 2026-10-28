@@ -2733,11 +2733,16 @@ def guard_agent_waker_is_safe() -> Tuple[bool, str]:
     import json
     from memall.pipeline import agent_waker as W
 
+    from pathlib import Path as _P
+
+    _src = (_P(__file__).resolve().parent
+            / "memall/pipeline/agent_waker.py").read_text(encoding="utf-8")
+
     # (1) the prompt stays a single argv element, even when it looks like shell
     evil = 'x"; rm -rf / # `whoami` $(id)'
     W._commands = lambda: {"probe": {"argv": ["prog", "-p", "{prompt}"],
                                      "env": {"MEMALL_AGENT_NAME": "{agent}"}}}
-    argv, env = W.build_invocation("probe", evil)
+    argv, env, stdin_prompt = W.build_invocation("probe", evil)
     single_element = bool(argv) and sum(1 for a in argv if evil == a) == 1
     env_ok = env.get("MEMALL_AGENT_NAME") == "probe"
     no_shell = "shell" not in " ".join(argv) or True  # shell never comes from argv
@@ -2754,9 +2759,12 @@ def guard_agent_waker_is_safe() -> Tuple[bool, str]:
     passes_shell_false = re.search(r"shell\s*=\s*False\s*[,)]", src) is not None
     no_shell_true = (not passes_shell_true) and passes_shell_false
 
-    # (2) defaults are off, and an unconfigured agent produces no command
-    defaults_off = (not bool(W._cfg("enabled", False))
-                    and bool(W._cfg("dry_run", True)))
+    # (2) The CODE defaults must be off: a deployment that has no
+    # agents.wake block (or upgrades without one) must never start spawning
+    # agents.  Check the source rather than the live config, because an
+    # operator turning it on is a legitimate choice, not a defect.
+    defaults_off = ('_cfg("enabled", False)' in _src
+                    and '_cfg("dry_run", True)' in _src)
     unconfigured = W.build_invocation("nobody-configured", "x")[0] is None
 
     ok = single_element and env_ok and no_shell and no_shell_true \
@@ -2764,6 +2772,109 @@ def guard_agent_waker_is_safe() -> Tuple[bool, str]:
     return ok, (f"prompt_single_argv={single_element} env_injected={env_ok} "
                 f"no_shell=True:{no_shell_true} defaults_off={defaults_off} "
                 f"unconfigured_produces_nothing={unconfigured}")
+
+
+def guard_wake_claimed_in_db() -> Tuple[bool, str]:
+    """Two processes racing to wake the same (agent, goal, action) must
+    spawn exactly ONE headless run (P1-3, memory #1000942).
+
+    Every stdio MCP client session spawns its own server process, each with
+    a fallback timer calling goal_tick -> wake_agent.  The in-process
+    cooldown cannot see across processes, so the same agent was spawnable
+    once per live session — two woken instances would run concurrently
+    against the same store.  The claim now lives in the ``wake_claims``
+    table (migration 040), keyed (agent, goal_id, action).
+
+    The second process is simulated by clearing the waker's process memory
+    (a fresh server process starts with empty ``_last_wake``/``_HOURLY``)
+    and calling ``wake_agent`` again against the same throwaway DB.  It must
+    be refused with a claim/cooldown reason, while a different goal_id is an
+    independent claim and must still go through.
+    """
+    _fresh_db()
+    import sys as _sys
+    import memall.config as mc
+    from memall.core.db import get_conn, init_db
+    from memall.pipeline import agent_waker as W
+
+    init_db()
+    wake_cfg = {
+        "enabled": True,
+        "dry_run": False,
+        # argv list, single element per part — the same paranoid shape the
+        # real deployment uses (no shell, nothing to reinterpret).
+        "commands": {"probe_wa": {"argv": [_sys.executable, "-c", "pass"]}},
+    }
+    mc._config.setdefault("agents", {})["wake"] = wake_cfg
+
+    W._last_wake.clear()
+    W._HOURLY.clear()
+    W._wake_log.clear()
+
+    # Process 1: claims and spawns.
+    r1 = W.wake_agent("probe_wa", "第一进程", goal_id=7, action="decompose")
+    # Process 2: fresh process memory (its own server process), same DB.
+    W._last_wake.clear()
+    W._HOURLY.clear()
+    W._wake_log.clear()
+    r2 = W.wake_agent("probe_wa", "第二进程", goal_id=7, action="decompose")
+    # A different goal_id is an independent decision — must still claim.
+    W._last_wake.clear()
+    W._HOURLY.clear()
+    r3 = W.wake_agent("probe_wa", "第三进程", goal_id=8, action="decompose")
+
+    conn = get_conn()
+    n = conn.execute("SELECT COUNT(*) FROM wake_claims").fetchone()[0]
+    conn.close()
+
+    reason2 = r2.get("reason", "")
+    claim_r2 = ("claim" in reason2) or ("cooldown" in reason2)
+    ok = (r1.get("woke") is True and r2.get("woke") is False and claim_r2
+          and r3.get("woke") is True and n == 2)
+    return ok, (f"r1={r1.get('woke')} r2={r2.get('woke')} "
+                f"reason={reason2!r} r3={r3.get('woke')} db_rows={n}")
+
+
+def guard_write_action_surface_in_sync() -> Tuple[bool, str]:
+    """Every memall_write action the validator accepts must be ADVERTISED.
+
+    This costs hours if it drifts.  The goal lifecycle was fully wired -
+    dispatcher branch present, validator mapping present, handlers present -
+    but the action was missing from the tool's ``inputSchema.action.enum``.
+    A client validates against the schema it received, so it never makes the
+    call at all: the woken agent tried ``goal_decompose``, was told
+    "'goal_decompose' is not one of [...]", guessed at ``update`` instead, got
+    HTTP 200, and reported success while the goal had not moved.
+
+    The drift happened because the enum line is a single long literal that
+    several agents rewrote in the same session: a later rewrite of that line
+    silently dropped another agent's additions.
+
+    The invariant: validator mapping ⊆ advertised enum, for both tools.
+    """
+    _fresh_db()
+    import memall.mcp.adapter as ad
+    from memall.mcp import validator as V
+
+    ad._ensure_loaded()
+    problems = []
+    for tool in ("memall_write", "memall_read"):
+        published = {}
+        for t in ad.TOOL_DEFINITIONS:
+            if t["name"] == tool:
+                published = (t["inputSchema"].get("properties", {})
+                             .get("action", {}).get("enum", []))
+                break
+        if not published:
+            problems.append(f"{tool}: no action enum advertised")
+            continue
+        accepted = {a for (t, a) in getattr(V, "_ACTION_MODELS", {}) if t == tool}
+        missing = sorted(accepted - set(published))
+        if missing:
+            problems.append(f"{tool}: accepted-but-not-advertised={missing}")
+
+    ok = not problems
+    return ok, ("surface in sync" if ok else "; ".join(problems))
 
 
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
@@ -2832,6 +2943,8 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "convergence_waits_for_action_items": guard_convergence_waits_for_action_items,
     "goal_lifecycle_end_to_end": guard_goal_lifecycle_end_to_end,
     "agent_waker_is_safe": guard_agent_waker_is_safe,
+    "wake_claimed_in_db": guard_wake_claimed_in_db,
+    "write_action_surface_in_sync": guard_write_action_surface_in_sync,
     "decommissioned_cards_reassign": guard_decommissioned_cards_reassign,
     "task_loop_surface_wired": guard_task_loop_surface_wired,
 }
