@@ -116,7 +116,24 @@ def handle_update(arguments: dict) -> str:
     # supervisor/orchestrator agents that legitimately curate others' memories
     # are exempted explicitly via ``security.supervisor_agents``.
     if get_config("security.enforce_agent_ownership", True):
-        caller = arguments.get("agent_name", "")
+        caller = arguments.get("agent_name")
+        if caller is None:
+            # Trusted internal caller (no agent_name supplied): the gate is
+            # skipped exactly as task_lifecycle._caller_gate does for
+            # ``caller is None``.
+            caller = ""
+        elif not str(caller).strip():
+            # An explicitly empty identity cannot be attributed to any agent,
+            # so the ownership gate has nothing to compare against — refuse
+            # rather than silently skip it (the old ``if caller and ...``
+            # short-circuited on "" and let an anonymous caller overwrite
+            # another agent's memory).
+            return json.dumps({
+                "error": "agent_name is required: an empty identity is rejected",
+                "memory_id": mem_id,
+            }, ensure_ascii=False)
+        else:
+            caller = str(caller)
         if caller and not _is_supervisor(caller):
             conn = get_conn()
             try:

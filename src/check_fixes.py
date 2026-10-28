@@ -2835,6 +2835,235 @@ def guard_wake_claimed_in_db() -> Tuple[bool, str]:
                 f"reason={reason2!r} r3={r3.get('woke')} db_rows={n}")
 
 
+def guard_empty_identity_rejected_everywhere() -> Tuple[bool, str]:
+    """An empty identity must be refused at every goal-surface gate (P1-1).
+
+    goals.py's decompose/attach_discussion/finalize used
+    ``if agent_name and owner and ...`` — an empty agent_name short-circuited
+    the check and let an anonymous caller decompose/attach/finalise any goal.
+    memory_write.handle_update had the same hole: ``if caller and ...`` skipped
+    the ownership gate for caller="".
+
+    There is no legitimate empty-identity caller on the goal surface (MCP
+    injects session_identity; the gateway reads params/clientInfo), so an empty
+    identity is now rejected outright.
+
+    The guards call the pipeline handlers DIRECTLY rather than through the
+    MCP adapter: the adapter re-attaches the bound session identity (F3), so
+    an empty agent_name never reaches the handler via MCP — that is the first
+    line of defence.  This guard tests the second line (the handler itself).
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.mcp.tools.memory_write import handle_update
+    from memall.pipeline import goals as G
+
+    init_db()
+    PM, W1 = "gpm", "gw1"
+
+    created = G.create_goal("空身份守卫目标", PM, acceptance="可验证", verifier="gvr")
+    gid = created.get("goal_id")
+    if not gid:
+        return False, f"create_goal failed: {created}"
+    children = [{"title": "甲", "detail": "d", "assignee": W1,
+                 "acceptance": "甲达标", "depends_on_idx": []}]
+
+    r_decompose = G.decompose(gid, "", children)
+    r_attach = G.attach_discussion(gid, "", 1)
+    r_finalize = G.finalize(gid, "")
+    ok_decompose = r_decompose.get("status") == "forbidden"
+    ok_attach = r_attach.get("status") == "forbidden"
+    ok_finalize = r_finalize.get("status") == "forbidden"
+
+    # memory_write.handle_update: an explicitly empty agent_name must be
+    # rejected rather than silently skipping the ownership gate.  A missing
+    # agent_name (caller is None) is the trusted-internal path and stays open.
+    conn = get_conn()
+    try:
+        vid = conn.execute(
+            "INSERT INTO memories (content, content_hash, level, owner, agent_name, "
+            "subject, category, project, summary, occurred_at, created_at, updated_at, "
+            "supersedes, confidence, visibility, metadata, arc_status) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("x" * 60, "h" * 64, "L5", PM, W1, "[任务] 他人卡", "task", "memall",
+             "", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
+             "2026-01-01T00:00:00+00:00", "[]", 0.5, "private", "{}", "open")
+        ).lastrowid
+    finally:
+        conn.close()
+    r_update = json.loads(handle_update({"memory_id": vid, "agent_name": "",
+                                         "content": "hijack"}))
+    ok_update = "empty identity" in json.dumps(r_update, ensure_ascii=False)
+
+    ok = ok_decompose and ok_attach and ok_finalize and ok_update
+    return ok, (f"decompose={ok_decompose} attach={ok_attach} "
+                f"finalize={ok_finalize} update={ok_update}")
+
+
+def guard_verifying_requires_verifier() -> Tuple[bool, str]:
+    """request_verification must refuse an empty verifier (P1-2).
+
+    The old code advanced to ``verifying`` with an empty verifier; the driver
+    then produced an empty-agent delivery that fallback.py silently dropped, so
+    the goal hung forever with no escalation.
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import init_db
+    from memall.mcp.adapter import handle_call
+
+    init_db()
+    PM, W1, VER = "gpm", "gw1", "gvr"
+
+    def call(tool, args):
+        return json.loads(handle_call(tool, args))
+
+    created = call("memall_write", {"action": "goal_create", "agent_name": PM,
+                                    "objective": "空验收人目标",
+                                    "acceptance": "可验证"})  # no verifier
+    gid = created.get("goal_id")
+    call("memall_write", {"action": "goal_decompose", "agent_name": PM, "goal_id": gid,
+                          "children": [{"title": "甲", "detail": "d", "assignee": W1,
+                                        "acceptance": "甲达标", "depends_on_idx": []}]})
+    disc = call("memall_discussion", {"action": "create", "agent_name": PM,
+                                      "title": "t", "background": "b",
+                                      "participants": [PM, W1, VER],
+                                      "convergence_rule": "majority"})
+    did = disc.get("discussion_id") or disc.get("memory_id")
+    call("memall_write", {"action": "goal_deliberate", "agent_name": PM,
+                          "goal_id": gid, "discussion_id": did})
+    for ag in (PM, W1, VER):
+        call("memall_discussion", {"action": "respond", "discussion_id": did,
+                                   "agent_name": ag, "stance": "agree"})
+    fin = call("memall_write", {"action": "goal_finalize", "agent_name": PM, "goal_id": gid})
+    if fin.get("status") != "assigned":
+        return False, f"finalize failed: {fin}"
+    k0 = (fin.get("tasks") or [{}])[0].get("task_id")
+    call("memall_write", {"action": "task_resolve", "agent_name": W1, "task_id": k0})
+    r = call("memall_write", {"action": "goal_request_verification",
+                              "agent_name": PM, "goal_id": gid})
+    ok = r.get("status") == "error" and "verifier" in json.dumps(r, ensure_ascii=False)
+    return ok, f"status={r.get('status')} err={r.get('error','')[:100]}"
+
+
+def guard_forward_dependency_rejected() -> Tuple[bool, str]:
+    """decompose must reject a child that depends on a later sibling (P2-1)."""
+    _fresh_db()
+    import json
+    from memall.core.db import init_db
+    from memall.mcp.adapter import handle_call
+
+    init_db()
+    PM, W1 = "gpm", "gw1"
+
+    def call(tool, args):
+        return json.loads(handle_call(tool, args))
+
+    created = call("memall_write", {"action": "goal_create", "agent_name": PM,
+                                    "objective": "前向依赖目标",
+                                    "acceptance": "可验证", "verifier": "gvr"})
+    gid = created.get("goal_id")
+    # child 0 depends on child 1 (di > i) — must be rejected
+    r = call("memall_write", {"action": "goal_decompose", "agent_name": PM,
+                              "goal_id": gid, "children": [
+        {"title": "甲", "detail": "d", "assignee": W1, "acceptance": "甲达标",
+         "depends_on_idx": [1]},
+        {"title": "乙", "detail": "d", "assignee": W1, "acceptance": "乙达标",
+         "depends_on_idx": []}]})
+    ok = r.get("status") == "rejected"
+    return ok, f"status={r.get('status')} problems={r.get('problems')}"
+
+
+def guard_unresolved_dependency_fails_loudly() -> Tuple[bool, str]:
+    """finalize must fail loudly on an unresolved forward dependency (P2-1).
+
+    Second line of defence: decompose already rejects di > i, but a plan
+    written before that fix can still carry a forward edge.  Materialising it
+    would silently drop the dependency — this asserts it errors instead.
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.mcp.adapter import handle_call
+
+    init_db()
+    PM, W1, VER = "gpm", "gw1", "gvr"
+
+    def call(tool, args):
+        return json.loads(handle_call(tool, args))
+
+    created = call("memall_write", {"action": "goal_create", "agent_name": PM,
+                                    "objective": "未解析依赖目标",
+                                    "acceptance": "可验证", "verifier": VER})
+    gid = created.get("goal_id")
+    call("memall_write", {"action": "goal_decompose", "agent_name": PM, "goal_id": gid,
+                          "children": [{"title": "甲", "detail": "d", "assignee": W1,
+                                        "acceptance": "甲达标", "depends_on_idx": []},
+                                       {"title": "乙", "detail": "d", "assignee": W1,
+                                        "acceptance": "乙达标", "depends_on_idx": [0]}]})
+    # hand-craft a plan whose child 0 depends on index 1 (a later sibling).
+    conn = get_conn()
+    try:
+        raw = conn.execute("SELECT metadata FROM memories WHERE id=?", (gid,)).fetchone()
+        meta = json.loads(raw[0] or "{}")
+        meta["plan"] = [
+            {"idx": 0, "title": "甲", "detail": "d", "assignee": W1,
+             "acceptance": "甲达标", "depends_on_idx": [1]},
+            {"idx": 1, "title": "乙", "detail": "d", "assignee": W1,
+             "acceptance": "乙达标", "depends_on_idx": []},
+        ]
+        conn.execute("UPDATE memories SET metadata=? WHERE id=?",
+                     (json.dumps(meta, ensure_ascii=False), gid))
+        conn.commit()
+    finally:
+        conn.close()
+    disc = call("memall_discussion", {"action": "create", "agent_name": PM,
+                                      "title": "t", "background": "b",
+                                      "participants": [PM, W1, VER],
+                                      "convergence_rule": "majority"})
+    did = disc.get("discussion_id") or disc.get("memory_id")
+    call("memall_write", {"action": "goal_deliberate", "agent_name": PM,
+                          "goal_id": gid, "discussion_id": did})
+    for ag in (PM, W1, VER):
+        call("memall_discussion", {"action": "respond", "discussion_id": did,
+                                   "agent_name": ag, "stance": "agree"})
+    r = call("memall_write", {"action": "goal_finalize", "agent_name": PM, "goal_id": gid})
+    ok = r.get("status") == "error" and "unresolved" in json.dumps(r, ensure_ascii=False)
+    return ok, f"status={r.get('status')} err={r.get('error','')[:120]}"
+
+
+def guard_duplicate_objective_rejected() -> Tuple[bool, str]:
+    """create_goal must not mint a second goal for the same objective (P2-2)."""
+    _fresh_db()
+    import json
+    from memall.core.db import init_db
+    from memall.mcp.adapter import handle_call
+
+    init_db()
+    PM = "gpm"
+
+    def call(tool, args):
+        return json.loads(handle_call(tool, args))
+
+    first = call("memall_write", {"action": "goal_create", "agent_name": PM,
+                                  "objective": "重复目标：验证去重",
+                                  "acceptance": "可验证", "verifier": "gvr"})
+    gid1 = first.get("goal_id")
+    # same objective, different verifier — defeats the content_hash backstop
+    second = call("memall_write", {"action": "goal_create", "agent_name": PM,
+                                   "objective": "重复目标：验证去重",
+                                   "acceptance": "可验证", "verifier": "gvx"})
+    dup = second.get("status") == "duplicate" and second.get("goal_id") == gid1
+    # a different objective must still create
+    third = call("memall_write", {"action": "goal_create", "agent_name": PM,
+                                  "objective": "另一个目标",
+                                  "acceptance": "可验证", "verifier": "gvr"})
+    created = third.get("status") == "created" and bool(third.get("goal_id"))
+    ok = dup and created
+    return ok, f"dup={dup} gid1={gid1} gid2={second.get('goal_id')} created={created}"
+
+
 def guard_write_action_surface_in_sync() -> Tuple[bool, str]:
     """Every memall_write action the validator accepts must be ADVERTISED.
 
@@ -2944,6 +3173,11 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "goal_lifecycle_end_to_end": guard_goal_lifecycle_end_to_end,
     "agent_waker_is_safe": guard_agent_waker_is_safe,
     "wake_claimed_in_db": guard_wake_claimed_in_db,
+    "empty_identity_rejected_everywhere": guard_empty_identity_rejected_everywhere,
+    "verifying_requires_verifier": guard_verifying_requires_verifier,
+    "forward_dependency_rejected": guard_forward_dependency_rejected,
+    "unresolved_dependency_fails_loudly": guard_unresolved_dependency_fails_loudly,
+    "duplicate_objective_rejected": guard_duplicate_objective_rejected,
     "write_action_surface_in_sync": guard_write_action_surface_in_sync,
     "decommissioned_cards_reassign": guard_decommissioned_cards_reassign,
     "task_loop_surface_wired": guard_task_loop_surface_wired,

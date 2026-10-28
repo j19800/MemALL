@@ -137,6 +137,29 @@ def create_goal(objective: str, owner: str, acceptance: str = "",
     if not (objective or "").strip():
         return {"status": "error", "error": "objective is required"}
 
+    # Dedup by normalised objective.  The only prior backstop was capture's
+    # content_hash, but the body embeds owner/verifier, so a field-level
+    # difference defeats it and a retry (or a racing tick) mints a second
+    # goal that drives a whole extra decompose-deliberate-finalize cycle.
+    norm = " ".join(objective.strip().lower().split())
+    from memall.core.db import get_conn as _get_conn
+    _conn = _get_conn()
+    try:
+        _rows = _conn.execute(
+            "SELECT id, metadata FROM memories "
+            "WHERE level = ? AND category = ? "
+            "AND json_extract(metadata, '$.status') = 'active'",
+            (GOAL_LEVEL, GOAL_CATEGORY)).fetchall()
+    finally:
+        _conn.close()
+    for _r in _rows:
+        _rm = _meta_of(_r["metadata"])
+        if " ".join((_rm.get("objective") or "").strip().lower().split()) == norm:
+            return {"status": "duplicate", "goal_id": _r["id"],
+                    "phase": _rm.get("phase"),
+                    "message": f"an active goal with the same objective already "
+                               f"exists (#{_r['id']})"}
+
     body = (f"[目标] {objective.strip()}\n\n"
             f"验收标准：{acceptance.strip() or '（未填写，验收前必须补齐）'}\n"
             f"编排人：{owner}\n"
@@ -175,6 +198,10 @@ def decompose(goal_id: int, agent_name: str, children: list[dict]) -> dict:
         return {"status": "error", "error": "children list is empty"}
     conn = get_conn()
     try:
+        if not (agent_name or "").strip():
+            return {"status": "forbidden",
+                    "reason": "agent_name is required: an empty identity is rejected",
+                    "caller": agent_name}
         g = _get_goal(conn, goal_id)
         if not g:
             return {"status": "error", "error": f"goal #{goal_id} not found"}
@@ -183,7 +210,7 @@ def decompose(goal_id: int, agent_name: str, children: list[dict]) -> dict:
             return {"status": "error",
                     "error": f"goal is in phase '{_phase_of(meta)}', cannot decompose"}
         owner = (meta.get("owner") or "").strip()
-        if agent_name and owner and agent_name.lower() != owner.lower():
+        if owner and agent_name.lower() != owner.lower():
             return {"status": "forbidden",
                     "reason": "only the goal's owner may decompose it",
                     "owner": owner, "caller": agent_name}
@@ -205,6 +232,11 @@ def decompose(goal_id: int, agent_name: str, children: list[dict]) -> dict:
                     continue
                 if di == i:
                     problems.append(f"child {i} depends on itself")
+                elif di > i:
+                    problems.append(
+                        f"child {i} depends on a later sibling (index {di}); "
+                        f"a decomposition is topologically ordered, so a child may "
+                        f"only depend on earlier siblings")
                 elif not (0 <= di < len(children)):
                     problems.append(f"child {i} depends on out-of-range index {di}")
                 else:
@@ -238,6 +270,10 @@ def attach_discussion(goal_id: int, agent_name: str, discussion_id: int) -> dict
 
     conn = get_conn()
     try:
+        if not (agent_name or "").strip():
+            return {"status": "forbidden",
+                    "reason": "agent_name is required: an empty identity is rejected",
+                    "caller": agent_name}
         g = _get_goal(conn, goal_id)
         if not g:
             return {"status": "error", "error": f"goal #{goal_id} not found"}
@@ -246,7 +282,7 @@ def attach_discussion(goal_id: int, agent_name: str, discussion_id: int) -> dict
             return {"status": "error",
                     "error": f"expected phase 'decomposed', got '{_phase_of(meta)}'"}
         owner = (meta.get("owner") or "").strip()
-        if agent_name and owner and agent_name.lower() != owner.lower():
+        if owner and agent_name.lower() != owner.lower():
             return {"status": "forbidden", "reason": "only the owner may open deliberation",
                     "owner": owner}
         meta["discussion_id"] = int(discussion_id)
@@ -269,6 +305,10 @@ def finalize(goal_id: int, agent_name: str) -> dict:
 
     conn = get_conn()
     try:
+        if not (agent_name or "").strip():
+            return {"status": "forbidden",
+                    "reason": "agent_name is required: an empty identity is rejected",
+                    "caller": agent_name}
         g = _get_goal(conn, goal_id)
         if not g:
             return {"status": "error", "error": f"goal #{goal_id} not found"}
@@ -277,7 +317,7 @@ def finalize(goal_id: int, agent_name: str) -> dict:
             return {"status": "error",
                     "error": f"expected phase 'deliberating', got '{_phase_of(meta)}'"}
         owner = (meta.get("owner") or "").strip()
-        if agent_name and owner and agent_name.lower() != owner.lower():
+        if owner and agent_name.lower() != owner.lower():
             return {"status": "forbidden", "reason": "only the owner may finalise",
                     "owner": owner}
 
@@ -298,8 +338,20 @@ def finalize(goal_id: int, agent_name: str) -> dict:
         idx_to_id: dict[int, int] = {}
         created = []
         for item in plan:
-            deps = [idx_to_id[i] for i in item.get("depends_on_idx") or []
-                    if i in idx_to_id]
+            unresolved = [i for i in (item.get("depends_on_idx") or [])
+                          if i not in idx_to_id]
+            if unresolved:
+                # Second line of defence: the decompose layer already rejects
+                # di > i, but a plan written before that fix (or by hand) can
+                # still carry a forward dependency.  Materialising it would
+                # silently drop the edge — the dependency gate on the card
+                # would then be vacuous.  Fail loudly instead.
+                return {"status": "error",
+                        "error": (f"child {item['idx']} depends on unresolved index "
+                                  f"{unresolved}; finalize refuses to silently drop a "
+                                  f"forward dependency"),
+                        "goal_id": goal_id, "unresolved": unresolved}
+            deps = [idx_to_id[i] for i in (item.get("depends_on_idx") or [])]
             acc = item.get("acceptance") or meta.get("acceptance") or ""
             assignee = item.get("assignee") or owner
             body = (f"{item.get('detail') or item['title']}\n\n"
@@ -355,16 +407,25 @@ def request_verification(goal_id: int, agent_name: str = "") -> dict:
                     "open": [{"id": k["id"], "status": k["status"]}
                              for k in outstanding]}
         verifier = (meta.get("verifier") or "").strip()
-        if verifier and agent_name and verifier.lower() == agent_name.lower():
-            pass  # verifier pulling the goal into review is exactly right
+        if not verifier:
+            # Option (a): the verifier is decided BEFORE the goal enters
+            # review.  The old code advanced to ``verifying`` with an empty
+            # verifier and the driver then produced an empty-agent delivery
+            # that fallback.py silently dropped — the goal hung forever with
+            # no escalation.  Refusing here keeps the "any non-producer may
+            # verify" wording from inviting a grab-the-goal race.
+            return {"status": "error",
+                    "error": "verifier is required: request_verification rejects an empty verifier",
+                    "goal_id": goal_id,
+                    "next": "先指定验收人（须为非生产方），再请求验收"}
         meta["phase"] = "verifying"
         meta.setdefault("phase_history", []).append(
             {"phase": "verifying", "at": _now()})
         _save_meta(conn, goal_id, meta)
         conn.commit()
         return {"status": "verifying", "goal_id": goal_id,
-                "verifier": verifier or "（未指定，任何非生产方均可验收）",
-                "next": f"验收人 {verifier or '(非生产方)'} 需要验收"}
+                "verifier": verifier,
+                "next": f"验收人 {verifier} 需要验收"}
     finally:
         conn.close()
 

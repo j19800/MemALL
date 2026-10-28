@@ -5,6 +5,14 @@
 - **agent_round 驱动 goal 生命周期（P0-①，最高杠杆）**：`scheduler/agent_round.py` 的 `agent_round()` 原先只做 discussion + task 提醒，goal 投递完全依赖 6h 的 fallback 管线（`pipeline/fallback.py:deliver_goal_prompts`）。两者周期相差 72 倍（agent_round 300s vs fallback 21600s），协作滞后最长 6h。现每轮 agent_round 追加一次 `deliver_goal_prompts()`，goal 投递滞后从 6h 降到 5min。复用既有幂等投递（keyed session note，goal+action 去重），wake 副作用仍由 `agents.wake.enabled`（默认 false）+ dry_run 门控，轻量周期下安全。`agent_round()` 返回值新增 `goal_prompts` 字段。实测 `agent_round()` 返回 `{"agents_checked":70,"discussion_reminders":1,"task_reminders":6,"goal_prompts":0}`，goal 投递路径打通无异常。
 - 关联：讨论 #1000886、定稿 #1000933、复核 #1000941。P0 级，按 veto 模式即时通知老陈（24h 否决窗口）。
 
+### Fixed（goals 链路审查 P1×3 + P2×2，复核 #1000941 派工）
+
+- **P1-1 空身份一律拒绝（安全洞）**：`pipeline/goals.py` 的 `decompose`/`attach_discussion`/`finalize` 三处原为 `if agent_name and owner and ...`，空 `agent_name` 短路放行，匿名调用方可拆解/关联/落卡任意目标。现空身份检查提到函数最前（在任何状态逻辑之前拒绝），`mcp/tools/memory_write.py` 的 ownership 门同步区分 `caller is None`（可信内部，仿 `task_lifecycle._caller_gate`）与 `caller==""`（拒绝）。守卫 `empty_identity_rejected_everywhere`。
+- **P1-2 request_verification 拒绝空 verifier**：原允许 verifier 为空推进 `verifying`，driver 产出空 agent 投递被 `fallback.py` 静默丢弃，goal 永久卡死无升级。现空 verifier 直接拒绝并要求先指定（验收人先定是宪法 §五 语义）。守卫 `verifying_requires_verifier`。
+- **P2-1 decompose 拒绝前向依赖 + finalize 未解析依赖显式报错**：原 `decompose` 允许 `di>i`（依赖后面的兄弟），`finalize` 按序物化时 `if i in idx_to_id` 静默丢弃该依赖，顺序约束蒸发且无环检测。现 `decompose` 拒绝 `di>i`（拆解单天然拓扑序），`finalize` 加第二道防线对未解析依赖显式报错。守卫 `forward_dependency_rejected` + `unresolved_dependency_fails_loudly`。
+- **P2-2 create_goal 按 objective 规范化哈希去重**：原无幂等检查，唯一兜底是 capture 的 content_hash（body 内嵌 owner/verifier，字段稍异即漏），多进程 tick 或重试即产生重复目标。现按规范化 objective 浅去重，同 objective 未 closed 返回既有 goal_id。守卫 `duplicate_objective_rejected`。
+- 验证：5 个新守卫 + 既有 `goal_lifecycle_end_to_end`（7 断言）全部通过，无回归。
+
 ## [v0.1.68] - 2026-10-18
 
 ### Fixed（pipeline 步骤修复 — 第 3 批）
