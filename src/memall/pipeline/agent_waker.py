@@ -43,6 +43,21 @@ code.  So the defaults are deliberately paranoid:
 The wake is a *nudge*, not a guarantee: it tells the agent "you have work
 waiting".  The agent still goes through its normal MCP tools, so every existing
 guard (claim must be addressed to you, producers cannot verify) still applies.
+
+A wake command must be THAT AGENT'S OWN runtime
+-----------------------------------------------
+Configuring one CLI under several agent names and stamping
+``MEMALL_AGENT_NAME=<someone else>`` on it does not dispatch work to that agent —
+it manufactures an impostor that writes under the agent's name while running in
+a fresh throwaway session.  That is the opposite of handing work to a colleague:
+the real agent never sees it, its context is not used, and the store records
+authorship that never happened.
+
+So a command block must declare ``runtime_agent`` and it must equal the agent
+being woken.  A mismatch is refused, not "fixed up".  Agents without their own
+entrypoint (a GUI app, a human-driven CLI) are never woken at all: their work is
+delivered as a task card plus a directed session note, which their own session
+surfaces when it runs.
 """
 from __future__ import annotations
 
@@ -133,10 +148,12 @@ def build_invocation(agent_name: str, prompt: str):
     """
     spec = _commands().get(agent_name)
     if not spec:
-        return None, None, False
+        return None, None, False, None
     env: dict = {}
     stdin_prompt = False
+    runtime_agent = None
     if isinstance(spec, dict):
+        runtime_agent = spec.get("runtime_agent")
         env = {str(k): str(v).replace("{agent}", agent_name)
                for k, v in (spec.get("env") or {}).items()}
         stdin_prompt = bool(spec.get("stdin_prompt"))
@@ -160,12 +177,12 @@ def build_invocation(agent_name: str, prompt: str):
             out.append(p)
     if not used and not stdin_prompt:
         out.append(prompt)
-    return out, env, stdin_prompt
+    return out, env, stdin_prompt, runtime_agent
 
 
 def build_argv(agent_name: str, prompt: str) -> Optional[list[str]]:
     """Backwards-compatible wrapper returning only the argv."""
-    argv, _, _ = build_invocation(agent_name, prompt)
+    argv, _, _, _ = build_invocation(agent_name, prompt)
     return argv
 
 
@@ -323,9 +340,22 @@ def wake_agent(agent_name: str, prompt: str, *, goal_id: int = 0,
     except Exception:
         pass
 
-    argv, extra_env, stdin_prompt = build_invocation(agent, body)
+    argv, extra_env, stdin_prompt, runtime_agent = build_invocation(agent, body)
     if not argv:
-        return {"woke": False, "reason": f"no wake command configured for {agent}"}
+        return {"woke": False,
+                "reason": (f"no wake command configured for {agent} (work for this "
+                           f"agent is delivered as a task card + session note)")}
+
+    # Refuse to manufacture an impostor: a command may only speak for the agent
+    # whose runtime it actually is.  Borrowing another agent's CLI and stamping
+    # this agent's name on it produces a fresh throwaway session writing under
+    # someone else's identity, while the real agent never learns it has work.
+    if runtime_agent is not None and str(runtime_agent) != agent:
+        return {"woke": False,
+                "reason": (f"refusing to wake '{agent}' with a command that "
+                           f"declares runtime_agent='{runtime_agent}': waking must "
+                           f"use the agent's own entrypoint, not another agent's "
+                           f"runtime wearing its name")}
     spawn_env = dict(os.environ)
     if extra_env:
         spawn_env.update(extra_env)

@@ -737,9 +737,43 @@ def finalize(goal_id: int, agent_name: str) -> dict:
                     "failed": failed, "not_attempted": not_attempted,
                     "next": ("目标仍停在 deliberating；修复失败的子项后重试 "
                              "goal_finalize，已建卡片会按 plan_idx 复用")}
+
+        # Dispatch to the REAL agents, through the channel each of them already
+        # reads: a directed session note that their own session surfaces on its
+        # next tool call.  Deliberately NOT a spawned process and NOT a
+        # sub-agent — the assignee is one of the registered agents, and the card
+        # is theirs to claim in its own workspace.  Without this the only
+        # delivery was the passive task_pending reminder, so a card could sit
+        # unnoticed for as long as the assignee happened not to run.
+        dispatched = []
+        seen_agents = set()
+        for card in created:
+            who = (card.get("assignee") or "").strip()
+            if not who or who in seen_agents:
+                continue
+            seen_agents.add(who)
+            plan_item = next((p for p in plan if int(p.get("idx", -1))
+                              == int(card.get("idx", -2))), {})
+            text = (f"[派工] 目标 #{goal_id} 的「{plan_item.get('title', '')}」由你负责。"
+                    f"任务卡 #{card.get('task_id')}，验收标准："
+                    f"{plan_item.get('acceptance', '') or '（见卡内）'}。"
+                    f"请用 memall_write action=task_claim 认领，完成后 "
+                    f"action=task_resolve 交付；目标验收由 "
+                    f"{(meta.get('verifier') or '非生产方')} 负责。")
+            try:
+                from memall.mcp.shared import push_session_note
+
+                if push_session_note(who, text,
+                                     dedup_key=f"dispatch:{goal_id}:{card.get('task_id')}"):
+                    dispatched.append(who)
+            except Exception:
+                logger.debug("dispatch note failed for %s", who, exc_info=True)
+
         return {"status": "assigned", "goal_id": goal_id,
                 "tasks": created, "reused": reused, "phase": "assigned",
-                "next": "等待各 assignee 认领并交付"}
+                "dispatched_to": sorted(set(dispatched)),
+                "next": ("已把任务卡派发到各 assignee 自己的会话；"
+                         "他们认领并交付后，目标自动进入验收")}
     finally:
         conn.close()
 
