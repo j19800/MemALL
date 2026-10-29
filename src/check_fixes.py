@@ -2798,41 +2798,180 @@ def guard_wake_claimed_in_db() -> Tuple[bool, str]:
     from memall.pipeline import agent_waker as W
 
     init_db()
-    wake_cfg = {
-        "enabled": True,
-        "dry_run": False,
-        # argv list, single element per part — the same paranoid shape the
-        # real deployment uses (no shell, nothing to reinterpret).
-        "commands": {"probe_wa": {"argv": [_sys.executable, "-c", "pass"]}},
-    }
-    mc._config.setdefault("agents", {})["wake"] = wake_cfg
+    # Don't fight the config hot-reloader: pin the waker entry points
+    # directly.  The config path itself is already covered by
+    # guard_agent_waker_is_safe; here we only need wake to be "on" with a
+    # spawnable probe command so the DB-claim behaviour is what's exercised.
+    # dry_run is pinned too: the claim sits AFTER the dry_run branch, so a
+    # config with dry_run=true (the safe default) would make this guard return
+    # "dry_run" before ever reaching wake_claims — it must exercise the claim
+    # path regardless of the deployment's dry_run setting.
+    _orig_enabled = W.enabled
+    _orig_commands = W._commands
+    _orig_dry_run = W.dry_run
+    W.enabled = lambda: True
+    W._commands = lambda: {"probe_wa": {"argv": [_sys.executable, "-c", "pass"]}}
+    W.dry_run = lambda: False
+    try:
+        W._last_wake.clear()
+        W._HOURLY.clear()
+        W._wake_log.clear()
 
-    W._last_wake.clear()
-    W._HOURLY.clear()
-    W._wake_log.clear()
+        # Process 1: claims and spawns.
+        r1 = W.wake_agent("probe_wa", "第一进程", goal_id=7, action="decompose")
+        # Process 2: fresh process memory (its own server process), same DB.
+        W._last_wake.clear()
+        W._HOURLY.clear()
+        W._wake_log.clear()
+        r2 = W.wake_agent("probe_wa", "第二进程", goal_id=7, action="decompose")
+        # A different goal_id is an independent decision — must still claim.
+        W._last_wake.clear()
+        W._HOURLY.clear()
+        r3 = W.wake_agent("probe_wa", "第三进程", goal_id=8, action="decompose")
 
-    # Process 1: claims and spawns.
-    r1 = W.wake_agent("probe_wa", "第一进程", goal_id=7, action="decompose")
-    # Process 2: fresh process memory (its own server process), same DB.
-    W._last_wake.clear()
-    W._HOURLY.clear()
-    W._wake_log.clear()
-    r2 = W.wake_agent("probe_wa", "第二进程", goal_id=7, action="decompose")
-    # A different goal_id is an independent decision — must still claim.
-    W._last_wake.clear()
-    W._HOURLY.clear()
-    r3 = W.wake_agent("probe_wa", "第三进程", goal_id=8, action="decompose")
+        conn = get_conn()
+        n = conn.execute("SELECT COUNT(*) FROM wake_claims").fetchone()[0]
+        conn.close()
 
-    conn = get_conn()
-    n = conn.execute("SELECT COUNT(*) FROM wake_claims").fetchone()[0]
-    conn.close()
+        reason2 = r2.get("reason", "")
+        claim_r2 = ("claim" in reason2) or ("cooldown" in reason2)
+        ok = (r1.get("woke") is True and r2.get("woke") is False and claim_r2
+              and r3.get("woke") is True and n == 2)
+        result = (ok, (f"r1={r1.get('woke')} r2={r2.get('woke')} "
+                       f"reason={reason2!r} r3={r3.get('woke')} db_rows={n}"))
+    finally:
+        W.enabled = _orig_enabled
+        W._commands = _orig_commands
+        W.dry_run = _orig_dry_run
+    return result
 
-    reason2 = r2.get("reason", "")
-    claim_r2 = ("claim" in reason2) or ("cooldown" in reason2)
-    ok = (r1.get("woke") is True and r2.get("woke") is False and claim_r2
-          and r3.get("woke") is True and n == 2)
-    return ok, (f"r1={r1.get('woke')} r2={r2.get('woke')} "
-                f"reason={reason2!r} r3={r3.get('woke')} db_rows={n}")
+
+def guard_goal_tick_on_heartbeat_cadence() -> Tuple[bool, str]:
+    """P0-①: goal hand-offs must ride the 300s tick, not the 6h pipeline.
+
+    ``goal_tick`` used to run only inside the fallback pipeline (21600s), so a
+    goal waiting on its owner could sit half a day before anyone was told.
+    The scheduler's fast tick now runs
+    ``agent_round`` -> ``deliver_goal_prompts`` -> ``goal_tick``.
+
+    Three properties, asserted behaviourally through the REAL ``_tick``:
+      1. cadence — the fast tick is not slower than the heartbeat, and is far
+         faster than the pipeline;
+      2. idempotency — two consecutive ticks with no state change leave ONE
+         session note for the goal, not two (reconcile, not a firehose);
+      3. isolation — a raising goal driver must not break ``agent_round`` or
+         the scheduler tick; the heartbeat keeps beating.
+    """
+    _fresh_db()
+    import time as _time
+    from pathlib import Path
+    import memall.config as mc
+    import memall.scheduler.scheduler as S
+    from memall.core.db import get_conn, init_db
+    from memall.mcp import shared as SH
+    from memall.mcp.adapter import handle_call
+    from memall.pipeline import fallback as FB
+
+    init_db()
+
+    # Wake spawns a CLI process.  The guard must not depend on whatever the
+    # deployment (or an earlier guard in the same process) left in
+    # agents.wake, and must put it back afterwards.
+    agents_cfg = mc._config.setdefault("agents", {})
+    prev_wake = agents_cfg.get("wake")
+    agents_cfg["wake"] = {"enabled": False, "dry_run": True}
+    mc._last_mtime_check = float("inf")
+
+    prev_log = S.HEARTBEAT_LOG
+    S.HEARTBEAT_LOG = Path(tempfile.mkdtemp(prefix="memall_hb_")) / "heartbeat.log"
+    try:
+        owner = "gowner"
+        created = json.loads(handle_call("memall_write", {
+            "action": "goal_create", "agent_name": owner,
+            "objective": "守卫：心跳节奏驱动目标推进（P0-①）",
+            "acceptance": "可验证", "verifier": "gver"}))
+        gid = created.get("goal_id")
+        if not gid:
+            return False, f"goal_create failed: {created}"
+
+        conn = get_conn()
+        conn.execute(
+            "INSERT OR IGNORE INTO identities (agent_name, agent_type, status) "
+            "VALUES (?, 'ai', 'active')", (owner,))
+        conn.commit()
+        conn.close()
+
+        SH._PENDING_SESSION_NOTES.clear()
+        SH._NOTE_DEDUP.clear()
+        SH._NOTE_ACKED.clear()
+
+        sched = S.Scheduler()
+        now_t = _time.time()
+        # Pin every slow timer to "just ran": one _tick() then exercises
+        # exactly the heartbeat + agent_round (fast) path.
+        for attr in ("_last_pipeline", "_last_doctor", "_last_forget",
+                     "_last_security", "_last_lifecycle", "_last_dream"):
+            setattr(sched, attr, now_t)
+        sched._last_agent_round = 0  # fast tick is due
+
+        sched._tick()
+        after_one = SH.consume_session_note(owner) or ""
+        sched._last_agent_round = 0
+        sched._tick()
+        after_two = SH.consume_session_note(owner) or ""
+
+        marker = f"[目标 #{gid}]"
+        first_prompt = marker in after_one
+        repeat_delta = after_two.count(marker) - after_one.count(marker)
+
+        # Isolation: the driver blows up, the loop must not.
+        def _boom(*a, **k):
+            raise RuntimeError("guard-injected goal driver failure")
+
+        from memall.scheduler.agent_round import agent_round
+        orig_driver = FB.deliver_goal_prompts
+        FB.deliver_goal_prompts = _boom
+        try:
+            try:
+                agent_round()
+                round_ok = True
+            except Exception:
+                round_ok = False
+        finally:
+            FB.deliver_goal_prompts = orig_driver
+
+        FB.deliver_goal_prompts = _boom
+        try:
+            sched._last_agent_round = 0
+            sched._tick()
+            tick_ok = True
+        except Exception:
+            tick_ok = False
+        finally:
+            FB.deliver_goal_prompts = orig_driver
+
+        conn = get_conn()
+        hb = conn.execute(
+            "SELECT last_heartbeat FROM identities WHERE agent_name = ?",
+            (owner,)).fetchone()
+        conn.close()
+        heartbeat_alive = bool(hb and hb["last_heartbeat"])
+
+        cadence_ok = (S.INTERVAL_PROXY_SESSION <= S.INTERVAL_HEARTBEAT
+                      and S.INTERVAL_PROXY_SESSION < S.INTERVAL_PIPELINE)
+        ok = (cadence_ok and first_prompt and repeat_delta == 0
+              and round_ok and tick_ok and heartbeat_alive)
+        return ok, (f"cadence={S.INTERVAL_PROXY_SESSION}s<=hb({S.INTERVAL_HEARTBEAT}s)"
+                    f"<pipeline({S.INTERVAL_PIPELINE})s:{cadence_ok} "
+                    f"first_prompt={first_prompt} repeat_delta={repeat_delta} "
+                    f"round_survives={round_ok} tick_survives={tick_ok} "
+                    f"heartbeat_alive={heartbeat_alive}")
+    finally:
+        S.HEARTBEAT_LOG = prev_log
+        if prev_wake is None:
+            agents_cfg.pop("wake", None)
+        else:
+            agents_cfg["wake"] = prev_wake
 
 
 def guard_empty_identity_rejected_everywhere() -> Tuple[bool, str]:
@@ -3106,6 +3245,54 @@ def guard_write_action_surface_in_sync() -> Tuple[bool, str]:
     return ok, ("surface in sync" if ok else "; ".join(problems))
 
 
+def guard_goal_children_accepts_json_string() -> Tuple[bool, str]:
+    """A decomposition sent as a JSON STRING must still be accepted.
+
+    Models routinely serialise a nested array as a JSON-encoded string.  Before
+    this, ``children`` was declared ``Optional[List[Dict]]`` only, so a
+    well-formed decomposition arrived as the text ``[{"title": ...}]`` and
+    pydantic rejected it with "children: must be a valid list".
+
+    Measured on a live woken agent: it burned its entire turn guessing at the
+    format — retrying with different quoting, shorter strings, fewer fields —
+    and never decomposed the goal, then exited claiming nothing was wrong.
+    The GOAL stayed at intake with an empty plan.
+
+    The contract must stay strict in the other direction: a string that is not
+    JSON is still an error, and it must say so instead of silently becoming
+    "no children".
+    """
+    _fresh_db()
+    import json as _json
+    from memall.mcp.models import GoalWriteInput
+
+    sample = [{"title": "t0", "acceptance": "a0"},
+              {"title": "t1", "acceptance": "a1", "depends_on_idx": [0]}]
+    from_string = GoalWriteInput(goal_id=1, children=_json.dumps(sample)).children
+    from_list = GoalWriteInput(goal_id=1, children=sample).children
+    csv_participants = GoalWriteInput(participants="dsh,qoder").participants
+
+    string_ok = (isinstance(from_string, list) and len(from_string) == 2
+                 and from_string[1]["title"] == "t1")
+    list_ok = isinstance(from_list, list) and len(from_list) == 2
+    participants_ok = csv_participants == ["dsh", "qoder"]
+
+    rejected = False
+    detail = ""
+    try:
+        GoalWriteInput(goal_id=1, children="not json at all")
+    except Exception as exc:
+        rejected = True
+        detail = str(exc)
+    # The message must name the field so the caller can fix the call.
+    names_field = "children" in detail
+
+    ok = string_ok and list_ok and participants_ok and rejected and names_field
+    return ok, (f"json_string_parsed={string_ok} native_list={list_ok} "
+                f"csv_participants={participants_ok} bad_string_rejected={rejected} "
+                f"error_names_field={names_field}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -3173,12 +3360,14 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "goal_lifecycle_end_to_end": guard_goal_lifecycle_end_to_end,
     "agent_waker_is_safe": guard_agent_waker_is_safe,
     "wake_claimed_in_db": guard_wake_claimed_in_db,
+    "goal_tick_on_heartbeat_cadence": guard_goal_tick_on_heartbeat_cadence,
     "empty_identity_rejected_everywhere": guard_empty_identity_rejected_everywhere,
     "verifying_requires_verifier": guard_verifying_requires_verifier,
     "forward_dependency_rejected": guard_forward_dependency_rejected,
     "unresolved_dependency_fails_loudly": guard_unresolved_dependency_fails_loudly,
     "duplicate_objective_rejected": guard_duplicate_objective_rejected,
     "write_action_surface_in_sync": guard_write_action_surface_in_sync,
+    "goal_children_accepts_json_string": guard_goal_children_accepts_json_string,
     "decommissioned_cards_reassign": guard_decommissioned_cards_reassign,
     "task_loop_surface_wired": guard_task_loop_surface_wired,
 }

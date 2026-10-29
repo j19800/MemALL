@@ -420,6 +420,57 @@ class GoalWriteInput(BaseModel):
     note: Optional[str] = Field(None, max_length=2000)
     agent_name: Optional[str] = Field(None, max_length=200)
 
+    @field_validator("children", mode="before")
+    @classmethod
+    def _children_accepts_json_string(cls, v):
+        """Accept the decomposition as a JSON string as well as a real list.
+
+        Models routinely emit a nested array as a JSON-encoded STRING.  Without
+        this, a perfectly well-formed decomposition arrives as the text
+        "[{\"title\": ...}]" and pydantic rejects it with "must be a valid
+        list" — measured against a live woken agent, which then spent its whole
+        turn guessing at the format and never decomposed the goal.
+
+        Parsing here keeps the contract honest: a malformed string still fails,
+        but with a message naming the actual problem.
+        """
+        if not isinstance(v, str):
+            return v
+        import json as _json
+
+        text = v.strip()
+        if not text:
+            return None
+        try:
+            parsed = _json.loads(text)
+        except Exception as exc:
+            raise ValueError(f"children is a string but not valid JSON: {exc}") from exc
+        if not isinstance(parsed, list):
+            raise ValueError(
+                f"children must be a list (or a JSON array string); got {type(parsed).__name__}")
+        return parsed
+
+    @field_validator("participants", mode="before")
+    @classmethod
+    def _participants_accepts_json_string(cls, v):
+        if not isinstance(v, str):
+            return v
+        import json as _json
+
+        text = v.strip()
+        if not text:
+            return None
+        try:
+            parsed = _json.loads(text)
+        except Exception:
+            # A bare comma-separated list is a reasonable human shorthand.
+            return [x.strip() for x in text.split(",") if x.strip()]
+        if isinstance(parsed, str):
+            return [parsed]
+        if not isinstance(parsed, list):
+            raise ValueError("participants must be a list or a comma-separated string")
+        return parsed
+
 
 class GoalStatusInput(BaseModel):
     """memall_read action=goal_status - one goal, or every goal's next action."""
