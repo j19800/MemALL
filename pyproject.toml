@@ -75,7 +75,7 @@ rerank = [
 ]
 # Full install: core + visualization + faiss (no heavy rerank/PyTorch)
 full = [
-    "memall[viz,faiss]",
+    "memall-os[viz,faiss]",
 ]
 
 [project.urls]
