@@ -1,5 +1,7 @@
 # DeepSeek CLI 接入 our free model（无人介入唤醒的传输层）
 
+> **文档状态**：现行 · 运维必读 — 无人介入唤醒的传输层配置；换 CLI/换模型时先读此份
+
 > 日期：2026-10-29 ｜ 状态：已接通并端到端验证
 > 相关：`src/memall/pipeline/agent_waker.py`、`~/.memall/config.json` 的 `agents.wake`
 

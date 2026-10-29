@@ -1,4 +1,6 @@
 # MemALL 多 Agent 协作改进方案
+
+> **文档状态**：已被取代 — workbuddy 版；已合并进 -定稿-20261029，后续只读定稿
 > 依据：Multica 代码深度分析（`docs/Multica-代码深度分析-20261028.md`）+ 前序 7 项机制调研（记忆 #1000774）+ 本地 `E:\multica` 源码核验。
 > 原则：**借鉴 Multica 的协作决策范式，不引入其执行后端**（Go/Postgres/daemon/26 个 CLI 适配层一律不碰）。MemALL 保持"记忆 + 目标协作 OS"定位。
 > 验收基线：库内 `category='goal%'` 当前 0 行 —— 本方案的目标不只是"代码通电"，而是**让至少一个真实 goal 走完 create→decompose→distribute→verify 全程并留下数据**。

@@ -1,5 +1,7 @@
 # MemALL MCP 工具参考（自动生成）
 
+> **文档状态**：现行 · 自动生成 — 由代码生成，勿手改；与代码不一致时以代码为准
+
 > 本文件由 `scripts/gen_mcp_tools_doc.py` 从 `memall.mcp.adapter` 的 TOOL_DEFINITIONS 生成，共 **8** 个工具。
 > **请勿手改本文件**——重新运行生成器即可。
 
