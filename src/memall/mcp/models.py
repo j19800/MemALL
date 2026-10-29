@@ -416,6 +416,9 @@ class GoalWriteInput(BaseModel):
         None, description="Decomposition: [{title, detail, assignee, acceptance, depends_on_idx}]")
     discussion_id: Optional[int] = Field(None, ge=1)
     passed: Optional[bool] = None
+    parallel_ok: Optional[bool] = Field(
+        None, description="Declare that the decomposition's children may run in "
+                          "parallel; silences the sequencing-language dependency warning")
     verdict: Optional[str] = Field(None, max_length=2000)
     note: Optional[str] = Field(None, max_length=2000)
     agent_name: Optional[str] = Field(None, max_length=200)

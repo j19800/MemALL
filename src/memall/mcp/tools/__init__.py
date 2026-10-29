@@ -127,6 +127,26 @@ registry.register(ToolDef(
         "metadata": {"type": "string", "description": "JSON metadata string"},
         "thread_id": {"type": "integer", "description": "Parent memory ID for thread context"},
         "memory_id": {"type": "integer", "description": "Memory ID (update/connect/forget/record_interaction)"},
+        # --- goal lifecycle (#1001101): the fields below exist on the handlers
+        # but were never advertised, so an agent had to guess their names.  A
+        # live woken agent burned a whole turn doing exactly that.  Keep this
+        # list in step with GoalWriteInput.
+        "goal_id": {"type": "integer", "description": "Goal memory ID (goal_* actions)"},
+        "objective": {"type": "string", "description": "goal_create: the objective to achieve"},
+        "acceptance": {"type": "string", "description": "goal_create: how completion is verified"},
+        "verifier": {"type": "string", "description": "goal_create: agent who verifies (never the producer)"},
+        "goal_owner": {"type": "string", "description": "goal_create: orchestration owner"},
+        "children": {
+            "type": "array",
+            "description": "goal_decompose: [{title, detail, assignee, acceptance, depends_on_idx}]; a JSON-array string is also accepted",
+            "items": {"type": "object"},
+        },
+        "parallel_ok": {"type": "boolean", "description": "goal_decompose: declare children may run in parallel (silences the sequencing-dependency warning)"},
+        "dependency_warnings": {"type": "array", "items": {"type": "string"}, "description": "goal_status: reported dependency concerns"},
+        "discussion_id": {"type": "integer", "description": "goal_deliberate: the discussion proving the plan"},
+        "passed": {"type": "boolean", "description": "goal_verify: whether the delivery is accepted"},
+        "verdict": {"type": "string", "description": "goal_verify: the verifier's conclusion"},
+        "note": {"type": "string", "description": "goal_*: free-form note"},
         "source_id": {"type": "integer"},
         "target_id": {"type": "integer"},
         "relation_type": {"type": "string", "enum": ["extends", "contradicts", "refines", "cites", "supersedes"]},
