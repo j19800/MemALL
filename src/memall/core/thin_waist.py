@@ -1,8 +1,10 @@
 import logging
 import json
+import random
 import re
 import threading
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -1046,7 +1048,17 @@ def _capture_dedup_check(
     Returns existing memory id on hit, None to proceed with insert."""
     cur = conn.execute(
         "SELECT id, level, category, subject, project, summary, confidence "
-        "FROM memories WHERE content_hash = ?",
+        "FROM memories WHERE content_hash = ? "
+        # A CLOSED workflow card is history, not a duplicate write.  Without
+        # this, re-filing an identical L5 card after it was closed returned
+        # the dead row's id: the caller saw "captured", the reminder chain saw
+        # a terminal card, and the work never re-entered anyone's queue
+        # (measured on goal re-creation, P2-2).
+        "AND NOT (level = 'L5' AND COALESCE("
+        "  CASE WHEN json_valid(metadata) "
+        "       THEN json_extract(metadata, '$.status') ELSE 'active' END, "
+        "  'active') IN ('done', 'resolved', 'archived', 'converged', "
+        "                'verified', 'closed'))",
         (h,),
     )
     existing = cur.fetchone()
@@ -1153,10 +1165,23 @@ def _capture_dedup_check(
             )
             return dup["id"]
 
-    # L5 duplicate: same agent + subject → merge metadata, don't duplicate
+    # L5 duplicate: same agent + subject → merge metadata, don't duplicate.
+    # TERMINAL cards are excluded: a closed/cancelled card is history, not a
+    # duplicate.  Measured (P2-2): re-creating a goal with the same objective
+    # after it closed returned the CLOSED row's id, so the caller believed a
+    # fresh goal existed while every subsequent write merged into a done card —
+    # the new goal silently never existed.
     if data.level == "L5" and data.agent_name and data.subject:
         dup = conn.execute(
-            "SELECT id, metadata FROM memories WHERE level = 'L5' AND agent_name = ? AND subject = ? LIMIT 1",
+            "SELECT id, metadata FROM memories "
+            "WHERE level = 'L5' AND agent_name = ? AND subject = ? "
+            "AND COALESCE(CASE WHEN json_valid(metadata) "
+            "                  THEN json_extract(metadata, '$.status') "
+            "                  ELSE 'active' END, 'active') "
+            "    NOT IN ('done', 'resolved', 'archived', 'converged', "
+            "            'verified', 'closed') "
+            "AND COALESCE(memory_status, '') != 'archived' "
+            "ORDER BY id DESC LIMIT 1",
             (data.agent_name, data.subject),
         ).fetchone()
         if dup:
@@ -1471,6 +1496,43 @@ def _capture_post_insert(conn, mem_id: int, data: MemoryInput, h: str) -> None:
     dispatch_lifecycle(HOOK_POST_CAPTURE, data=data, memory_id=mem_id)
 
 
+def _capture_write_once(conn, data: MemoryInput, h: str, now: str,
+                        accumulate_key) -> int:
+    """One attempt at the write half of capture: dedup → identity → insert."""
+    existing_id = _capture_dedup_check(conn, data, h, now, accumulate_key)
+    if existing_id is not None:
+        return existing_id
+
+    _capture_prepare_identity(conn, data)
+
+    # ── Defect fix: populate thread_id so thread-aware retrieve/traverse works ──
+    # thread_id is a back-pointer to the *root* memory of the current
+    # conversation thread. It was never assigned on the write path, leaving
+    # traverse(..., thread_aware=True) permanently dead. We link the new memory
+    # to the earliest same-agent + same-project memory inside a recent window,
+    # which establishes a stable thread root all siblings share.
+    if data.thread_id is None:
+        data.thread_id = _infer_thread_root(conn, data, now)
+
+    mem_id = _capture_insert_row(conn, data, h, now)
+    _capture_post_insert(conn, mem_id, data, h)
+
+    # Contextual recall: after storing a memory, check for related high-level
+    # memories in the same project.
+    if get_config("contextual_recall_enabled", True):
+        try:
+            _contextual_recall(conn, mem_id, data)
+        except Exception as e:
+            logger.warning(f"Contextual recall failed: {e}", exc_info=True)
+
+    return mem_id
+
+
+def _is_lock_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "locked" in msg or "busy" in msg
+
+
 def capture(
     data: MemoryInput | dict | str, accumulate_key: str | None = None, **overrides
 ) -> int:
@@ -1554,33 +1616,30 @@ def capture(
     # finalised, so the auto-tagger can use it as the highest-signal source).
     _capture_assign_tags(data)
 
-    with _pool_conn() as conn:
-        existing_id = _capture_dedup_check(conn, data, h, now, accumulate_key)
-        if existing_id is not None:
-            return existing_id
-
-        _capture_prepare_identity(conn, data)
-
-        # ── Defect fix: populate thread_id so thread-aware retrieve/traverse works ──
-        # thread_id is a back-pointer to the *root* memory of the current
-        # conversation thread. It was never assigned on the write path, leaving
-        # traverse(..., thread_aware=True) permanently dead. We link the new memory
-        # to the earliest same-agent + same-project memory inside a recent window,
-        # which establishes a stable thread root all siblings share.
-        if data.thread_id is None:
-            data.thread_id = _infer_thread_root(conn, data, now)
-
-        mem_id = _capture_insert_row(conn, data, h, now)
-        _capture_post_insert(conn, mem_id, data, h)
-        
-        # Contextual recall: after storing a memory, check for related high-level memories in the same project.
-        if get_config("contextual_recall_enabled", True):
-            try:
-                _contextual_recall(conn, mem_id, data)
-            except Exception as e:
-                logger.warning(f"Contextual recall failed: {e}", exc_info=True)
-
-        return mem_id
+    # SQLite in WAL still refuses an upgrade from a read snapshot to a writer
+    # when another connection committed in between: ``BEGIN ... SELECT ... INSERT``
+    # raises "database is locked" IMMEDIATELY and ``busy_timeout`` does not apply
+    # to that case.  capture() always reads first (hash dedup, identity, thread
+    # root), so under concurrent writes — a background pipeline thread plus an
+    # agent tool call — the INSERT is exactly that upgrade.  Measured on the live
+    # MCP server: a capture burst lost a write to "database is locked" while the
+    # caller was told the tool failed.  A retry is safe because the read half is
+    # idempotent: if a competing writer won, its row is found by the hash dedup.
+    attempts = max(1, int(get_config("capture.lock_retries", 5) or 5))
+    for attempt in range(attempts):
+        try:
+            with _pool_conn() as conn:
+                return _capture_write_once(conn, data, h, now, accumulate_key)
+        except sqlite3.OperationalError as exc:
+            if not _is_lock_error(exc) or attempt == attempts - 1:
+                raise
+            wait = min(0.05 * (2 ** attempt), 1.0) + random.uniform(0, 0.03)
+            logger.warning(
+                "capture: %s (attempt %d/%d), retrying in %.2fs",
+                exc, attempt + 1, attempts, wait,
+            )
+            time.sleep(wait)
+    raise RuntimeError("capture: retry loop exited without result")  # pragma: no cover
 
 
 def _contextual_recall(conn, mem_id: int, data: MemoryInput) -> None:

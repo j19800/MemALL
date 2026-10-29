@@ -1319,6 +1319,93 @@ def guard_busy_timeout_survives_concurrency() -> Tuple[bool, str]:
                 f"concurrent_errors={errors[:2] or 'none'}")
 
 
+def guard_capture_retries_on_lock() -> Tuple[bool, str]:
+    """capture() must survive a read->write upgrade conflict.
+
+    ``busy_timeout_survives_concurrency`` pins the timeout and forbids a
+    *literal* ``BEGIN`` in the pipeline, but capture() has the same hazard
+    without writing BEGIN: it always reads first (hash dedup, identity,
+    thread root) inside its implicit transaction, then inserts.  In WAL a
+    read snapshot that another connection committed under cannot be upgraded
+    — SQLite returns "database is locked" IMMEDIATELY and busy_timeout does
+    not apply.  Measured on the live MCP server: a capture burst lost a write
+    to exactly this while the agent was told the tool had failed.
+    """
+    _fresh_db()
+    import sqlite3
+    import threading
+    import time as _t
+    import memall.config as mc
+    from memall.core.db import get_conn, init_db
+    from memall.core.thin_waist import capture
+
+    init_db()
+    # Keep the guard fast: a long busy_timeout would hide the retry path.
+    mc._config.setdefault("db", {})["busy_timeout_ms"] = 100
+    mc._config.setdefault("capture", {})["lock_retries"] = 6
+
+    # Warm up the write path first.  capture() does project inference and
+    # quality scoring before it touches the DB; on a cold process that alone
+    # can outlast the lock window, so the guard would pass without ever
+    # exercising the retry (measured: a first-run capture "succeeded" under a
+    # 0.5s lock purely because it reached the INSERT after the lock was gone).
+    capture("预热：让推理与质量评分在锁竞争前完成，避免守卫被冷启动时间蒙蔽。",
+            level="L4", category="reflection", project="guard",
+            agent_name="guard", subject="[守卫] 锁竞争预热")
+
+    holder_held = threading.Event()
+    holder_done = threading.Event()
+
+    def hold_lock():
+        # The connection must be created AND used in the same thread: sqlite3
+        # rejects cross-thread use ("SQLite objects created in a thread can
+        # only be used in that same thread"), which would silently leave the
+        # write lock held forever and make the guard fail for the wrong reason.
+        conn = get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE memories SET updated_at = updated_at WHERE id IS NULL")
+            holder_held.set()
+            _t.sleep(1.2)
+            conn.commit()
+        finally:
+            conn.close()
+            holder_done.set()
+
+    threading.Thread(target=hold_lock, daemon=True).start()
+    if not holder_held.wait(timeout=5):
+        return False, "lock holder never acquired the write lock"
+
+    t0 = _t.time()
+    err = ""
+    mem_id = None
+    try:
+        mem_id = capture("锁竞争下的写入必须重试成功，而不是把 database is locked "
+                         "抛给调用方（WAL 读快照升级为写锁时会立刻失败，"
+                         "busy_timeout 对该路径不生效）。",
+                         level="L4", category="reflection", project="guard",
+                         agent_name="guard", subject="[守卫] 锁竞争重试")
+    except Exception as exc:  # noqa: BLE001 — the guard reports the failure
+        err = f"{type(exc).__name__}: {exc}"
+    elapsed = _t.time() - t0
+    holder_done.wait(timeout=10)
+
+    rows = 0
+    if mem_id:
+        c = get_conn()
+        try:
+            rows = c.execute(
+                "SELECT COUNT(*) AS n FROM memories WHERE content_hash = "
+                "(SELECT content_hash FROM memories WHERE id = ?)",
+                (mem_id,)).fetchone()["n"]
+        finally:
+            c.close()
+    ok = bool(mem_id) and not err and rows == 1 and elapsed >= 1.0
+    return ok, (f"mem_id={mem_id} rows={rows} elapsed={elapsed:.2f}s "
+                f"err={err or 'none'}")
+
+
 def guard_update_can_complete_tasks() -> Tuple[bool, str]:
     """update must be able to write metadata (the L5 task status).
 
@@ -3058,24 +3145,54 @@ def guard_verifying_requires_verifier() -> Tuple[bool, str]:
     def call(tool, args):
         return json.loads(handle_call(tool, args))
 
-    created = call("memall_write", {"action": "goal_create", "agent_name": PM,
-                                    "objective": "空验收人目标",
-                                    "acceptance": "可验证"})  # no verifier
+    import time as _t
+
+    def step(payload, tool="memall_write", attempts=5):
+        """Run one lifecycle step, retrying ONLY the documented conflict.
+
+        ``_save_meta`` is a compare-and-set against the metadata blob, and two
+        writers legitimately share a goal: the background agent_round driver
+        (``goal_tick``) refreshes the same row while an agent calls
+        decompose/deliberate/finalize.  The contract is "re-read and retry",
+        so a guard that ignores the intermediate status is flaky by
+        construction — measured: the same flow passed 3/3 in isolation and
+        intermittently failed with "'decomposed'" when the tick wrote between
+        attach_discussion's read and its write.
+        """
+        out = {}
+        for _ in range(attempts):
+            out = call(tool, payload)
+            if out.get("status") != "conflict":
+                return out
+            _t.sleep(0.2)
+        return out
+
+    created = step({"action": "goal_create", "agent_name": PM,
+                    "objective": "空验收人目标",
+                    "acceptance": "可验证"})  # no verifier
     gid = created.get("goal_id")
-    call("memall_write", {"action": "goal_decompose", "agent_name": PM, "goal_id": gid,
-                          "children": [{"title": "甲", "detail": "d", "assignee": W1,
-                                        "acceptance": "甲达标", "depends_on_idx": []}]})
+    if not gid:
+        return False, f"create failed: {created}"
+    dec = step({"action": "goal_decompose", "agent_name": PM, "goal_id": gid,
+                "children": [{"title": "甲", "detail": "d", "assignee": W1,
+                              "acceptance": "甲达标", "depends_on_idx": []}]})
+    if dec.get("phase") != "decomposed":
+        return False, f"decompose failed: {dec}"
     disc = call("memall_discussion", {"action": "create", "agent_name": PM,
                                       "title": "t", "background": "b",
                                       "participants": [PM, W1, VER],
                                       "convergence_rule": "majority"})
     did = disc.get("discussion_id") or disc.get("memory_id")
-    call("memall_write", {"action": "goal_deliberate", "agent_name": PM,
-                          "goal_id": gid, "discussion_id": did})
+    if not did:
+        return False, f"discussion create failed: {disc}"
+    delib = step({"action": "goal_deliberate", "agent_name": PM,
+                  "goal_id": gid, "discussion_id": did})
+    if delib.get("status") != "deliberating":
+        return False, f"deliberate failed: {delib}"
     for ag in (PM, W1, VER):
         call("memall_discussion", {"action": "respond", "discussion_id": did,
                                    "agent_name": ag, "stance": "agree"})
-    fin = call("memall_write", {"action": "goal_finalize", "agent_name": PM, "goal_id": gid})
+    fin = step({"action": "goal_finalize", "agent_name": PM, "goal_id": gid})
     if fin.get("status") != "assigned":
         return False, f"finalize failed: {fin}"
     k0 = (fin.get("tasks") or [{}])[0].get("task_id")
@@ -3199,8 +3316,32 @@ def guard_duplicate_objective_rejected() -> Tuple[bool, str]:
                                   "objective": "另一个目标",
                                   "acceptance": "可验证", "verifier": "gvr"})
     created = third.get("status") == "created" and bool(third.get("goal_id"))
-    ok = dup and created
-    return ok, f"dup={dup} gid1={gid1} gid2={second.get('goal_id')} created={created}"
+    # A CLOSED goal must not block a fresh one with the same objective.  The
+    # dedup only looks at status='active'; verify_goal closes by writing
+    # phase=closed/status=done (goals.py:810-811), so mirror that exactly
+    # instead of inventing a status the lifecycle never produces.
+    from memall.core.db import get_conn
+    _c = get_conn()
+    try:
+        _row = _c.execute("SELECT metadata FROM memories WHERE id = ?",
+                          (gid1,)).fetchone()
+        _m = json.loads(_row["metadata"])
+        _m["phase"] = "closed"
+        _m["status"] = "done"
+        _c.execute("UPDATE memories SET metadata = ? WHERE id = ?",
+                   (json.dumps(_m, ensure_ascii=False), gid1))
+        _c.commit()
+    finally:
+        _c.close()
+    again = call("memall_write", {"action": "goal_create", "agent_name": PM,
+                                  "objective": "重复目标：验证去重",
+                                  "acceptance": "可验证", "verifier": "gvr"})
+    reopened = (again.get("status") == "created"
+                and again.get("goal_id") not in (None, gid1))
+    ok = dup and created and reopened
+    return ok, (f"dup={dup} gid1={gid1} gid2={second.get('goal_id')} "
+                f"created={created} closed_recreate={reopened} "
+                f"cycle={again.get('cycle')} prev={again.get('previous_goal_id')}")
 
 
 def guard_write_action_surface_in_sync() -> Tuple[bool, str]:
@@ -3293,6 +3434,417 @@ def guard_goal_children_accepts_json_string() -> Tuple[bool, str]:
                 f"error_names_field={names_field}")
 
 
+def guard_partial_finalize_leaves_goal_in_deliberating() -> Tuple[bool, str]:
+    """A failed child must stop finalize in 'deliberating', not look 'assigned'.
+
+    P2-3.  ``finalize`` used to swallow a failed ``capture`` (``if isinstance(tid,
+    int)``) and advance the goal to ``assigned`` anyway, so the plan's missing
+    card was invisible: the driver saw "waiting for assignees" forever, and a
+    retry re-created every card it had already made.  This asserts the four
+    properties of the fix:
+      1. the goal stays in ``deliberating``;
+      2. the response is an explicit ``partial`` naming created / failed /
+         not-attempted children, and the same record is persisted;
+      3. dependents are not attempted against a missing prerequisite;
+      4. a retry completes and REUSES the card from the first attempt
+         (no duplicate card per plan item).
+    """
+    _fresh_db()
+    import json
+    from memall.core import thin_waist
+    from memall.core.db import get_conn, init_db
+    from memall.pipeline import goals
+
+    init_db()
+    PM, VER = "pfm", "pfv"
+    made = goals.create_goal("部分失败守卫目标", PM, acceptance="全部完成",
+                             verifier=VER)
+    gid = made.get("goal_id")
+    if not gid:
+        return False, f"create_goal failed: {made}"
+
+    dec = goals.decompose(gid, PM, [
+        {"title": "甲", "detail": "d", "assignee": "pfw1", "acceptance": "甲达标"},
+        {"title": "乙", "detail": "d", "assignee": "pfw2", "acceptance": "乙达标",
+         "depends_on_idx": [0]},
+        {"title": "丙", "detail": "d", "assignee": "pfw3", "acceptance": "丙达标",
+         "depends_on_idx": [1]},
+    ])
+    if dec.get("status") != "decomposed":
+        return False, f"decompose failed: {dec}"
+    # discussion_id 0 keeps the convergence gate out of this guard's way; the
+    # real converge path is covered by guard_goal_lifecycle_end_to_end.
+    att = goals.attach_discussion(gid, PM, 0)
+    if att.get("status") != "deliberating":
+        return False, f"attach_discussion failed: {att}"
+
+    real_capture = thin_waist.capture
+    calls = {"n": 0}
+
+    def flaky(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ValueError("quality gate rejected (injected by guard)")
+        return real_capture(*a, **kw)
+
+    thin_waist.capture = flaky
+    try:
+        first = goals.finalize(gid, PM)
+    finally:
+        thin_waist.capture = real_capture
+
+    def _meta(gid):
+        conn = get_conn()
+        try:
+            row = conn.execute(
+                "SELECT metadata FROM memories WHERE id = ?", (gid,)).fetchone()
+        finally:
+            conn.close()
+        return json.loads(row["metadata"] or "{}") if row else {}
+
+    def _cards(gid):
+        conn = get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT id FROM memories WHERE level = 'L5' "
+                "AND category = 'task' "
+                "AND json_extract(metadata, '$.goal_id') = ?", (gid,)).fetchall()
+        finally:
+            conn.close()
+        return [r["id"] for r in rows]
+
+    after = _meta(gid)
+    stayed = after.get("phase") == "deliberating"
+    partial_ok = (first.get("status") == "partial"
+                  and [c["idx"] for c in first.get("created") or []] == [0]
+                  and [f["idx"] for f in first.get("failed") or []] == [1]
+                  and first.get("not_attempted") == [2])
+    recorded = bool((after.get("partial_finalize") or {}).get("failed"))
+    lease_cleared = "finalize_inflight" not in after
+    cards_after = _cards(gid)
+    one_card = len(cards_after) == 1
+
+    retry = goals.finalize(gid, PM)
+    final = _meta(gid)
+    assigned = retry.get("status") == "assigned" and final.get("phase") == "assigned"
+    reused_first = any(r.get("idx") == 0 for r in retry.get("reused") or [])
+    cards_final = _cards(gid)
+    no_duplicates = (len(cards_final) == 3
+                     and set(cards_after).issubset(set(cards_final)))
+    cleaned = "partial_finalize" not in final and "finalize_inflight" not in final
+
+    ok = (stayed and partial_ok and recorded and lease_cleared and one_card
+          and assigned and reused_first and no_duplicates and cleaned)
+    return ok, (f"stays_deliberating={stayed} partial_shape={partial_ok} "
+                f"persisted={recorded} lease_released={lease_cleared} "
+                f"one_card_after_failure={one_card} retry_assigned={assigned} "
+                f"reused_first={reused_first} no_duplicates={no_duplicates} "
+                f"state_cleaned={cleaned}")
+
+
+def guard_addressed_to_single_impl() -> Tuple[bool, str]:
+    """One implementation of "may this caller act on this card" (P2-4).
+
+    The predicate lived twice (``mcp/tasks.py`` and
+    ``pipeline/task_lifecycle.py``) and ``security.supervisor_agents`` was
+    looked up in three places, so a policy change on one side silently did not
+    apply on the other.  This asserts both halves of the contract:
+      * no local ``_addressed_to`` definition is left anywhere in ``src``, and
+        both callers import the shared gate;
+      * the policy is per-operation: the addressee wins over the card's
+        ``agent_name`` column, a supervisor may resolve/block but NOT claim,
+        and an anonymous (``None``) internal caller may do both.
+    """
+    _fresh_db()
+    import json
+    import re
+    from pathlib import Path
+    from memall.core import task_identity as TI
+    from memall.core.db import init_db
+    from memall.core.thin_waist import capture
+    from memall.mcp import tasks as T
+    from memall.pipeline import task_lifecycle as TL
+
+    init_db()
+    src_dir = Path(__file__).resolve().parent / "memall"
+    stray = [p.name for p in src_dir.rglob("*.py")
+             if re.search(r"^\s*def\s+_addressed_to\b",
+                          p.read_text(encoding="utf-8"), re.M)]
+    no_copy = not stray
+    both_import = ("from memall.core.task_identity import"
+                   in Path(T.__file__).read_text(encoding="utf-8")
+                   and "from memall.core.task_identity import"
+                   in Path(TL.__file__).read_text(encoding="utf-8"))
+
+    # Addressee resolution: assignee wins over the column, trimmed + casefolded.
+    meta = {"assignee": "  AgentA "}
+    assignee_wins = (TI.is_addressee(meta, "columnname", "agenta")
+                     and not TI.is_addressee(meta, "columnname", "columnname"))
+    fallback = TI.is_addressee({}, "colname", "colname")
+    no_identity = not TI.can_claim({"assignee": "a"}, "a", "")
+
+    def _card(subject):
+        body = (f"{subject}：用于验证任务卡的身份门只允许被指派人操作，"
+                f"以及监督者可以结卡但不能代认领。")
+        return capture(body, level="L5", category="task",
+                       agent_name="w1", subject=subject,
+                       metadata=json.dumps({"status": "active", "assignee": "w1"},
+                                           ensure_ascii=False))
+
+    tid = _card("守卫卡片：单一身份实现")
+    tid2 = _card("守卫卡片：内部调用方")
+    orig_sup = TI.is_supervisor
+    TI.is_supervisor = lambda a: (a or "").strip().lower() == "boss"
+    try:
+        sup_claim = T.claim_task(tid, "boss")
+        other_resolve = TL.resolve_task(tid, caller="w2")
+        mine = T.claim_task(tid, "w1")
+        sup_resolve = TL.resolve_task(tid, caller="boss")
+        anon_block = TL.block_task(tid2, "x", caller=None)
+    finally:
+        TI.is_supervisor = orig_sup
+
+    sup_cannot_claim = sup_claim.get("status") == "forbidden"
+    stranger_cannot_close = other_resolve.get("status") == "forbidden"
+    addressee_claims = mine.get("status") in ("claimed", "reclaimed")
+    sup_can_close = bool(sup_resolve.get("resolved_at"))
+    anon_allowed = bool(anon_block.get("blocked_at"))
+
+    ok = (no_copy and both_import and assignee_wins and fallback and no_identity
+          and sup_cannot_claim and stranger_cannot_close and addressee_claims
+          and sup_can_close and anon_allowed)
+    return ok, (f"no_local_copy={no_copy} {stray or ''} both_import={both_import} "
+                f"assignee_wins={assignee_wins} column_fallback={fallback} "
+                f"empty_identity_refused={no_identity} "
+                f"supervisor_cannot_claim={sup_cannot_claim} "
+                f"stranger_cannot_close={stranger_cannot_close} "
+                f"addressee_claims={addressee_claims} "
+                f"supervisor_can_close={sup_can_close} "
+                f"internal_caller_allowed={anon_allowed}")
+
+
+def guard_metadata_cas() -> Tuple[bool, str]:
+    """A stale goal transition must be refused, not written (P2-5).
+
+    The driver tick and an agent share a goal row.  ``_save_meta`` used to
+    write unconditionally, so a tick that had read ``deliberating`` could
+    write its stale copy back after finalize advanced to ``assigned``,
+    dropping ``task_ids`` and stranding the cards it had just created.  Now
+    every transition is a compare-and-set on the blob it read: the first
+    write wins, later writes on the same read return False, and a fresh read
+    works again.
+    """
+    _fresh_db()
+    import json
+    import re
+    from pathlib import Path
+    from memall.core.db import get_conn, init_db
+    from memall.pipeline import goals
+
+    init_db()
+    made = goals.create_goal("CAS 守卫目标", "casp", acceptance="可验证",
+                             verifier="casv")
+    gid = made.get("goal_id")
+    if not gid:
+        return False, f"create_goal failed: {made}"
+
+    conn = get_conn()
+    try:
+        read = goals._get_goal(conn, gid)
+        advanced = dict(read["meta"])
+        advanced["phase"] = "assigned"
+        first = goals._save_meta(conn, gid, advanced, read["raw"])
+        conn.commit()
+        # (a) the same stale read tries again — must not be applied
+        replay = goals._save_meta(conn, gid, advanced, read["raw"])
+        # (b) a tick holding the PRE-transition copy must not roll it back
+        stale_tick = dict(read["meta"])
+        stale_tick["phase"] = "intake"
+        rollback = goals._save_meta(conn, gid, stale_tick, read["raw"])
+        conn.commit()
+        row = conn.execute("SELECT metadata FROM memories WHERE id = ?",
+                           (gid,)).fetchone()
+        fresh = goals._get_goal(conn, gid)
+        ok_meta = dict(fresh["meta"])
+        ok_meta["phase"] = "executing"
+        fresh_write = goals._save_meta(conn, gid, ok_meta, fresh["raw"])
+        conn.commit()
+    finally:
+        conn.close()
+
+    phase_kept = json.loads(row["metadata"] or "{}").get("phase") == "assigned"
+    first_ok = first is True
+    stale_refused = replay is False and rollback is False
+    fresh_ok = fresh_write is True
+
+    src = (Path(__file__).resolve().parent / "memall/pipeline/goals.py"
+           ).read_text(encoding="utf-8")
+    bare_calls = re.findall(r"_save_meta\(conn,\s*goal_id,\s*meta\)", src)
+    every_call_guarded = not bare_calls
+
+    ok = first_ok and stale_refused and phase_kept and fresh_ok and every_call_guarded
+    return ok, (f"first_write_applied={first_ok} stale_refused={stale_refused} "
+                f"newer_phase_preserved={phase_kept} "
+                f"fresh_read_writes={fresh_ok} "
+                f"all_call_sites_pass_token={every_call_guarded}")
+
+
+def guard_goal_dependency_warnings() -> Tuple[bool, str]:
+    """A sequential-looking child with no dependency must be REPORTED, not blocked.
+
+    Measured live: an agent decomposed a goal into "设计场景 / 执行验证" with
+    depends_on_idx=[] on both.  finalize would then have released both in
+    parallel, and the verification could start before the thing it verifies
+    exists.  Nothing in the pipeline objected, because a decomposition was only
+    checked for having acceptance criteria.
+
+    The check is split by evidence, deliberately:
+      * objective faults stay HARD rejections (self-dependency, forward or
+        out-of-range index, missing title/acceptance);
+      * intent inferred from wording is only a WARNING, and parallel_ok=True
+        silences it.  A character-rule gate that blocks honest work is the exact
+        mistake we made before with the 4-gram echo gate, which flagged 37
+        chapters as AI-written.
+
+    Every warning must name the child and both ways out, otherwise the agent
+    learns to ignore it.
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.mcp.adapter import handle_call
+    from memall.pipeline import goals as G
+
+    init_db()
+    PM = "warn_pm"
+
+    def call(tool, args):
+        return json.loads(handle_call(tool, args))
+
+    def meta_of(gid):
+        conn = get_conn()
+        try:
+            raw = conn.execute("SELECT metadata FROM memories WHERE id=?",
+                               (gid,)).fetchone()
+        finally:
+            conn.close()
+        return json.loads(raw[0] or "{}") if raw else {}
+
+    created = call("memall_write", {"action": "goal_create", "agent_name": PM,
+                                    "objective": "依赖体检目标", "acceptance": "可验证",
+                                    "verifier": "warn_ver"})
+    gid = created.get("goal_id")
+    if not gid:
+        return False, f"goal_create failed: {created}"
+
+    # (0) with >=2 children and no dependency anywhere, silence is not allowed:
+    # the caller must state sequential or parallel.  This is the objective half
+    # of the check - no word list involved.
+    silent = call("memall_write", {"action": "goal_decompose", "agent_name": PM,
+                                   "goal_id": gid, "children": [
+        {"title": "设计阶段", "detail": "d", "assignee": PM, "acceptance": "a"},
+        {"title": "执行阶段", "detail": "d", "assignee": PM, "acceptance": "b"}]})
+    # decompose does NOT block here: 论证 must receive the plan in order to argue
+    # about it, and a hard rejection at decompose measurably made a woken agent
+    # give up and leave the goal stuck at intake.
+    silent_accepted = silent.get("status") == "decomposed"
+    silent_msg = " ".join(silent.get("warnings") or [])
+    silent_actionable = ("depends_on_idx" in silent_msg
+                         and "parallel_ok" in silent_msg)
+
+    # (1) sequencing wording on a child that stays unwired -> warning, plan lands.
+    #     One dependency exists (so the objective contract is satisfied) while
+    #     child 2 reads like a follow-up of child 1 but declares none.
+    seq = call("memall_write", {"action": "goal_decompose", "agent_name": PM,
+                                "goal_id": gid, "children": [
+        {"title": "设计场景", "detail": "写测试场景", "assignee": PM,
+         "acceptance": "场景文档完成"},
+        {"title": "实现代码", "detail": "写实现", "assignee": PM,
+         "acceptance": "实现完成", "depends_on_idx": [0]},
+        {"title": "执行验证", "detail": "在此基础上跑验证", "assignee": PM,
+         "acceptance": "验证通过"}]})
+    warned = bool(seq.get("warnings"))
+    not_blocked = seq.get("status") == "decomposed"
+    names_child = any("child 2" in w for w in (seq.get("warnings") or []))
+    offers_parallel_ok = any("parallel_ok" in w for w in (seq.get("warnings") or []))
+    persisted = bool(meta_of(gid).get("dependency_warnings"))
+    next_mentions_fix = "warnings" in (seq.get("next") or "")
+
+    # (2) declaring parallelism silences it
+    quiet = call("memall_write", {"action": "goal_decompose", "agent_name": PM,
+                                  "goal_id": gid, "parallel_ok": True,
+                                  "children": [
+        {"title": "设计场景", "detail": "写测试场景", "assignee": PM,
+         "acceptance": "场景文档完成"},
+        {"title": "执行验证", "detail": "在此基础上跑验证", "assignee": PM,
+         "acceptance": "验证通过"}]})
+    silenced = quiet.get("status") == "decomposed" and not quiet.get("warnings")
+    cleared = not meta_of(gid).get("dependency_warnings")
+
+    # (3) objective faults are still hard rejections
+    bad = call("memall_write", {"action": "goal_decompose", "agent_name": PM,
+                                "goal_id": gid, "children": [
+        {"title": "a", "detail": "d", "acceptance": "x"},
+        {"title": "b", "detail": "d", "acceptance": "y", "depends_on_idx": [5]}]})
+    still_rejects = bad.get("status") == "rejected"
+
+    # (4) finalize REFUSES to materialise a plan whose scheduling is unstated,
+    # because that is the moment the dependency graph becomes real.  Uses its own
+    # goal so the state manipulation cannot disturb the cases above.
+    created2 = call("memall_write", {"action": "goal_create", "agent_name": PM,
+                                     "objective": "finalize 依赖门目标",
+                                     "acceptance": "可验证", "verifier": "warn_ver"})
+    gid2 = created2.get("goal_id")
+    call("memall_write", {"action": "goal_decompose", "agent_name": PM,
+                          "goal_id": gid2, "children": [
+        {"title": "设计阶段", "detail": "d", "assignee": PM, "acceptance": "a"},
+        {"title": "执行阶段", "detail": "d", "assignee": PM, "acceptance": "b"}]})
+    conn = get_conn()
+    try:
+        _raw = conn.execute("SELECT metadata FROM memories WHERE id=?",
+                            (gid2,)).fetchone()
+        _meta = json.loads(_raw[0] or "{}")
+        _meta["phase"] = "deliberating"
+        _meta["discussion_id"] = 0
+        conn.execute("UPDATE memories SET metadata=? WHERE id=?",
+                     (json.dumps(_meta), gid2))
+        conn.commit()
+    finally:
+        conn.close()
+    fin = G.finalize(gid2, PM)
+    finalize_refuses = fin.get("status") == "rejected"
+    _fix = fin.get("how_to_fix") or ""
+    finalize_actionable = "depends_on_idx" in _fix and "parallel_ok" in _fix
+
+    # (4) the schema advertises the goal surface, so agents need not guess
+    import memall.mcp.adapter as ad
+    ad._ensure_loaded()
+    props = {}
+    for t in ad.TOOL_DEFINITIONS:
+        if t["name"] == "memall_write":
+            props = t["inputSchema"]["properties"]
+            break
+    advertised = all(k in props for k in
+                     ("goal_id", "objective", "acceptance", "verifier",
+                      "children", "parallel_ok"))
+
+    ok = (silent_accepted and silent_actionable
+          and finalize_refuses and finalize_actionable
+          and warned and not_blocked and names_child and offers_parallel_ok
+          and persisted and next_mentions_fix and silenced and cleared
+          and still_rejects and advertised)
+    return ok, (f"decompose_reports={silent_accepted} "
+                f"warning_is_actionable={silent_actionable} "
+                f"finalize_refuses={finalize_refuses} "
+                f"finalize_is_actionable={finalize_actionable} "
+                f"seq_warned={warned} plan_kept={not_blocked} "
+                f"names_child={names_child} offers_way_out={offers_parallel_ok} "
+                f"persisted={persisted} next_mentions_fix={next_mentions_fix} "
+                f"parallel_ok_silences={silenced} cleared={cleared} "
+                f"struct_faults_still_reject={still_rejects} "
+                f"schema_advertises_goal_fields={advertised}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -3348,6 +3900,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "retrieve_by_id_respects_viewer": guard_retrieve_by_id_respects_viewer,
     "fallback_produces_self_evolution": guard_fallback_produces_self_evolution,
     "busy_timeout_survives_concurrency": guard_busy_timeout_survives_concurrency,
+    "capture_retries_on_lock": guard_capture_retries_on_lock,
     "update_can_complete_tasks": guard_update_can_complete_tasks,
     "lazy_tools_always_loadable": guard_lazy_tools_always_loadable,
     "discussion_stays_l5": guard_discussion_stays_l5,
@@ -3368,6 +3921,11 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "duplicate_objective_rejected": guard_duplicate_objective_rejected,
     "write_action_surface_in_sync": guard_write_action_surface_in_sync,
     "goal_children_accepts_json_string": guard_goal_children_accepts_json_string,
+    "goal_dependency_warnings": guard_goal_dependency_warnings,
+    "partial_finalize_leaves_goal_in_deliberating":
+        guard_partial_finalize_leaves_goal_in_deliberating,
+    "addressed_to_single_impl": guard_addressed_to_single_impl,
+    "metadata_cas": guard_metadata_cas,
     "decommissioned_cards_reassign": guard_decommissioned_cards_reassign,
     "task_loop_surface_wired": guard_task_loop_surface_wired,
 }
