@@ -7,6 +7,11 @@
 - **遗留缺陷记录**：长驻 MCP 进程落后源码须重启方生效（AGENTS.md §八 实锤）；目标行删除后 goal_tick 派发链路不收敛（goal 1001029/1001101 实证），随 P3-8 清库批次处理。
 - 提交老陈三问确认（定稿为准绳 / P0-② 开工 / MCP 重启授权）；确认前两版标记 superseded 留作历史线索。
 
+### Fixed（depends_on 防永久死锁，任务 #1001343）
+
+- **depends_on 指向非任务记忆时给出明确诊断，不再静默永久冻结**：`mcp/tasks.py` 的 `claim_task` 依赖门原先只查依赖目标的 `status`，不校验它是不是任务卡。`#1000947` 的 `depends_on` 指向 `#1000945`（L6 reflection，status 恒为 active），依赖门要求的终态集合永不可达 → 该卡在数学上永久冻结，无诊断、无升级。现依赖门增加畸形依赖检测：目标 `level != 'L5'` 或 `category not in ('task','todo')` 时返回 `malformed_dependency`（含目标 id/level/category），而非无限 `blocked_by_dependency`。真依赖（task→task）行为不变。守卫 `depends_on_points_at_task_card`（畸形诊断 + 真依赖双向验证）。
+- 关联：讨论 #1001361（约束④负例）、任务 #1001341（依赖体检框架）。
+
 ## [Unreleased] - 2026-10-28
 
 ### Added（P0-① goal 投递接入 agent_round 心跳）

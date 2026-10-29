@@ -2829,7 +2829,7 @@ def guard_agent_waker_is_safe() -> Tuple[bool, str]:
     evil = 'x"; rm -rf / # `whoami` $(id)'
     W._commands = lambda: {"probe": {"argv": ["prog", "-p", "{prompt}"],
                                      "env": {"MEMALL_AGENT_NAME": "{agent}"}}}
-    argv, env, stdin_prompt = W.build_invocation("probe", evil)
+    argv, env, stdin_prompt, _rt = W.build_invocation("probe", evil)
     single_element = bool(argv) and sum(1 for a in argv if evil == a) == 1
     env_ok = env.get("MEMALL_AGENT_NAME") == "probe"
     no_shell = "shell" not in " ".join(argv) or True  # shell never comes from argv
@@ -2854,11 +2854,30 @@ def guard_agent_waker_is_safe() -> Tuple[bool, str]:
                     and '_cfg("dry_run", True)' in _src)
     unconfigured = W.build_invocation("nobody-configured", "x")[0] is None
 
+    # (3) A command may only speak for the agent whose runtime it is.  A borrowed
+    # CLI wearing another agent's name produces a throwaway session writing under
+    # an identity that never saw the work — the opposite of dispatching to a
+    # colleague.  Refusal must happen before any spawn.
+    W._commands = lambda: {"impostor_target": {
+        "runtime_agent": "someone_else",
+        "argv": ["prog", "-p", "{prompt}"],
+        "env": {"MEMALL_AGENT_NAME": "{agent}"}}}
+    _saved_enabled, _saved_dry = W.enabled, W.dry_run
+    W.enabled = lambda: True
+    W.dry_run = lambda: False
+    try:
+        refused = W.wake_agent("impostor_target", "x", goal_id=0, action="t")
+    finally:
+        W.enabled, W.dry_run = _saved_enabled, _saved_dry
+    refused_impostor = (refused.get("woke") is False
+                        and "runtime_agent" in (refused.get("reason") or ""))
+
     ok = single_element and env_ok and no_shell and no_shell_true \
-        and defaults_off and unconfigured
+        and defaults_off and unconfigured and refused_impostor
     return ok, (f"prompt_single_argv={single_element} env_injected={env_ok} "
                 f"no_shell=True:{no_shell_true} defaults_off={defaults_off} "
-                f"unconfigured_produces_nothing={unconfigured}")
+                f"unconfigured_produces_nothing={unconfigured} "
+                f"impostor_refused={refused_impostor}")
 
 
 def guard_wake_claimed_in_db() -> Tuple[bool, str]:
@@ -3342,6 +3361,96 @@ def guard_duplicate_objective_rejected() -> Tuple[bool, str]:
     return ok, (f"dup={dup} gid1={gid1} gid2={second.get('goal_id')} "
                 f"created={created} closed_recreate={reopened} "
                 f"cycle={again.get('cycle')} prev={again.get('previous_goal_id')}")
+
+
+def guard_depends_on_points_at_task_card() -> Tuple[bool, str]:
+    """A depends_on that points at a non-task memory must be diagnosed, not
+    silently frozen (task #1001343).
+
+    Measured: card #1000947 had depends_on=[#1000945], where #1000945 was an
+    L6 reflection whose status is always ``active``.  The claim gate treated
+    it as a normal blocking dependency, so the card was blocked forever — a
+    silent deadlock, not "not done yet".
+
+    The claim gate now classifies a non-task depends_on target as
+    ``malformed_dependency`` (with the target's level/category) instead of
+    letting it hang.  Real dependencies are unaffected: a genuine
+    task-to-task edge still blocks until the prerequisite resolves.
+    """
+    _fresh_db()
+    import hashlib
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.mcp.tasks import claim_task
+
+    init_db()
+    AG = "dsh"
+
+    def mk(content, level, category, agent, subject, meta):
+        """Direct INSERT: bypasses capture's quality gate, which rejects short
+        test fixtures (reasoning=0 → min=0 → rejected)."""
+        h = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        conn = get_conn()
+        try:
+            cur = conn.execute(
+                "INSERT INTO memories (content, content_hash, level, owner, "
+                "agent_name, subject, category, project, summary, occurred_at, "
+                "created_at, updated_at, supersedes, confidence, visibility, "
+                "metadata, arc_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (content, h, level, agent, agent, subject, category, "memall",
+                 "", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
+                 "2026-01-01T00:00:00+00:00", "[]", 0.5, "private",
+                 json.dumps(meta, ensure_ascii=False), "open"))
+            conn.commit()
+            return cur.lastrowid
+        finally:
+            conn.close()
+
+    # A reflection whose status can never reach a terminal state.
+    ref_id = mk(
+        "管线观察（2026-10-29）：当前记忆分布 L6×1427、L4×1341、L9×1037、"
+        "L11×811、P2×693、L5×438、L10×199、L7×185。L6 反思共 1269 条，其中"
+        "高质量 1 条，近 24 小时新增 432 条，聚合组 3 个。告警：L6 高质量反思"
+        "占比偏低；活跃领域从 110 缩至 11，领域多样性下降。",
+        "L6", "reflection", "system", "管线观察（2026-10-29）",
+        {"status": "active"})
+
+    # (1) depends_on pointing at the reflection -> malformed_dependency.
+    bad = mk("设计阶段：验证 depends_on 指向非任务记忆时的诊断行为",
+             "L5", "task", AG, "[任务] 依赖指向 reflection 的卡",
+             {"status": "active", "assignee": AG, "depends_on": [ref_id]})
+    r_bad = claim_task(bad, AG)
+    md0 = (r_bad.get("malformed_dependencies") or [{}])[0]
+    ok_malformed = (r_bad.get("status") == "malformed_dependency"
+                    and md0.get("level") == "L6"
+                    and md0.get("category") == "reflection")
+
+    # (2) a real task-to-task edge still blocks until the prerequisite resolves.
+    a = mk("设计阶段：产出测试方案与用例设计文档，含测试目标、用例设计、环境需求、验收标准",
+           "L5", "task", AG, "[任务] 前置卡 A",
+           {"status": "active", "assignee": AG, "depends_on": []})
+    b = mk("执行阶段：搭建环境、执行用例、记录结果、输出验收报告",
+           "L5", "task", AG, "[任务] 后置卡 B",
+           {"status": "active", "assignee": AG, "depends_on": [a]})
+    r_block = claim_task(b, AG)
+    ok_block = r_block.get("status") == "blocked_by_dependency"
+    # resolve A, then B must claim successfully (existing behaviour unchanged).
+    conn = get_conn()
+    try:
+        am = json.loads(conn.execute("SELECT metadata FROM memories WHERE id=?",
+                                     (a,)).fetchone()[0] or "{}")
+        am["status"] = "resolved"
+        conn.execute("UPDATE memories SET metadata=? WHERE id=?",
+                     (json.dumps(am, ensure_ascii=False), a))
+        conn.commit()
+    finally:
+        conn.close()
+    r_ok = claim_task(b, AG)
+    ok_release = r_ok.get("status") in ("claimed", "reclaimed")
+
+    ok = ok_malformed and ok_block and ok_release
+    return ok, (f"malformed={ok_malformed} block={ok_block} "
+                f"release={ok_release}")
 
 
 def guard_write_action_surface_in_sync() -> Tuple[bool, str]:
@@ -3845,6 +3954,213 @@ def guard_goal_dependency_warnings() -> Tuple[bool, str]:
                 f"schema_advertises_goal_fields={advertised}")
 
 
+def guard_goal_cards_require_audited_delete() -> Tuple[bool, str]:
+    """A goal card must never leave the store without an audit trail.
+
+    Audit 2026-10-29: four goal cards sitting in ``verifying`` disappeared
+    between two backups (18:25 -> 19:13).  ``ops_log`` had no row, the archive
+    DB was empty and no pipeline run touched them — the row diff was exactly
+    those four ids.  The gateway's ``DELETE /v30api/memories/{id}`` was the one
+    delete path issuing a bare ``DELETE`` with no ledger entry.
+
+    What this asserts:
+      1. ``init_db`` installs the ``memories_bd_goal_guard`` trigger;
+      2. a bare delete of a goal row aborts and the row survives;
+      3. merging a goal (as source *or* target) is refused — a merge deletes
+         the source, which is the same silent loss in disguise;
+      4. ``audited_delete_memory`` removes the row, writes a ``delete`` entry
+         to ``ops_log`` and leaves no residual ``delete_audit`` row;
+      5. ordinary (non-goal) rows are still deletable by plain SQL;
+      6. the gateway no longer contains a bare ``DELETE FROM memories`` and
+         every bulk sweeper excludes ``category='goal'``.
+    """
+    import sqlite3
+    from pathlib import Path
+
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.core.thin_waist import capture
+    from memall.pipeline import goals as G
+    from memall.pipeline import ops as O
+
+    init_db()
+
+    def new_goal(objective: str) -> int:
+        r = G.create_goal(objective, owner="del_pm", acceptance="可验证",
+                          verifier="del_ver")
+        return int(r.get("goal_id") or 0)
+
+    gid = new_goal("守卫：目标卡删除必须留痕")
+    gid2 = new_goal("守卫：目标卡不能被合并")
+    plain = capture("守卫用普通记忆，常规路径应当可删", level="L2",
+                    category="note", agent_name="del_pm")
+    if not (gid and gid2 and plain):
+        return False, f"fixture failed: gid={gid} gid2={gid2} plain={plain}"
+
+    conn = get_conn()
+    try:
+        trigger = bool(conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='trigger' "
+            "AND name='memories_bd_goal_guard'").fetchone())
+        audit_table = bool(conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='delete_audit'").fetchone())
+
+        # (2) bare delete aborts and the row survives
+        bare_blocked = False
+        try:
+            conn.execute("DELETE FROM memories WHERE id = ?", (gid,))
+            conn.commit()
+        except sqlite3.IntegrityError as exc:
+            bare_blocked = "goal card cannot be deleted silently" in str(exc)
+            conn.rollback()
+        except Exception:
+            conn.rollback()
+        survived = bool(conn.execute(
+            "SELECT 1 FROM memories WHERE id = ?", (gid,)).fetchone())
+
+        # (3) merge is refused on either side
+        def merge_refused(src: int, tgt: int) -> bool:
+            try:
+                O._merge_memories_conn(conn, src, tgt)
+                conn.rollback()
+                return False
+            except ValueError as exc:
+                conn.rollback()
+                return "goal" in str(exc)
+
+        merge_src_refused = merge_refused(gid2, plain)
+        merge_tgt_refused = merge_refused(plain, gid2)
+
+        # (4) the audited path works and leaves a ledger entry
+        res = O.audited_delete_memory(conn, gid, by="guard_fixture",
+                                      reason="guard cleanup")
+        conn.commit()
+        audited_deleted = res.get("deleted") == 1
+        gone = not conn.execute(
+            "SELECT 1 FROM memories WHERE id = ?", (gid,)).fetchone()
+        delete_entries = []
+        for r in conn.execute(
+                "SELECT target_ids FROM ops_log WHERE op_type = 'delete'"
+        ).fetchall():
+            try:
+                delete_entries.extend(json.loads(r[0] or "[]"))
+            except Exception:
+                pass
+        logged = gid in delete_entries
+        no_residual = not conn.execute(
+            "SELECT 1 FROM delete_audit WHERE memory_id = ?", (gid,)).fetchone()
+
+        # (5) non-goal rows keep the ordinary path
+        cur = conn.execute("DELETE FROM memories WHERE id = ?", (plain,))
+        conn.commit()
+        plain_deletable = cur.rowcount == 1
+    finally:
+        conn.close()
+
+    # (6) source scan: the risky paths must carry the guard, not a comment
+    root = Path(SRC) / "memall"
+    gw = (root / "gateway_v30.py").read_text(encoding="utf-8")
+    gateway_audited = (
+        "audited_delete_memory" in gw
+        and "DELETE FROM memories" not in gw
+    )
+
+    def excludes_goals(rel: str) -> bool:
+        txt = (root / rel).read_text(encoding="utf-8")
+        return "<>'goal'" in txt.replace(" ", "").lower()
+
+    sweepers_guarded = all(
+        excludes_goals(rel) for rel in (
+            "pipeline/forget.py",
+            "pipeline/archive.py",
+            "pipeline/adaptive.py",
+            "pipeline/auto_dream.py",
+        )
+    )
+
+    ok = (trigger and audit_table and bare_blocked and survived
+          and merge_src_refused and merge_tgt_refused
+          and audited_deleted and gone and logged and no_residual
+          and plain_deletable and gateway_audited and sweepers_guarded)
+    return ok, (f"trigger={trigger} audit_table={audit_table} "
+                f"bare_delete_aborts={bare_blocked} row_survives={survived} "
+                f"merge_src_refused={merge_src_refused} "
+                f"merge_tgt_refused={merge_tgt_refused} "
+                f"audited_delete={audited_deleted} row_gone={gone} "
+                f"ops_logged={logged} audit_row_cleared={no_residual} "
+                f"plain_still_deletable={plain_deletable} "
+                f"gateway_audited={gateway_audited} "
+                f"sweepers_exclude_goals={sweepers_guarded}")
+
+
+def guard_session_note_delivery_crosses_processes() -> Tuple[bool, str]:
+    """A note pushed for agent X must be readable by ANOTHER process serving X.
+
+    This is the difference between dispatching work to a colleague and pretending
+    to.  ``push_session_note`` used to write module-level dicts, so a note pushed
+    for ``opencode`` by one process was invisible to the process that actually
+    serves ``opencode``: the note reached nobody, while ``goal_finalize`` reported
+    success.  Every stdio MCP client spawns its own server, so "in memory" and
+    "not delivered" are the same thing here.
+
+    Measured shape of the fix (migration 041): the note is a row in
+    ``session_notes``, and these invariants survive the move —
+      * a second process reads the note;
+      * another agent cannot read it, and an unnamed caller gets nothing
+        (AGENTS.md §三.4 identity lock);
+      * reading does NOT consume (a mid-response timeout must not lose it);
+      * ACK drops it AND frees the dedup key, because "delivered" is not "done".
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.mcp import shared as S
+
+    init_db()
+    # The table is created by the migration; make sure this DB has it.
+    import importlib
+
+    conn = get_conn()
+    try:
+        importlib.import_module("memall.migrations.041_create_session_notes").apply(conn)
+    finally:
+        conn.close()
+
+    note = "[派工] 任务卡 #1 归你"
+    pushed = S.push_session_note("xproc_target", note, dedup_key="k1")
+    dedup_blocked = S.push_session_note("xproc_target", "dup", dedup_key="k1") is False
+
+    # Simulate the other process: read through a brand-new connection.
+    conn2 = get_conn()
+    try:
+        rows = conn2.execute(
+            "SELECT body FROM session_notes WHERE agent = ? AND acked_at IS NULL",
+            ("xproc_target",)).fetchall()
+        visible_in_other_connection = bool(rows) and note in rows[0][0]
+    finally:
+        conn2.close()
+
+    isolated = S.consume_session_note("xproc_other") is None
+    unnamed = S.consume_session_note("") is None
+    read_twice = (S.consume_session_note("xproc_target") or "").startswith("[派工]")
+    read_does_not_consume = bool(S.consume_session_note("xproc_target"))
+    acked = S.ack_session_note("xproc_target")
+    gone = S.consume_session_note("xproc_target") is None
+    freed = S.push_session_note("xproc_target", "again", dedup_key="k1") is True
+    S.ack_session_note("xproc_target")
+
+    ok = (pushed and dedup_blocked and visible_in_other_connection and isolated
+          and unnamed and read_twice and read_does_not_consume and acked
+          and gone and freed)
+    return ok, (f"pushed={pushed} dedup_blocked={dedup_blocked} "
+                f"visible_from_another_connection={visible_in_other_connection} "
+                f"other_agent_isolated={isolated} unnamed_gets_nothing={unnamed} "
+                f"read_does_not_consume={read_does_not_consume} acked={acked} "
+                f"gone_after_ack={gone} dedup_key_freed_after_ack={freed}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -3912,6 +4228,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "convergence_waits_for_action_items": guard_convergence_waits_for_action_items,
     "goal_lifecycle_end_to_end": guard_goal_lifecycle_end_to_end,
     "agent_waker_is_safe": guard_agent_waker_is_safe,
+    "session_note_delivery_crosses_processes": guard_session_note_delivery_crosses_processes,
     "wake_claimed_in_db": guard_wake_claimed_in_db,
     "goal_tick_on_heartbeat_cadence": guard_goal_tick_on_heartbeat_cadence,
     "empty_identity_rejected_everywhere": guard_empty_identity_rejected_everywhere,
@@ -3919,6 +4236,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "forward_dependency_rejected": guard_forward_dependency_rejected,
     "unresolved_dependency_fails_loudly": guard_unresolved_dependency_fails_loudly,
     "duplicate_objective_rejected": guard_duplicate_objective_rejected,
+    "depends_on_points_at_task_card": guard_depends_on_points_at_task_card,
     "write_action_surface_in_sync": guard_write_action_surface_in_sync,
     "goal_children_accepts_json_string": guard_goal_children_accepts_json_string,
     "goal_dependency_warnings": guard_goal_dependency_warnings,
@@ -3928,6 +4246,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "metadata_cas": guard_metadata_cas,
     "decommissioned_cards_reassign": guard_decommissioned_cards_reassign,
     "task_loop_surface_wired": guard_task_loop_surface_wired,
+    "goal_cards_require_audited_delete": guard_goal_cards_require_audited_delete,
 }
 
 # Full test files run as subprocesses when no guard name is given.

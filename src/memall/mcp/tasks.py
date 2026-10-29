@@ -40,9 +40,7 @@ def _status_of(raw) -> str:
     return raw.strip().lower() or "active"
 
 
-def _addressed_to(meta: dict, agent_name: str, assignee: str) -> bool:
-    target = (meta.get("assignee") or assignee or "").strip()
-    return bool(target) and target.lower() == (agent_name or "").strip().lower()
+from memall.core.task_identity import can_claim
 
 
 def claim_task(task_id: int, agent_name: str) -> dict:
@@ -75,7 +73,7 @@ def claim_task(task_id: int, agent_name: str) -> dict:
             return {"status": "already_closed", "task_id": task_id,
                     "state": status,
                     "subject": row["subject"]}
-        if not _addressed_to(meta, agent_name, row["agent_name"]):
+        if not can_claim(meta, row["agent_name"], agent_name):
             return {"status": "forbidden", "task_id": task_id,
                     "reason": "this card is addressed to another agent",
                     "assignee": meta.get("assignee") or row["agent_name"],
@@ -91,6 +89,7 @@ def claim_task(task_id: int, agent_name: str) -> dict:
         if isinstance(deps, (str, int)):
             deps = [deps]
         blocking = []
+        malformed = []
         for d in deps:
             try:
                 did = int(d)
@@ -100,10 +99,23 @@ def claim_task(task_id: int, agent_name: str) -> dict:
             # query must alias the table too — without it SQLite raises
             # "no such column: m.memory_status" and the whole claim fails.
             drow = conn.execute(
-                "SELECT m.id, m.subject, m.metadata FROM memories m "
-                "WHERE m.id = ? AND " + _NOT_ARCHIVED, (did,)).fetchone()
+                "SELECT m.id, m.subject, m.level, m.category, m.metadata "
+                "FROM memories m WHERE m.id = ? AND " + _NOT_ARCHIVED,
+                (did,)).fetchone()
             if not drow:
                 continue  # dependency deleted: nothing left to wait for
+            # A dependency must point at a task card.  If it points at a
+            # reflection/session/summary, its status can never reach a
+            # terminal state, so the card would be blocked forever — a
+            # silent deadlock, not "not done yet".  Report it as a malformed
+            # dependency (with the target's level/category) instead of
+            # letting the claim hang on an unreachable prerequisite.
+            if drow["level"] != "L5" or drow["category"] not in ("task", "todo"):
+                malformed.append({"task_id": drow["id"],
+                                  "subject": drow["subject"],
+                                  "level": drow["level"],
+                                  "category": drow["category"]})
+                continue
             dmeta = _meta_of(drow["metadata"])
             dstatus = _status_of(dmeta.get("status"))
             if dstatus not in ("done", "resolved", "archived", "converged",
@@ -111,6 +123,12 @@ def claim_task(task_id: int, agent_name: str) -> dict:
                 blocking.append({"task_id": drow["id"],
                                  "subject": drow["subject"],
                                  "status": dstatus})
+        if malformed:
+            return {"status": "malformed_dependency", "task_id": task_id,
+                    "reason": "depends_on points at a non-task memory; its "
+                              "status can never reach a terminal state, so "
+                              "this card would be blocked forever",
+                    "malformed_dependencies": malformed}
         if blocking:
             return {"status": "blocked_by_dependency", "task_id": task_id,
                     "reason": "prerequisites are not complete yet",
@@ -119,6 +137,10 @@ def claim_task(task_id: int, agent_name: str) -> dict:
         now = datetime.now(timezone.utc).isoformat()
         already = meta.get("claimed_by")
         meta["status"] = "claimed"
+        # claimed_by is the audit stamp of the acceptance, not a second
+        # identity track: the gate above admits only the addressee, so it
+        # always equals assignee (see memall.core.task_identity).  Kept
+        # because the bus, notify and the HTML explorer still read it.
         meta["claimed_by"] = agent_name
         meta["claimed_at"] = meta.get("claimed_at") or now
         meta["assignee"] = meta.get("assignee") or row["agent_name"] or agent_name
