@@ -1,3 +1,12 @@
+## [Unreleased] - 2026-10-29
+
+### Docs（多 Agent 协作改进方案定稿，任务 #1001193）
+
+- **定稿合并双方案**：`docs/MemALL多Agent协作改进方案-定稿-20261029.md` 合并 workbuddy 版（`-20261028.md`）与 opencode 版（`-完整版-20261028.md`），逐条裁定 6 处分歧（心跳接入点、reconcile 语义、技能层形态=质量量化×宿主分发不二选一、triage 降级 P1、evidence 与 reason 并批、门禁误伤根因）。技能层 P0-② 给出 skills 表 + skill_export SKILL.md 分发面的完整设计与 5 条可机器判定守卫。
+- **状态刷新（代码实证 2026-10-29）**：P0-① 已落地（`agent_round.py:204` 接 `deliver_goal_prompts`，守卫 `goal_tick_on_heartbeat_cadence` PASS，HEAD 16923bd）；技能层确认全仓 0 实现，为头号缺口。
+- **遗留缺陷记录**：长驻 MCP 进程落后源码须重启方生效（AGENTS.md §八 实锤）；目标行删除后 goal_tick 派发链路不收敛（goal 1001029/1001101 实证），随 P3-8 清库批次处理。
+- 提交老陈三问确认（定稿为准绳 / P0-② 开工 / MCP 重启授权）；确认前两版标记 superseded 留作历史线索。
+
 ## [Unreleased] - 2026-10-28
 
 ### Added（P0-① goal 投递接入 agent_round 心跳）
