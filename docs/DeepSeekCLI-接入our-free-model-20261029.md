@@ -112,6 +112,53 @@ MCP 无法反向唤醒 agent（协议是 client-driven，`sampling` 需客户端
 
 `-` 表示从 stdin 读任务；`stdin_prompt: true` 让唤醒器把 prompt 写进子进程 stdin，**完全不经 argv 与 shell**，prompt 内容无法被重新解释。
 
+
+## 哪些 agent 可以被真正唤醒（2026-10-30 实测）
+
+**关键区分**：唤醒一个 agent = 启动**它自己的**运行时。用 DeepSeek CLI 加
+`MEMALL_AGENT_NAME=<别人>` 不叫唤醒，叫冒名——那会起一个一次性 dsh 会话顶着别人的
+名字写入，真 agent 全程不知道有活。`agent_waker` 因此要求命令声明 `runtime_agent`
+且必须与被唤醒者一致，否则直接拒绝。
+
+| agent | 自己的非交互入口 | 实测 | 结论 |
+|---|---|---|---|
+| `dsh` | `dsh --profile headless -` | 18s 出话，MCP 身份 `dsh` | ✅ 可唤醒 |
+| `opencode` | `opencode run "<message>"` | 端到端 180s 完成目标拆解 | ✅ 可唤醒 |
+| `qoder` | 无（GUI 进程 `Qoder CN`） | 只能走任务卡 | ❌ 不可唤醒 |
+| `workbuddy` | 无（GUI 进程 `WorkBuddy`） | 只能走任务卡 | ❌ 不可唤醒 |
+| `trae` | 无（GUI 进程 `Trae CN`） | 只能走任务卡 | ❌ 不可唤醒 |
+
+`opencode` 的接入配置（`~/.memall/config.json`）：
+
+```json
+"opencode": {
+  "runtime_agent": "opencode",
+  "argv": ["<npm>/opencode-ai/bin/opencode.exe", "run", "{prompt}",
+           "--print-logs", "--log-level", "WARN"],
+  "env": {"MEMALL_AGENT_NAME": "opencode"},
+  "stdin_prompt": false
+}
+```
+
+注意 `opencode run` 只接受位置参数（不读 stdin），所以 prompt 作为**单个 argv 元素**
+传入；全程 `shell=False`，不存在 shell 注入面。显式 `runtime_agent` 是必要的：它的
+MCP 配置里 memall 服务器的身份靠继承的环境变量决定，实测写入的 `agent_name` 正是
+`opencode`。
+
+### 实测：唤醒 opencode 完成一个目标
+
+```
+目标 #1001397  owner=opencode  phase=intake
+  → goal_tick → 唤醒器 spawn `opencode run ...`
+  → +180s  phase=decomposed
+  → plan: [定位并产出验证方案 deps=[]]
+          [执行验证并产出断言报告 deps=[0]]
+```
+
+GUI agent（qoder / workbuddy / trae）没有可执行的非交互入口，**不能**被唤醒；它们的
+派发是**任务卡 + 定向会话通知**，由它们自己的会话在下次调用 memall 时读取。这也是
+"派发给其他 agent" 与 "新建会话替它干活" 的分界线。
+
 ## 两个必须知道的坑
 
 ### 坑 1：解释器位置决定能不能写库
