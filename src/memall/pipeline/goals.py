@@ -769,11 +769,44 @@ def finalize(goal_id: int, agent_name: str) -> dict:
             except Exception:
                 logger.debug("dispatch note failed for %s", who, exc_info=True)
 
+        # Optional: also START the assignee's own runtime for its new card.
+        # Off by default because it turns one finalize into N agent runs.  Only
+        # agents with their own entrypoint have a command; a GUI agent's card is
+        # delivered by the note above and waits in its own session, which is
+        # dispatch rather than a spawn wearing its name.
+        woke = []
+        try:
+            from memall.config import get_config
+
+            if bool(get_config("agents.wake.on_child_dispatch", False)):
+                from memall.pipeline.agent_waker import wake_agent
+
+                for card in created:
+                    who = (card.get("assignee") or "").strip()
+                    plan_item = next((p for p in plan if int(p.get("idx", -1))
+                                      == int(card.get("idx", -2))), {})
+                    prompt = (
+                        f"[派工] 目标 #{goal_id} 的「{plan_item.get('title', '')}」由你负责。"
+                        f"任务卡 #{card.get('task_id')}，验收标准："
+                        f"{plan_item.get('acceptance', '') or '（见卡内）'}。\n"
+                        f"请调用 memall_write action=task_claim 认领（task_id="
+                        f"{card.get('task_id')}），完成后 action=task_resolve 交付，"
+                        f"result 写明你实际交付了什么。完成这一件事后停止。")
+                    res = wake_agent(who, prompt, goal_id=goal_id,
+                                     action=f"child:{card.get('task_id')}")
+                    if res.get("woke"):
+                        woke.append({"agent": who, "task_id": card.get("task_id"),
+                                     "pid": res.get("pid")})
+        except Exception:
+            logger.debug("child dispatch wake failed", exc_info=True)
+
         return {"status": "assigned", "goal_id": goal_id,
                 "tasks": created, "reused": reused, "phase": "assigned",
                 "dispatched_to": sorted(set(dispatched)),
-                "next": ("已把任务卡派发到各 assignee 自己的会话；"
-                         "他们认领并交付后，目标自动进入验收")}
+                "woken": woke,
+                "next": ("已把任务卡派发到各 assignee 自己的会话"
+                         + ("，并已启动可唤醒的 agent" if woke else "")
+                         + "；他们认领并交付后，目标自动进入验收")}
     finally:
         conn.close()
 

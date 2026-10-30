@@ -4161,6 +4161,73 @@ def guard_session_note_delivery_crosses_processes() -> Tuple[bool, str]:
                 f"gone_after_ack={gone} dedup_key_freed_after_ack={freed}")
 
 
+def guard_discussion_prompts_run_in_resident_tick() -> Tuple[bool, str]:
+    """Discussion participants must be nudged from the path that actually runs.
+
+    check_pending_discussions only ever ran inside agent_round(), whose sole
+    caller is scheduler/scheduler.py.  Measured: zero scheduler processes are
+    running, so a goal could reach 'deliberating' and stall forever — the owner
+    was told to open the discussion (that delivery is resident), but no
+    participant was ever told it owed a stance, so nothing converged and
+    finalize kept (correctly) refusing.
+
+    The resident delivery path is run_fallback_once, so the nudge must live
+    there and must be keyed so a 5-minute tick cannot pile up duplicates.
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.pipeline import fallback as F
+    from memall.mcp.shared import consume_session_note, ack_session_note
+
+    init_db()
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO identities (agent_name, status) "
+            "VALUES ('disc_p1', 'active')")
+        conn.execute(
+            "INSERT OR IGNORE INTO identities (agent_name, status) "
+            "VALUES ('disc_p2', 'active')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    # A live discussion neither participant has answered.
+    from memall.pipeline.convergence import create_discussion
+
+    d = create_discussion(title="守卫讨论", background="g",
+                          participants=["disc_p1", "disc_p2"],
+                          convergence_rule="majority", creator="disc_p1")
+    did = d.get("discussion_id") or d.get("memory_id")
+
+    first = F.deliver_discussion_prompts()
+    note1 = consume_session_note("disc_p1") or ""
+    reached = "讨论" in note1 and str(did) in note1
+    # Idempotent: a second tick must not queue a duplicate.
+    second = F.deliver_discussion_prompts()
+    no_pileup = second.get("delivered", 0) == 0
+
+    # Responding must retire the nudge (otherwise it nags forever).
+    from memall.mcp.adapter import handle_call
+
+    handle_call("memall_discussion", {"action": "respond",
+                                      "discussion_id": did,
+                                      "agent_name": "disc_p1",
+                                      "stance": "agree",
+                                      "arguments": "ok"})
+    ack_session_note("disc_p1")
+    third = F.deliver_discussion_prompts()
+    retired = (consume_session_note("disc_p1") or "") == ""
+
+    ok = (bool(did) and first.get("delivered", 0) >= 1 and reached
+          and no_pileup and retired)
+    return ok, (f"discussion={did} first_tick_delivered={first.get('delivered', 0)} "
+                f"note_reaches_participant={reached} "
+                f"second_tick_no_pileup={no_pileup} "
+                f"retired_after_response={retired}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -4229,6 +4296,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "goal_lifecycle_end_to_end": guard_goal_lifecycle_end_to_end,
     "agent_waker_is_safe": guard_agent_waker_is_safe,
     "session_note_delivery_crosses_processes": guard_session_note_delivery_crosses_processes,
+    "discussion_prompts_run_in_resident_tick": guard_discussion_prompts_run_in_resident_tick,
     "wake_claimed_in_db": guard_wake_claimed_in_db,
     "goal_tick_on_heartbeat_cadence": guard_goal_tick_on_heartbeat_cadence,
     "empty_identity_rejected_everywhere": guard_empty_identity_rejected_everywhere,
