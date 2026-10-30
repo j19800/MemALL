@@ -21,6 +21,11 @@
 - **守卫**：`guard_skill_table_migration`（迁移幂等+字段齐全）、`guard_skill_promote_demote`（5 次 pass 晋级 + 1 次 return 降级）、`guard_skill_export_frontmatter_roundtrip`（导出解析往返）、`guard_skill_export_idempotent`（同内容连跑两次文件与 lock 行数不变）。4 守卫 + `goal_lifecycle_end_to_end` 全 PASS，无回归。
 - 关联：定稿 `docs/MemALL多Agent协作改进方案-定稿-20261029.md` §三、讨论 #1000886、记忆 #1000933。P0 级，按 veto 模式即时通知老陈。
 
+### Added（P1 批次：verify evidence 结构化 + last_block_reason 枚举）
+
+- **verify evidence 结构化**：`verify_goal` 新增 `evidence` 参数（dict，含 checks/ci_status/review 等），原样存入 `meta.verdict.evidence`。下游（技能层晋级、审计）可直接机器读取，无需解析自由文本 note。MCP handler 同步支持 JSON-string evidence。守卫 `verify_evidence_structured`。
+- **last_block_reason 枚举**：`claim_task` 依赖门阻塞时，将封闭枚举 `last_block_reason`（`dependency_not_complete` / `dependency_malformed`）写入卡 metadata，任务列表可直接观测阻塞原因，无需重查依赖门。
+
 ## [Unreleased] - 2026-10-28
 
 ### Added（P0-① goal 投递接入 agent_round 心跳）

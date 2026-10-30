@@ -869,8 +869,15 @@ def request_verification(goal_id: int, agent_name: str = "") -> dict:
 
 
 def verify_goal(goal_id: int, agent_name: str, passed: bool,
-                verdict: str = "") -> dict:
-    """Close the goal, or send it back. Producer may not verify (§五)."""
+                verdict: str = "", evidence: Optional[dict] = None) -> dict:
+    """Close the goal, or send it back. Producer may not verify (§五).
+
+    ``evidence`` is an optional structured record (e.g. ``{"checks": [...],
+    "ci_status": "pass", "review": "..."}``) that makes the verdict machine-
+    checkable rather than a free-text note.  It is stored verbatim in
+    ``meta.verdict.evidence`` so downstream consumers (skill layer promotion,
+    audit) can inspect it without parsing the note.
+    """
     from memall.core.db import get_conn
 
     conn = get_conn()
@@ -899,7 +906,10 @@ def verify_goal(goal_id: int, agent_name: str, passed: bool,
                     "producer_side": sorted(producers), "caller": agent_name}
 
         meta["verdict"] = {"passed": bool(passed), "by": agent_name,
-                          "note": (verdict or "")[:_VERDICT_MAX], "at": _now()}
+                          "note": (verdict or "")[:_VERDICT_MAX],
+                          "at": _now()}
+        if evidence is not None:
+            meta["verdict"]["evidence"] = evidence
         meta["verified_by"] = agent_name
         if passed:
             meta["phase"] = "closed"

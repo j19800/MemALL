@@ -97,8 +97,18 @@ def handle_goal_verify(args, agent_name=""):
     passed = args.get("passed")
     if passed is None:
         passed = args.get("verdict_passed", True)
+    evidence = args.get("evidence")
+    if isinstance(evidence, str):
+        # Accept a JSON string for evidence, consistent with other list/dict
+        # params that accept JSON strings.
+        try:
+            import json as _json
+            evidence = _json.loads(evidence)
+        except (ValueError, TypeError):
+            evidence = None
     return _dumps(verify_goal(gid, agent_name, bool(passed),
-                              args.get("verdict") or args.get("note") or ""))
+                              args.get("verdict") or args.get("note") or "",
+                              evidence=evidence))
 
 
 def handle_goal_status(args, agent_name=""):

@@ -3572,6 +3572,57 @@ def guard_skill_export_idempotent() -> Tuple[bool, str]:
                 f"run2_skipped={r2.get('skipped')} files_stable={files1 == files2}")
 
 
+def guard_verify_evidence_structured() -> Tuple[bool, str]:
+    """verify_goal must store structured evidence in the verdict.
+
+    P1-①: the verdict was a free-text note only.  ``evidence`` (a dict with
+    checks / ci_status / review) is now stored verbatim in
+    ``meta.verdict.evidence`` so the skill layer and audit can inspect it
+    machine-checkably.
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.pipeline.goals import create_goal, verify_goal
+
+    init_db()
+    created = create_goal("evidence-guard-goal", "dsh",
+                          acceptance="可验证", verifier="qoder")
+    gid = created.get("goal_id")
+    if not gid:
+        return False, f"create_goal failed: {created}"
+
+    # force phase to verifying so verify_goal can be called directly
+    conn = get_conn()
+    try:
+        meta = json.loads(conn.execute(
+            "SELECT metadata FROM memories WHERE id=?", (gid,)).fetchone()[0] or "{}")
+        meta["phase"] = "verifying"
+        conn.execute("UPDATE memories SET metadata=? WHERE id=?",
+                     (json.dumps(meta, ensure_ascii=False), gid))
+        conn.commit()
+    finally:
+        conn.close()
+
+    ev = {"checks": ["test_a", "test_b"], "ci_status": "pass",
+          "review": "reviewed by qoder"}
+    r = verify_goal(gid, "qoder", True, "evidence test", evidence=ev)
+    ok_status = r.get("status") == "closed"
+
+    # read back the verdict
+    conn = get_conn()
+    try:
+        meta = json.loads(conn.execute(
+            "SELECT metadata FROM memories WHERE id=?", (gid,)).fetchone()[0] or "{}")
+    finally:
+        conn.close()
+    stored_ev = (meta.get("verdict") or {}).get("evidence")
+    ok_evidence = stored_ev == ev
+
+    ok = ok_status and ok_evidence
+    return ok, (f"status={r.get('status')} evidence_stored={ok_evidence}")
+
+
 def guard_write_action_surface_in_sync() -> Tuple[bool, str]:
     """Every memall_write action the validator accepts must be ADVERTISED.
 
@@ -4457,6 +4508,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "skill_promote_demote": guard_skill_promote_demote,
     "skill_export_frontmatter_roundtrip": guard_skill_export_frontmatter_roundtrip,
     "skill_export_idempotent": guard_skill_export_idempotent,
+    "verify_evidence_structured": guard_verify_evidence_structured,
     "write_action_surface_in_sync": guard_write_action_surface_in_sync,
     "goal_children_accepts_json_string": guard_goal_children_accepts_json_string,
     "goal_dependency_warnings": guard_goal_dependency_warnings,

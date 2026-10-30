@@ -124,12 +124,28 @@ def claim_task(task_id: int, agent_name: str) -> dict:
                                  "subject": drow["subject"],
                                  "status": dstatus})
         if malformed:
+            # Record the block reason in the card metadata so it is
+            # visible in the task list without re-querying the dependency
+            # gate.  Closed enum: last_block_reason ∈ {dependency_not_complete,
+            # dependency_malformed, dependency_missing}.
+            meta["last_block_reason"] = "dependency_malformed"
+            conn.execute(
+                "UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(meta, ensure_ascii=False),
+                 datetime.now(timezone.utc).isoformat(), task_id))
+            conn.commit()
             return {"status": "malformed_dependency", "task_id": task_id,
                     "reason": "depends_on points at a non-task memory; its "
                               "status can never reach a terminal state, so "
                               "this card would be blocked forever",
                     "malformed_dependencies": malformed}
         if blocking:
+            meta["last_block_reason"] = "dependency_not_complete"
+            conn.execute(
+                "UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(meta, ensure_ascii=False),
+                 datetime.now(timezone.utc).isoformat(), task_id))
+            conn.commit()
             return {"status": "blocked_by_dependency", "task_id": task_id,
                     "reason": "prerequisites are not complete yet",
                     "blocked_by": blocking}
