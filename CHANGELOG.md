@@ -12,6 +12,15 @@
 - **depends_on 指向非任务记忆时给出明确诊断，不再静默永久冻结**：`mcp/tasks.py` 的 `claim_task` 依赖门原先只查依赖目标的 `status`，不校验它是不是任务卡。`#1000947` 的 `depends_on` 指向 `#1000945`（L6 reflection，status 恒为 active），依赖门要求的终态集合永不可达 → 该卡在数学上永久冻结，无诊断、无升级。现依赖门增加畸形依赖检测：目标 `level != 'L5'` 或 `category not in ('task','todo')` 时返回 `malformed_dependency`（含目标 id/level/category），而非无限 `blocked_by_dependency`。真依赖（task→task）行为不变。守卫 `depends_on_points_at_task_card`（畸形诊断 + 真依赖双向验证）。
 - 关联：讨论 #1001361（约束④负例）、任务 #1001341（依赖体检框架）。
 
+### Added（P0-② 技能层 MVP：质量量化 + 宿主分发，任务 #1001193）
+
+- **skills 表（migration 042）**：`skills(id, name UNIQUE, description, domain, status ∈ {provisional,trusted}, quality_score REAL, usage_count INT, source_memory_id, frontmatter_hash, version, last_demote_reason, ...)`。质量信号只接两个真实 outcome：`verify_goal(passed=True)` → +w1/usage+1；`returned` → 降级 provisional 并记 `last_demote_reason`。晋级阈值 `quality_score ≥ 0.6 AND usage_count ≥ 3`（可配 `skills.thresholds`）。
+- **`pipeline/skills.py`**：`skill_distill(goal_id, name, description, domain)` 显式沉淀入口（verify 后由 verifier/owner 调用，不自动落库——避免重蹈字符门禁误伤）；`record_outcome(goal_id, passed)` 质量信号；`frontmatter_hash`/`render_skill_md` 渲染。
+- **`pipeline/skill_export.py`**：`export_trusted_skills(agent, target_dir)` 把 trusted 行渲染为 `<target_dir>/<agent>-<domain>/SKILL.md`，frontmatter 仅 name/description/version/source_memory_id/frontmatter_hash（抄 Multica 极简模型，只借范式不抄代码）。幂等：frontmatter_hash 比对，未变不重写；写 `skills-lock.json` 防漂移。目录创建失败即报错，fail 不写脏。
+- **`goals.py` 钩子**：`verify_goal` 的 closed 分支调 `record_outcome(goal_id, True)`，returned 分支调 `record_outcome(goal_id, False)`。best-effort——skills 表失败不阻塞 goal 关闭。
+- **守卫**：`guard_skill_table_migration`（迁移幂等+字段齐全）、`guard_skill_promote_demote`（5 次 pass 晋级 + 1 次 return 降级）、`guard_skill_export_frontmatter_roundtrip`（导出解析往返）、`guard_skill_export_idempotent`（同内容连跑两次文件与 lock 行数不变）。4 守卫 + `goal_lifecycle_end_to_end` 全 PASS，无回归。
+- 关联：定稿 `docs/MemALL多Agent协作改进方案-定稿-20261029.md` §三、讨论 #1000886、记忆 #1000933。P0 级，按 veto 模式即时通知老陈。
+
 ## [Unreleased] - 2026-10-28
 
 ### Added（P0-① goal 投递接入 agent_round 心跳）

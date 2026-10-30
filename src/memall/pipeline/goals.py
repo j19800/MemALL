@@ -912,6 +912,16 @@ def verify_goal(goal_id: int, agent_name: str, passed: bool,
             conn.execute("UPDATE memories SET arc_status = 'closed' WHERE id = ?",
                          (goal_id,))
             conn.commit()
+            # P0-② quality signal: a pass on this goal adds +w1/usage+1 to
+            # every skill sourced from it, promoting any that clear both
+            # thresholds.  Best-effort — a skills-table failure must not
+            # block goal closure (the goal's own state is already committed).
+            try:
+                from memall.pipeline.skills import record_outcome
+                record_outcome(goal_id, True)
+            except Exception:
+                logger.debug("skill outcome signal failed for goal %s", goal_id,
+                             exc_info=True)
             return {"status": "closed", "goal_id": goal_id,
                     "verified_by": agent_name,
                     "next": "目标已落地（可蒸馏进 L9/L10）"}
@@ -940,6 +950,14 @@ def verify_goal(goal_id: int, agent_name: str, passed: bool,
             conn.rollback()
             return _conflict(goal_id)
         conn.commit()
+        # P0-② quality signal: a return demotes every skill sourced from
+        # this goal back to provisional and records why.
+        try:
+            from memall.pipeline.skills import record_outcome
+            record_outcome(goal_id, False)
+        except Exception:
+            logger.debug("skill demote signal failed for goal %s", goal_id,
+                         exc_info=True)
         return {"status": "returned", "goal_id": goal_id,
                 "restored_tasks": restored,
                 "verdict": (verdict or "")[:_VERDICT_MAX],

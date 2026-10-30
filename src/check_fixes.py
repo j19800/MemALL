@@ -3453,6 +3453,125 @@ def guard_depends_on_points_at_task_card() -> Tuple[bool, str]:
                 f"release={ok_release}")
 
 
+def guard_skill_table_migration() -> Tuple[bool, str]:
+    """The skills table migration is idempotent and has the expected columns."""
+    _fresh_db()
+    from memall.core.db import get_conn, init_db
+
+    init_db()
+    conn = get_conn()
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(skills)").fetchall()]
+    finally:
+        conn.close()
+    expected = {"id", "name", "description", "domain", "status",
+                "quality_score", "usage_count", "source_memory_id",
+                "frontmatter_hash", "version", "last_demote_reason",
+                "created_at", "updated_at", "memory_status"}
+    missing = expected - set(cols)
+    # idempotent: re-running init_db must not error or change the schema
+    init_db()
+    conn = get_conn()
+    try:
+        cols2 = [r[1] for r in conn.execute("PRAGMA table_info(skills)").fetchall()]
+    finally:
+        conn.close()
+    ok = not missing and set(cols) == set(cols2)
+    return ok, f"missing={sorted(missing) if missing else 'none'} stable={set(cols)==set(cols2)}"
+
+
+def guard_skill_promote_demote() -> Tuple[bool, str]:
+    """5 passes promote provisional→trusted; 1 return demotes back."""
+    _fresh_db()
+    from memall.core.db import init_db
+    from memall.pipeline.skills import skill_distill, record_outcome, get_skill
+
+    init_db()
+    r = skill_distill(goal_id=1, name="dep-check", description="依赖体检 playbook",
+                      domain="dsh", agent_name="dsh")
+    if r.get("status") != "created":
+        return False, f"distill failed: {r}"
+    for _ in range(5):
+        record_outcome(goal_id=1, passed=True)
+    s = get_skill("dep-check")
+    promoted = s.get("status") == "trusted"
+    record_outcome(goal_id=1, passed=False)
+    s2 = get_skill("dep-check")
+    demoted = s2.get("status") == "provisional"
+    has_reason = bool(s2.get("last_demote_reason"))
+    ok = promoted and demoted and has_reason
+    return ok, (f"promoted={promoted} demoted={demoted} "
+                f"reason={s2.get('last_demote_reason')!r}")
+
+
+def guard_skill_export_frontmatter_roundtrip() -> Tuple[bool, str]:
+    """Exported SKILL.md parses back to name/description with non-empty body."""
+    _fresh_db()
+    import os, tempfile
+    from memall.core.db import init_db
+    from memall.pipeline.skills import skill_distill, record_outcome
+    from memall.pipeline.skill_export import export_trusted_skills
+
+    init_db()
+    skill_distill(goal_id=2, name="export-test", description="导出往返测试 skill",
+                  domain="dsh", agent_name="dsh")
+    for _ in range(5):
+        record_outcome(goal_id=2, passed=True)
+    tmp = tempfile.mkdtemp(prefix="skill_export_")
+    r = export_trusted_skills("dsh", tmp)
+    if r.get("status") != "ok" or r.get("exported", 0) < 1:
+        return False, f"export failed: {r}"
+    found = None
+    for root, dirs, files in os.walk(tmp):
+        if "SKILL.md" in files:
+            found = os.path.join(root, "SKILL.md")
+            break
+    if not found:
+        return False, "no SKILL.md found"
+    with open(found, "r", encoding="utf-8") as f:
+        content = f.read()
+    has_name = "name: export-test" in content
+    has_desc = "description: 导出往返测试 skill" in content
+    has_fhash = "frontmatter_hash:" in content
+    body = content.split("---", 2)[-1].strip() if content.count("---") >= 2 else ""
+    body_ok = len(body) > 0
+    ok = has_name and has_desc and has_fhash and body_ok
+    return ok, (f"name={has_name} desc={has_desc} fhash={has_fhash} "
+                f"body={body_ok}")
+
+
+def guard_skill_export_idempotent() -> Tuple[bool, str]:
+    """Same content exported twice leaves files and lock row count unchanged."""
+    _fresh_db()
+    import os, tempfile
+    from memall.core.db import init_db
+    from memall.pipeline.skills import skill_distill, record_outcome
+    from memall.pipeline.skill_export import export_trusted_skills
+
+    init_db()
+    skill_distill(goal_id=3, name="idem-test", description="幂等导出测试",
+                  domain="dsh", agent_name="dsh")
+    for _ in range(5):
+        record_outcome(goal_id=3, passed=True)
+    tmp = tempfile.mkdtemp(prefix="skill_idem_")
+    r1 = export_trusted_skills("dsh", tmp)
+    files1 = {}
+    for root, dirs, fnames in os.walk(tmp):
+        for fn in fnames:
+            p = os.path.join(root, fn)
+            files1[p] = os.path.getsize(p)
+    r2 = export_trusted_skills("dsh", tmp)
+    files2 = {}
+    for root, dirs, fnames in os.walk(tmp):
+        for fn in fnames:
+            p = os.path.join(root, fn)
+            files2[p] = os.path.getsize(p)
+    ok = (r2.get("skipped", 0) >= 1 and files1 == files2
+          and r2.get("exported", 0) == 0)
+    return ok, (f"run1={r1.get('exported')} run2_exported={r2.get('exported')} "
+                f"run2_skipped={r2.get('skipped')} files_stable={files1 == files2}")
+
+
 def guard_write_action_surface_in_sync() -> Tuple[bool, str]:
     """Every memall_write action the validator accepts must be ADVERTISED.
 
@@ -3964,14 +4083,19 @@ def guard_goal_cards_require_audited_delete() -> Tuple[bool, str]:
     delete path issuing a bare ``DELETE`` with no ledger entry.
 
     What this asserts:
-      1. ``init_db`` installs the ``memories_bd_goal_guard`` trigger;
+      1. ``init_db`` installs the ``memories_bd_goal_guard`` trigger, and the
+         installed version requires BOTH proofs (delete_audit + ops_log);
       2. a bare delete of a goal row aborts and the row survives;
       3. merging a goal (as source *or* target) is refused — a merge deletes
          the source, which is the same silent loss in disguise;
-      4. ``audited_delete_memory`` removes the row, writes a ``delete`` entry
-         to ``ops_log`` and leaves no residual ``delete_audit`` row;
-      5. ordinary (non-goal) rows are still deletable by plain SQL;
-      6. the gateway no longer contains a bare ``DELETE FROM memories`` and
+      4. one proof is not enough: a hand-minted ``delete_audit`` row without
+         the ``ops_log`` entry still aborts.  That is exactly how the external
+         cleanup script removed 19 cards on 2026-10-29 without leaving a
+         ledger entry anywhere;
+      5. ``audited_delete_memory`` removes the row, writes a ``delete`` entry
+         to ``ops_log`` and keeps BOTH proofs on disk;
+      6. ordinary (non-goal) rows are still deletable by plain SQL;
+      7. the gateway no longer contains a bare ``DELETE FROM memories`` and
          every bulk sweeper excludes ``category='goal'``.
     """
     import sqlite3
@@ -4000,9 +4124,11 @@ def guard_goal_cards_require_audited_delete() -> Tuple[bool, str]:
 
     conn = get_conn()
     try:
-        trigger = bool(conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='trigger' "
-            "AND name='memories_bd_goal_guard'").fetchone())
+        guard_row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' "
+            "AND name='memories_bd_goal_guard'").fetchone()
+        trigger = bool(guard_row)
+        dual_proof = bool(guard_row) and "ops_log" in (guard_row[0] or "")
         audit_table = bool(conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' "
             "AND name='delete_audit'").fetchone())
@@ -4013,7 +4139,7 @@ def guard_goal_cards_require_audited_delete() -> Tuple[bool, str]:
             conn.execute("DELETE FROM memories WHERE id = ?", (gid,))
             conn.commit()
         except sqlite3.IntegrityError as exc:
-            bare_blocked = "goal card cannot be deleted silently" in str(exc)
+            bare_blocked = ("delete_audit" in str(exc) and "ops_log" in str(exc))
             conn.rollback()
         except Exception:
             conn.rollback()
@@ -4033,7 +4159,25 @@ def guard_goal_cards_require_audited_delete() -> Tuple[bool, str]:
         merge_src_refused = merge_refused(gid2, plain)
         merge_tgt_refused = merge_refused(plain, gid2)
 
-        # (4) the audited path works and leaves a ledger entry
+        # (3b) ONE proof is not enough: minting a delete_audit row by hand
+        # (what the external cleanup script did on 2026-10-29) must still abort
+        # because the ops_log delete entry is missing.
+        conn.execute(
+            "INSERT OR REPLACE INTO delete_audit (memory_id, at, by, reason) "
+            "VALUES (?,?,?,?)",
+            (gid2, "2026-01-01T00:00:00+00:00", "forged", "audit row only"))
+        forged_blocked = False
+        try:
+            conn.execute("DELETE FROM memories WHERE id = ?", (gid2,))
+            conn.commit()
+        except sqlite3.IntegrityError:
+            forged_blocked = True
+        finally:
+            conn.rollback()
+        forged_survived = bool(conn.execute(
+            "SELECT 1 FROM memories WHERE id = ?", (gid2,)).fetchone())
+
+        # (4) the audited path works and leaves BOTH proofs on disk
         res = O.audited_delete_memory(conn, gid, by="guard_fixture",
                                       reason="guard cleanup")
         conn.commit()
@@ -4049,8 +4193,8 @@ def guard_goal_cards_require_audited_delete() -> Tuple[bool, str]:
             except Exception:
                 pass
         logged = gid in delete_entries
-        no_residual = not conn.execute(
-            "SELECT 1 FROM delete_audit WHERE memory_id = ?", (gid,)).fetchone()
+        audit_kept = bool(conn.execute(
+            "SELECT 1 FROM delete_audit WHERE memory_id = ?", (gid,)).fetchone())
 
         # (5) non-goal rows keep the ordinary path
         cur = conn.execute("DELETE FROM memories WHERE id = ?", (plain,))
@@ -4080,16 +4224,20 @@ def guard_goal_cards_require_audited_delete() -> Tuple[bool, str]:
         )
     )
 
-    ok = (trigger and audit_table and bare_blocked and survived
+    ok = (trigger and dual_proof and audit_table and bare_blocked and survived
           and merge_src_refused and merge_tgt_refused
-          and audited_deleted and gone and logged and no_residual
+          and forged_blocked and forged_survived
+          and audited_deleted and gone and logged and audit_kept
           and plain_deletable and gateway_audited and sweepers_guarded)
-    return ok, (f"trigger={trigger} audit_table={audit_table} "
+    return ok, (f"trigger={trigger} dual_proof={dual_proof} "
+                f"audit_table={audit_table} "
                 f"bare_delete_aborts={bare_blocked} row_survives={survived} "
                 f"merge_src_refused={merge_src_refused} "
                 f"merge_tgt_refused={merge_tgt_refused} "
+                f"audit_row_alone_rejected={forged_blocked} "
+                f"forged_row_survives={forged_survived} "
                 f"audited_delete={audited_deleted} row_gone={gone} "
-                f"ops_logged={logged} audit_row_cleared={no_residual} "
+                f"ops_logged={logged} audit_row_kept={audit_kept} "
                 f"plain_still_deletable={plain_deletable} "
                 f"gateway_audited={gateway_audited} "
                 f"sweepers_exclude_goals={sweepers_guarded}")
@@ -4305,6 +4453,10 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "unresolved_dependency_fails_loudly": guard_unresolved_dependency_fails_loudly,
     "duplicate_objective_rejected": guard_duplicate_objective_rejected,
     "depends_on_points_at_task_card": guard_depends_on_points_at_task_card,
+    "skill_table_migration": guard_skill_table_migration,
+    "skill_promote_demote": guard_skill_promote_demote,
+    "skill_export_frontmatter_roundtrip": guard_skill_export_frontmatter_roundtrip,
+    "skill_export_idempotent": guard_skill_export_idempotent,
     "write_action_surface_in_sync": guard_write_action_surface_in_sync,
     "goal_children_accepts_json_string": guard_goal_children_accepts_json_string,
     "goal_dependency_warnings": guard_goal_dependency_warnings,
