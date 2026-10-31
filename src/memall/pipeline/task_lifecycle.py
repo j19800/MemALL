@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 
 from memall.core.db import get_conn
 from memall.core.status import NOT_ARCHIVED, pending_tasks, task_status_of, task_status_eq
+from memall.core.task_identity import can_mutate, forbidden_payload
 from memall.core.utils import now_iso, unwrap
 
 logger = logging.getLogger(__name__)
@@ -28,57 +29,27 @@ logger = logging.getLogger(__name__)
 
 # ── Caller gate (design #1000539 AC4) ─────────────────────────────────────
 # resolve / block / acknowledge all mutate someone else's card if left
-# unguarded.  ``claim_task`` already refused a non-addressee, but the three
-# terminal helpers above had NO caller parameter at all — so any agent could
-# ``resolve_task`` another agent's live card, which is *more* destructive than
-# blocking it (it silently closes owed work).  The gate below mirrors
-# ``claim_task``'s semantics: only the addressee may act, with the existing
-# ``security.supervisor_agents`` list as the sole arbitration exemption
-# (never a second allow-list, per the arbitration).  ``caller is None`` is the
-# trusted-internal path (scheduler, migration, guards) and skips the gate;
-# the MCP handlers always pass a real caller string (possibly ""), which is
-# gated — an empty caller can only be the addressee if the card has no
-# assignee at all.
-
-def _is_supervisor(agent: str) -> bool:
-    """True if ``agent`` is listed in ``security.supervisor_agents``."""
-    try:
-        from memall.config import get_config
-        from memall.core.thin_waist import normalize_agent_name
-
-        supes = get_config("security.supervisor_agents", []) or []
-        if isinstance(supes, str):
-            supes = [s for s in supes.split(",") if s.strip()]
-        allowed = {normalize_agent_name(str(s)) for s in supes}
-        return normalize_agent_name(agent or "") in allowed
-    except Exception:
-        logger.debug("_is_supervisor check failed", exc_info=True)
-        return False
-
-
-def _addressed_to(meta: dict, row_agent_name: str, caller: str) -> bool:
-    """Whether *caller* is the card's addressee (assignee, else agent_name)."""
-    target = (meta.get("assignee") or row_agent_name or "").strip()
-    return bool(target) and target.lower() == (caller or "").strip().lower()
-
+# unguarded, so they go through the shared identity module.  The predicate
+# itself lives in ``memall.core.task_identity`` — this module used to carry a
+# second copy (P2-4: two ``_addressed_to`` implementations that had already
+# drifted apart from ``mcp/tasks.py``; a supervisor exemption added on one side
+# would silently not apply on the other).  Keep only the thin wrapper below so
+# every mutation path answers "may this caller act?" the same way.
+#
+# ``caller is None`` is the trusted-internal path (scheduler, migration,
+# guards) and skips the gate; the MCP handlers always pass a real caller string
+# (possibly ""), which is gated — an empty caller can only be the addressee if
+# the card has no assignee at all.
 
 def _caller_gate(meta, row_agent_name, caller, task_id):
     """Return a forbidden dict, or None when *caller* may act.
 
     ``caller is None`` → trusted internal caller, gate skipped.
     """
-    if caller is None:
+    if can_mutate(meta, row_agent_name, caller):
         return None
-    if _addressed_to(meta, row_agent_name, caller) or _is_supervisor(caller):
-        return None
-    return {
-        "status": "forbidden",
-        "task_id": task_id,
-        "reason": "this card is addressed to another agent; only the assignee "
-                  "or a security.supervisor_agents member may change it",
-        "assignee": meta.get("assignee") or row_agent_name,
-        "caller": caller,
-    }
+    return forbidden_payload(meta, row_agent_name, caller, task_id,
+                             operation="change")
 
 
 # ── Query ──

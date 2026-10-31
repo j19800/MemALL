@@ -156,7 +156,11 @@ def skill_distill(goal_id: int, name: str, description: str, domain: str,
 
     conn = _get_conn()
     try:
-        conn.execute("BEGIN")
+        # BEGIN IMMEDIATE, not bare BEGIN: this transaction reads and then
+        # writes, so a DEFERRED transaction upgrades its lock mid-flight and
+        # SQLite returns SQLITE_BUSY immediately instead of honouring
+        # busy_timeout (guard: busy_timeout_survives_concurrency).
+        conn.execute("BEGIN IMMEDIATE")
         try:
             existing = conn.execute("SELECT id, version FROM skills WHERE name = ?",
                                     (name,)).fetchone()
@@ -204,7 +208,9 @@ def record_outcome(goal_id: int, passed: bool) -> dict:
     q_th, u_th = thresholds()
     conn = _get_conn()
     try:
-        conn.execute("BEGIN")
+        # BEGIN IMMEDIATE — see skill_distill: the read-then-write upgrade
+        # would otherwise hit SQLITE_BUSY without waiting.
+        conn.execute("BEGIN IMMEDIATE")
         try:
             rows = conn.execute(
                 "SELECT * FROM skills WHERE source_memory_id = ?",

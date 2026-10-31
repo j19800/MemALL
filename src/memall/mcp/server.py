@@ -25,12 +25,30 @@ _LOGGING_CONFIGURED = False
 def _ensure_logging():
     global _LOGGING_CONFIGURED
     if not _LOGGING_CONFIGURED:
-        handler = logging.StreamHandler(sys.stderr)
-        handler.setFormatter(logging.Formatter(
+        fmt = logging.Formatter(
             "[MCP %(asctime)s] %(levelname)s %(message)s",
             datefmt="%H:%M:%S",
-        ))
+        )
+        # stderr stream handler (existing behaviour, kept for live clients)
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(fmt)
         _log.addHandler(handler)
+        # Persistent file handler so a crash survives client-side truncation:
+        # the client only keeps the tail of stderr in memory, but the file on
+        # disk keeps the full trail incl. the last "Call tool:" line.
+        try:
+            import os as _os
+            log_path = _os.path.join(_os.path.expanduser("~"), ".memall", "mcp_stderr.log")
+            _os.makedirs(_os.path.dirname(log_path), exist_ok=True)
+            fhandler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+            fhandler.setFormatter(fmt)
+            _log.addHandler(fhandler)
+        except Exception as _e:  # pragma: no cover - logging must never block startup
+            # The stderr handler above is already attached; do not build a
+            # second StreamHandler here (it would never be attached, so the
+            # message would vanish). Just record that the persistent trail is
+            # missing.
+            _log.warning("file handler init failed (no persistent log): %s", _e)
         _log.setLevel(logging.INFO)
         _LOGGING_CONFIGURED = True
 
@@ -389,9 +407,18 @@ def serve():
 
     except Exception as e:
         _log.critical("Unhandled exception in main loop: %s", e, exc_info=True)
+        _log.critical("exit code 255 will be returned to client; inspect ~/.memall/mcp_stderr.log")
         raise
     finally:
         _log.info("MCP server stopped")
+        try:
+            for h in list(_log.handlers):
+                try:
+                    h.flush()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
 
 def _reset_state():

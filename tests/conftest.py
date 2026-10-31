@@ -44,6 +44,22 @@ def _test_db(monkeypatch, tmp_path):
     monkeypatch.setattr("memall.core.db.DB_PATH", db_path)
     monkeypatch.setattr("memall.core.db._global_pool", None)
 
+    # Isolate security policy too.  A test must not depend on whatever
+    # ``security.disabled_agents`` the ambient deployment happens to carry:
+    # entry names such as ``gateway_test`` are permanently denylisted on the
+    # dev machine, and the suite then failed for a reason unrelated to the
+    # code under test.
+    try:
+        import memall.config as mc
+
+        if mc._config is not None:
+            sec = mc._config.setdefault("security", {})
+            sec["disabled_agents"] = []
+            sec["disabled_projects"] = []
+            mc._last_mtime_check = float("inf")
+    except Exception:
+        pass
+
     from memall.core.db import init_db
 
     # A leftover background thread may briefly hold a lock on the DB_PATH it

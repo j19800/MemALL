@@ -51,24 +51,11 @@ def _tags_to_json(tags: List[str]) -> str:
     )
 
 
-def _ensure_ops_log(conn) -> None:
-    """Ensure ops_log table exists (idempotent)."""
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS ops_log (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            op_type     TEXT NOT NULL,
-            target_ids  TEXT NOT NULL,
-            before_snapshot TEXT NOT NULL,
-            op_metadata TEXT NOT NULL DEFAULT '{}',
-            executed_at TEXT NOT NULL,
-            rolled_back_at TEXT
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ops_log_type ON ops_log(op_type)")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_ops_log_rolled ON ops_log(rolled_back_at)"
-    )
-    conn.commit()
+def _ensure_ops_log(conn, commit: bool = True) -> None:
+    """Ensure ops_log table exists (idempotent).  DDL lives in core.db."""
+    from memall.core.db import ensure_ops_log
+
+    ensure_ops_log(conn, commit=commit)
 
 
 def _snapshot_memories(conn, ids: Sequence[int]) -> Dict[int, dict]:
@@ -104,7 +91,10 @@ def _record_ops_entry(
     op_metadata: dict,
 ) -> None:
     """Record a batch operation in ops_log for undo support (idempotent)."""
-    _ensure_ops_log(conn)
+    # commit=False: the entry belongs to the caller's transaction, and
+    # ``audited_delete_memory`` needs the row visible to the DELETE trigger
+    # *inside* that same transaction.
+    _ensure_ops_log(conn, commit=False)
     conn.execute(
         "INSERT INTO ops_log (op_type, target_ids, before_snapshot, op_metadata, "
         "executed_at) VALUES (?,?,?,?,?)",
@@ -116,6 +106,49 @@ def _record_ops_entry(
             datetime.now(timezone.utc).isoformat(),
         ),
     )
+
+
+def audited_delete_memory(
+    conn, memory_id: int, by: str, reason: str = ""
+) -> Dict[str, Any]:
+    """Delete one memory and leave an audit trail.
+
+    This is the only way a ``category='goal'`` row may be deleted: the
+    ``memories_bd_goal_guard`` trigger aborts any goal delete that lacks
+    BOTH a ``delete_audit`` row and a matching ``ops_log`` delete entry.
+    A goal normally ends at ``verify_goal`` (phase ``closed``); this helper
+    exists for deliberate exceptions such as fixtures and redaction, where the
+    row must actually disappear.
+
+    The ledger entry is written *before* the DELETE because the trigger is
+    evaluated during it.  Both proofs are kept afterwards — they are the record
+    of who removed a goal and why.  ``memories.id`` is AUTOINCREMENT, so a
+    stale audit row can never authorise a later card that reuses the number.
+
+    Caller owns the transaction — commit after this returns.
+    """
+    row = conn.execute(
+        "SELECT id, category FROM memories WHERE id = ?", (memory_id,)
+    ).fetchone()
+    if not row:
+        return {"deleted": 0, "error": f"memory #{memory_id} not found"}
+
+    snapshot = _snapshot_memories(conn, [memory_id])
+    meta = {"by": by or "unknown", "reason": reason or ""}
+    _record_ops_entry(conn, "delete", [memory_id], snapshot, meta)
+    conn.execute(
+        "INSERT OR REPLACE INTO delete_audit (memory_id, at, by, reason) "
+        "VALUES (?,?,?,?)",
+        (memory_id, datetime.now(timezone.utc).isoformat(),
+         by or "unknown", reason or ""),
+    )
+    conn.execute(
+        "DELETE FROM edges WHERE source_id = ? OR target_id = ?",
+        (memory_id, memory_id),
+    )
+    cur = conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+    return {"deleted": cur.rowcount, "memory_id": memory_id,
+            "category": row["category"]}
 
 
 def _merge_memories_conn(
@@ -139,17 +172,27 @@ def _merge_memories_conn(
         raise ValueError("source and target must be different memories")
 
     src = conn.execute(
-        "SELECT id, content, subject, summary, metadata FROM memories WHERE id = ?",
+        "SELECT id, content, subject, summary, metadata, category "
+        "FROM memories WHERE id = ?",
         (source_id,),
     ).fetchone()
     tgt = conn.execute(
-        "SELECT id, content, subject, summary, metadata FROM memories WHERE id = ?",
+        "SELECT id, content, subject, summary, metadata, category "
+        "FROM memories WHERE id = ?",
         (target_id,),
     ).fetchone()
     if not src:
         raise ValueError(f"source memory {source_id} not found")
     if not tgt:
         raise ValueError(f"target memory {target_id} not found")
+    # A merge deletes the source row.  Doing that to a goal card would strand
+    # its phase_history, task_ids and children — the lifecycle owner must
+    # close it (verify_goal) or delete it through audited_delete_memory.
+    for _row in (src, tgt):
+        if (_row["category"] or "") == "goal":
+            raise ValueError(
+                f"memory {_row['id']} is a goal card; goals cannot be merged"
+            )
 
     now_iso = datetime.now(timezone.utc).isoformat()
 

@@ -50,7 +50,7 @@ logger = logging.getLogger("memall.pipeline.goals")
 GOAL_CATEGORY = "goal"
 GOAL_LEVEL = "L5"
 
-_PHASES = ("intake", "decomposed", "deliberating", "assigned",
+_PHASES = ("intake", "triage", "decomposed", "deliberating", "assigned",
            "executing", "verifying", "closed")
 
 # A child in one of these states no longer blocks the goal from verifying.
@@ -241,8 +241,13 @@ def _card_exists(conn, task_id: int) -> bool:
 
 def create_goal(objective: str, owner: str, acceptance: str = "",
                 verifier: str = "", created_by: str = "",
-                participants: Optional[list] = None) -> dict:
-    """File a human objective. Phase starts at ``intake``, waiting for the owner."""
+                participants: Optional[list] = None,
+                accountable: str = "") -> dict:
+    """File a human objective. Phase starts at ``triage`` (human-in-the-loop gate).
+
+    ``accountable`` is the person answerable for the outcome.  Fail-closed:
+    an empty accountable rejects creation.
+    """
     from memall.core.thin_waist import capture
 
     owner = (owner or "").strip()
@@ -250,6 +255,10 @@ def create_goal(objective: str, owner: str, acceptance: str = "",
         return {"status": "error", "error": "owner (the orchestrating agent) is required"}
     if not (objective or "").strip():
         return {"status": "error", "error": "objective is required"}
+    if not (accountable or "").strip():
+        # Fail-closed: an unattributable goal cannot be traced to a
+        # responsible party.
+        return {"status": "error", "error": "accountable is required"}
 
     # Dedup by normalised objective.  The only prior backstop was capture's
     # content_hash, but the body embeds owner/verifier, so a field-level
@@ -301,20 +310,21 @@ def create_goal(objective: str, owner: str, acceptance: str = "",
                   subject=f"[目标] {objective.strip()[:80]}",
                   metadata=json.dumps({
                       "status": "active",
-                      "phase": "intake",
+                      "phase": "triage",
                       "owner": owner,
+                      "accountable": accountable.strip(),
                       "verifier": verifier.strip(),
                       "acceptance": acceptance.strip(),
                       "objective": objective.strip(),
                       "decomposed_by": "",
                       "discussion_id": 0,
                       "task_ids": [],
-                      "phase_history": [{"phase": "intake", "at": _now()}],
+                      "phase_history": [{"phase": "triage", "at": _now()}],
                       **({"cycle": cycle, "previous_goal_id": prior_closed}
                          if prior_closed is not None else {}),
                       **({"participants": participants} if participants else {}),
                   }, ensure_ascii=False))
-    return {"status": "created", "goal_id": gid, "phase": "intake",
+    return {"status": "created", "goal_id": gid, "phase": "triage",
             "owner": owner,
             **({"cycle": cycle, "previous_goal_id": prior_closed}
                if prior_closed is not None else {}),
@@ -379,7 +389,7 @@ def decompose(goal_id: int, agent_name: str, children: list[dict],
         if not g:
             return {"status": "error", "error": f"goal #{goal_id} not found"}
         meta = g["meta"]
-        if _phase_of(meta) not in ("intake", "decomposed"):
+        if _phase_of(meta) not in ("intake", "triage", "decomposed"):
             return {"status": "error",
                     "error": f"goal is in phase '{_phase_of(meta)}', cannot decompose"}
         owner = (meta.get("owner") or "").strip()
@@ -910,6 +920,9 @@ def verify_goal(goal_id: int, agent_name: str, passed: bool,
                           "at": _now()}
         if evidence is not None:
             meta["verdict"]["evidence"] = evidence
+        acc = (meta.get("accountable") or "").strip()
+        if acc:
+            meta["verdict"]["accountable"] = acc
         meta["verified_by"] = agent_name
         if passed:
             meta["phase"] = "closed"
@@ -994,6 +1007,21 @@ def next_action(conn, goal: dict) -> Optional[dict]:
                     "每个 child 必须有 acceptance（缺了会被拒绝）；"
                     "depends_on_idx 是本列表内的 0 基下标，只能引用更靠前的兄弟节点。"
                     "若某个 child 依赖前一个的产出，必须写进 depends_on_idx；"
+                    "若确实全部并行，额外传 parallel_ok=true。")}
+    if phase == "triage":
+        # Human-in-the-loop gate: ``create_goal`` files new objectives here.
+        # The sign-off IS the owner decomposing it, but without this branch
+        # ``next_action`` returned None and triage goals produced no action at
+        # all -- nobody was ever told "a goal is waiting for your signature".
+        signer = (meta.get("accountable") or "").strip() or owner
+        return {"agent": signer, "goal_id": gid, "action": "decompose",
+                "message": f"[目标 #{gid}] 待你签收并拆解：{meta.get('objective', '')[:60]}",
+                "instruction": (
+                    f"该目标处于 triage，等待责任人签收。调用 memall_write，参数："
+                    f"action=goal_decompose, goal_id={gid}, "
+                    "children=[{title, detail, assignee, acceptance, depends_on_idx}]。"
+                    "每个 child 必须有 acceptance（缺了会被拒绝）；"
+                    "depends_on_idx 是本列表内的 0 基下标，只能引用更靠前的兄弟节点。"
                     "若确实全部并行，额外传 parallel_ok=true。")}
     if phase == "decomposed":
         return {"agent": owner, "goal_id": gid, "action": "deliberate",

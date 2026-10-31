@@ -1,7 +1,8 @@
-<p align="center">
+﻿<p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/MCP-2025--03--26-purple" alt="MCP">
+  <img src="https://img.shields.io/badge/version-0.1.69-green" alt="Version 0.1.69">
   <img src="https://img.shields.io/github/stars/j19800/MemALL?style=social" alt="GitHub stars">
 </p>
 
@@ -9,11 +10,11 @@
 <p align="center"><strong>Multi-agent Memory OS</strong> — 本地优先的 AI Agent 持久化记忆系统</p>
 
 <p align="center">
-  <i>7 MCP tools · 3 priority + 11-layer memory lifecycle · 30-step self-evolving pipeline · Knowledge graph · Multi-agent shared memory · <b>Hook-driven automation</b></i>
+  <i>7 MCP tools · 3 priority + 11-layer memory lifecycle · 31-step self-evolving pipeline · Knowledge graph · Multi-agent shared memory · <b>Hook-driven automation</b></i>
 </p>
 
 <p align="center">
-  <b>English</b> · <a href="README.zh-CN.md">中文</a>
+  <b>English</b> · <a href="README.zh-CN.md">中文</a> · <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 ---
@@ -144,28 +145,24 @@ SQLite + FTS5 + vector search. Zero cloud dependency. Your data stays on your ma
 ## 🚀 Quick Start
 
 ```bash
-# 一键安装启动 (推荐)
+# One-shot install + start (recommended)
 pip install memall-os && memall quickstart
 
-# 或从源码
+# Or from source
 git clone https://github.com/j19800/MemALL.git
 cd MemALL
 python install.py
 ```
 
-装完即用，自动完成：初始化数据库 → 启动服务 → 配置 MCP → 打开浏览器。
+`memall quickstart` initialises the database, starts the gateway, wires up the
+MCP config, and opens the browser — nothing else to configure.
 
-# 4. Start remembering
-/capture "Project X: decided to use FastAPI, reason: async support"
-/capture "Fixed OOM bug in NLP pipeline — root cause: vector dimension mismatch"
-/retrieve "FastAPI decision"
-```
+Then start recording:
 
-Or clone from source:
 ```bash
-git clone https://github.com/j19800/MemALL
-cd memall
-pip install -e .
+memall capture "Project X: decided to use FastAPI, reason: async support"
+memall capture "Fixed OOM bug in NLP pipeline — root cause: vector dimension mismatch"
+memall retrieve "FastAPI decision"
 ```
 
 ---
@@ -174,9 +171,9 @@ pip install -e .
 
 | Feature | MemALL | Mem0 | Letta | Zep |
 |---------|--------|------|-------|-----|
-| **Memory model** | 11 layers (P0-L11) | user/session | agent/memory-block | session/summary |
+| **Memory model** | 14 levels (P0/P1/P2 + L1–L11) | user/session | agent/memory-block | session/summary |
 | **Knowledge graph** | ✅ Native + traversal | ❌ | ❌ | ❌ |
-| **Self-evolving pipeline** | ✅ 30-step auto + 5 optional | ❌ | ❌ | ❌ |
+| **Self-evolving pipeline** | ✅ 31-step auto + 5 optional | ❌ | ❌ | ❌ |
 | **Multi-agent shared** | ✅ Federation + active push | ❌ | Same agent only | ❌ |
 | **Decision tracking** | ✅ Arc lifecycle | ❌ | ❌ | ❌ |
 | **Discussion convergence** | ✅ Multi-agent auto | ❌ | ❌ | ❌ |
@@ -194,7 +191,7 @@ src/memall/
 ├── core/         # SQLite / NLP / vector search / event processor / echo scoring
 ├── api/          # FastAPI REST (35 routes)
 ├── mcp/          # MCP adapter (7 consolidated tool endpoints)
-├── pipeline/     # 30-step auto pipeline + 5 optional (see list_pipeline_steps())
+├── pipeline/     # 31-step auto pipeline + 5 optional (see list_pipeline_steps())
 │   ├── observe/  # OODA observation step
 │   ├── distill/  # L9/L10/L11 distillation, L7 preference, epoch detection
 │   ├── classify/ # Exclusion-based priority classification
@@ -210,8 +207,16 @@ src/memall/
 ## 📝 Roadmap
 
 - [x] **v0.1.0** — Core MCP server, 7 consolidated tool endpoints, CLI, PyPI package
+- [x] **v0.1.69** — Repo made clonable again (`task_identity` + migrations 038/040 were live but uncommitted), goal `triage` gate now emits an action, skills layer transactions fixed for concurrency, policy refusals return 403 instead of 500
 - [ ] **v0.2.0** — Web dashboard, user system, Pro tier gating
 - [ ] **v0.3.0** — Cloud sync, team collaboration, API gateway
+
+### Known gaps (stated, not hidden)
+
+- **`claim_task` is not atomic across processes.** `mcp/tasks.py` does read → modify → `UPDATE ... WHERE id = ?` with no state predicate and no row lock, so two concurrent claims end last-writer-wins and `claimed_by` is silently overwritten. Planned: add a state predicate or a unique index on `(task_id, status)`.
+- **Goal-level block reasons are not observable.** Cards already carry a two-value `last_block_reason` enum; goals still `return None` when they are stuck, so "why this goal is not moving" is invisible.
+- **The guard suite is slow by design.** Every guard replays all migrations via `init_db()`, so a full run is measured in hours rather than minutes. Treat a green card guard set as evidence for that set, not for the whole repository.
+- **`check_fixes.py` leaves scratch directories** under `%TEMP%` (`mkdtemp` without `rmtree`).
 
 ---
 

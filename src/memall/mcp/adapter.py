@@ -114,12 +114,24 @@ def handle_call(tool_name: str, arguments: dict) -> str:
     # below (ensure_session_started, the notification bar, agent isolation)
     # silently saw an empty identity.  The identity is now bound once at MCP
     # handshake time and re-attached here, so a client is addressable no
-    # matter which tool it calls.  An explicit agent_name still wins.
+    # matter which tool it calls.
+    #
+    # The SESSION identity wins over an explicit argument on every READ path
+    # (I5, no impersonation).  This used to be "explicit wins", which let any
+    # caller send agent_name=writer once and then read writer's private
+    # memories -- and (because identify() also bound the value) act as writer
+    # for the rest of the session.  Dispatch actions are the exception: there
+    # an explicit agent_name names the agent the work is being created FOR, so
+    # it must survive (identify() decides, see session_identity.DISPATCH_ACTIONS).
+    # Rewriting here also canonicalises the value ("WorkBuddy" vs the stored
+    # "workbuddy"); an exact-match isolation filter would otherwise return
+    # nothing.
     try:
         from memall.mcp.session_identity import identify
 
-        _caller = identify(arguments) or ""
-        if _caller and not arguments.get("agent_name"):
+        _action = arguments.get("action", "") if isinstance(arguments, dict) else ""
+        _caller = identify(arguments, _action) or ""
+        if _caller:
             arguments = dict(arguments)
             arguments["agent_name"] = _caller
     except Exception:

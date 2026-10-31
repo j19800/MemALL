@@ -1,7 +1,8 @@
-<p align="center">
+﻿<p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/MCP-2025--03--26-purple" alt="MCP">
+  <img src="https://img.shields.io/badge/version-0.1.69-green" alt="Version 0.1.69">
   <img src="https://img.shields.io/github/stars/j19800/MemALL?style=social" alt="GitHub stars">
 </p>
 
@@ -9,11 +10,11 @@
 <p align="center"><strong>Multi-agent Memory OS</strong> — 本地优先的 AI Agent 持久化记忆系统</p>
 
 <p align="center">
-  <i>7 个 MCP 工具 · 11 层记忆生命周期 · 30 步自进化管线 · 知识图谱 · 多 Agent 共享记忆 · <b>Hook 驱动自动化</b></i>
+  <i>7 个 MCP 工具 · 3 优先级 + 11 层记忆生命周期 · 31 步自进化管线 · 知识图谱 · 多 Agent 共享记忆 · <b>Hook 驱动自动化</b></i>
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> · <b>中文</b>
+  <a href="README.md">English</a> · <b>中文</b> · <a href="CHANGELOG.md">更新日志</a>
 </p>
 
 ---
@@ -55,7 +56,7 @@ memall start                   # 启动服务
 
 ## 🔥 为什么用 MemALL？
 
-### 🧠 11 层记忆生命周期
+### 🧠 3 优先级 + 11 层记忆生命周期
 
 不只是"存和取"。每条记忆都有语义层级，基于 exclusion chain 的优先级分类、epoch 检测和 echo 评分：
 
@@ -74,7 +75,7 @@ memall start                   # 启动服务
 | **L10** | **系统洞察** | 跨领域模式检测 |
 | **L11** | **领域智能** | 跨项目领域模式 |
 
-**30 核心步 + 5 可选步** 自动管线：丰富 → 分类 → epoch 检测 → 反思 → 蒸馏 → 整合 → 观察。无需手动 CRUD。
+**31 核心步 + 5 可选步** 自动管线：丰富 → 分类 → epoch 检测 → 反思 → 蒸馏 → 整合 → 观察。无需手动 CRUD。
 
 ### 🔗 知识图谱
 
@@ -137,32 +138,23 @@ SQLite + FTS5 + 向量搜索。零云端依赖。数据留在你的机器上。
 ## 🚀 快速开始
 
 ```bash
-# 1. 安装
-pip install memall-os
+# 一键安装启动（推荐）
+pip install memall-os && memall quickstart
 
-# 2. 初始化
-memall init
-memall start
-
-# 3. 连接你的 MCP 客户端
-# 添加到你的 mcp.json：
-# {
-#   "mcpServers": {
-#     "memall": { "command": "memall", "args": ["serve"] }
-#   }
-# }
-
-# 4. 开始记录
-/capture "项目 X：决定用 FastAPI，原因：异步支持"
-/capture "修复 NLP 管线 OOM bug — 根因：向量维度不匹配"
-/retrieve "FastAPI 决策"
+# 或从源码
+git clone https://github.com/j19800/MemALL.git
+cd MemALL
+python install.py
 ```
 
-或从源码安装：
+`memall quickstart` 自动完成：初始化数据库 → 启动服务 → 配置 MCP → 打开浏览器，无需再配置别的东西。
+
+随后即可开始记录：
+
 ```bash
-git clone https://github.com/j19800/MemALL
-cd MemALL
-pip install -e .
+memall capture "项目 X：决定用 FastAPI，原因：异步支持"
+memall capture "修复 NLP 管线 OOM bug — 根因：向量维度不匹配"
+memall retrieve "FastAPI 决策"
 ```
 
 ---
@@ -171,9 +163,9 @@ pip install -e .
 
 | 特性 | MemALL | Mem0 | Letta | Zep |
 |------|--------|------|-------|-----|
-| **记忆模型** | 11 层 (P0-L11) | 用户/会话 | Agent/记忆块 | 会话/摘要 |
+| **记忆模型** | 14 级（P0/P1/P2 + L1–L11） | 用户/会话 | Agent/记忆块 | 会话/摘要 |
 | **知识图谱** | ✅ 原生 + 遍历 | ❌ | ❌ | ❌ |
-| **自进化管线** | ✅ 30 步自动 + 5 可选 | ❌ | ❌ | ❌ |
+| **自进化管线** | ✅ 31 步自动 + 5 可选 | ❌ | ❌ | ❌ |
 | **多 Agent 共享** | ✅ 联邦 + 主动推送 | ❌ | 仅同 Agent | ❌ |
 | **决策追踪** | ✅ Arc 生命周期 | ❌ | ❌ | ❌ |
 | **讨论收敛** | ✅ 多 Agent 自动 | ❌ | ❌ | ❌ |
@@ -191,7 +183,7 @@ src/memall/
 ├── core/         # SQLite / NLP / 向量搜索 / 事件处理器 / echo 评分
 ├── api/          # FastAPI REST（35 路由）
 ├── mcp/          # MCP 适配器（7 个合并工具）
-├── pipeline/     # 30 步自动管线 + 5 可选步
+├── pipeline/     # 31 步自动管线 + 5 可选步
 │   ├── observe/  # OODA 观察步
 │   ├── distill/  # L9/L10/L11 蒸馏、L7 偏好、epoch 检测
 │   ├── classify/ # Exclusion 优先级分类
@@ -206,9 +198,17 @@ src/memall/
 
 ## 📝 路线图
 
-- [x] **v0.1.0** — 核心 MCP 服务器、6 个合并工具、CLI、PyPI 包
+- [x] **v0.1.0** — 核心 MCP 服务器、7 个合并工具、CLI、PyPI 包
+- [x] **v0.1.69** — 仓库恢复可克隆（`task_identity` + 迁移 038/040 此前已上线但未入库）、目标 `triage` 门现在会派出动作、技能层事务修好并发、策略拒绝返回 403 而非 500
 - [ ] **v0.2.0** — Web 仪表盘、用户系统、Pro 版
 - [ ] **v0.3.0** — 云同步、团队协作、API 网关
+
+### 已知缺口（写出来，不藏起来）
+
+- **`claim_task` 不是跨进程原子的**：`mcp/tasks.py` 走"读 → 改 → `UPDATE ... WHERE id = ?`"，既无状态谓词也无行锁，并发双认领会 last-writer-wins，`claimed_by` 被静默覆盖。计划：加状态谓词或 `(task_id, status)` 唯一索引。
+- **目标层的阻塞原因不可观测**：卡片层已有两值 `last_block_reason` 枚举，但目标卡住时 `next_action()` 仍 `return None`，"这个目标为什么不动"看不见。
+- **守卫全量跑一轮以小时计**：每个守卫都经 `init_db()` 重放全部迁移。某一组守卫变绿只能证明那一组，不能代表整个仓库。
+- **`check_fixes.py` 会留下 scratch 目录**（`mkdtemp` 未配 `rmtree`，目前 `%TEMP%` 下已积累数千个）。
 
 ---
 

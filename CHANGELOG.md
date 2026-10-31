@@ -1,3 +1,60 @@
+## [v0.1.69] - 2026-10-31
+
+本轮的重点不是加功能，而是**把"已在生产生效但从未入库"的代码补回版本库，并让审计发现的三个红灯转绿**。发布前逐条复核过源代码、守卫与真实库，未通过的项在下面写明。
+
+### Security（红蓝对抗发现的 P0：身份可冒充）
+
+红蓝审查（`src/red_blue_checks.py`）在提交前发现**当前 HEAD 即存在**的身份边界漏洞，两条已修复：
+
+- **显式 `agent_name` 可覆盖并永久改写会话身份（P0）**：`mcp/session_identity.py` 的 `identify()` 原为"显式参数优先"，且会 `bind_session_agent()` 把该值**永久绑定**到会话。实测：握手为 `alpha` 的会话发一次 `agent_name=writer`，即可①读到 writer 的 private 记忆，②会话身份被改写为 writer，③**此后所有不带参数调用（含写入）都以 writer 执行**。现已改为"会**话身份权威、显式参数仅作无握手回退**，且任何参数都不再改写会话绑定"。
+- **未注册身份拿到最高读权限（P0，方向反了）**：`_get_agent_read_level` 对不在 `identities` 的身份返回 `"private"`，而 `VISIBILITY_RANK` 中 `private` 是最大值（4），过滤条件 `mem_rank <= viewer_rank` 因此对**所有行恒真**——注释写着"默认最严格"，实际给了最高权限。现已改为返回 `"public"`，未注册身份只能看到 public 行。
+- **保留派发能力（不因安全修复牺牲协作）**：`DISPATCH_ACTIONS`（capture / smart_store / batch_capture / task_claim / task_resolve / task_block / discussion_create 等）显式 `agent_name` 表示"为谁建卡"，属正常协作，予以放行且**不绑定**为会话身份；读取路径一律以握手身份为准。
+- 验收：`red_blue_checks.py` 的 `session_identity_is_authoritative`、`unregistered_identity_is_least_privilege` 由 FAIL 转 PASS；独立复现脚本确认攻击返回 `total=0` 且会话保持 `alpha`。
+
+**仍未修复（需产品决策，未擅自改动）**：
+
+- **无 viewer 的检索绕过信任过滤**：`unified_search` 在 direct / fts5 / vector / hybrid 四个分支未把 `viewer` 传到底层检索，无身份调用可读到任何可见性的行（红蓝 `every_read_path_applies_trust_filter` 仍 FAIL）。修复需决定"无身份检索是否只返回 public"——这会改变 CLI 单用户场景的检索结果，故留待拍板。
+
+### Fixed（仓库可克隆：HEAD 曾是断的）
+
+- **`src/memall/core/task_identity.py` 入库**：`mcp/tasks.py:43`、`pipeline/goals.py:46`、`pipeline/task_lifecycle.py:24` 都在 `import memall.core.task_identity`，但这个文件此前**未进版本库**。后果很硬：clone 该仓库起新库，任何触碰任务归属的路径直接 `ImportError`。现在它是"谁可以动这张卡"的唯一真相源（claim 仅认领人；resolve/block/acknowledge 认领人或 supervisor；`caller is None` 为可信内部路径）。
+- **`migrations/038_reassign_decommissioned_agent_cards.py`、`migrations/040_create_wake_claims.py` 入库**：两条迁移**已在生产库执行过**（对应表/列都存在）却没进版本库，导致空库起库缺表。实测 `MEMALL_DB_PATH` 指向全新空库执行 `init_db(migrate=True)`，36 张表齐全，`skills` / `wake_claims` / `session_notes` / `identities` 均存在。
+
+### Fixed（目标链路：新建目标产不出任何动作）
+
+- **`next_action()` 补 `triage` 分支（`pipeline/goals.py`）**：工作树把目标初始相位从 `intake` 改为 `triage`（人类在环签收门），但 `next_action()` 的分支只有 `intake`/`decomposed`/`deliberating`/`assigned`/`verifying`。结果：**每个新建目标都落在 triage 而产不出 action，没有任何人被通知"有个目标等你签收"**——门关着，但没人在门口等。现在 triage 会派给 `accountable`（缺省回落 `owner`）一条 `decompose` 动作，签收即拆解。
+  - 验收：守卫 `goal_lifecycle_end_to_end` 从 FAIL 转 PASS（`started=True driver=True` 等 12 项全 True）。
+- **过期断言修正（`src/check_fixes.py`）**：该守卫仍断言初始相位为 `intake`，与新的 `triage` 语义脱节，一并更新为 `triage` 并注明签收语义。
+
+### Fixed（并发：技能层会静默撞 SQLITE_BUSY）
+
+- **`pipeline/skills.py` 两处裸 `BEGIN` → `BEGIN IMMEDIATE`**：`skill_distill`（:159）与 `record_outcome`（:207）都是"先读后写"的事务，DEFERRED 事务在事务中途升级写锁时，SQLite **不会**等 `busy_timeout`，直接返回 `SQLITE_BUSY`。这是审计报告点名的唯一硬阻塞。
+  - 验收：守卫 `busy_timeout_survives_concurrency` 从 FAIL 转 PASS（`deferred_BEGIN_files=none`）。
+
+### Fixed（网关：策略拒绝被包成 500，且有一条静默丢写入）
+
+- **策略拒绝的语义 500 → 403（`gateway_api.py:handle_capture`）**：`security.disabled_agents` 命中时 `thin_waist` 抛 `ValueError`，原先被 aiohttp 当作内部错误返回 500。500 会污染错误率指标，也会让调用方去重试一个永远不会成功的请求。现在策略拒绝返回 **403**，其余参数错误仍是 400。
+  - 验收：实测向 `/capture` 提交被 deny-list 命中的身份，返回 `403` + 明确原因（修复前为 500）。
+- **`confidence` 为 `None` 时静默丢写入（`core/thin_waist.py:1398`）**：直接写 `data.confidence`，为 `None` 时绕过列定义里的 `DEFAULT 0.5` 并撞 `NOT NULL`。该 `IntegrityError` 发生在**后台线程**内，调用方照样收到成功响应——写入就这样没了。现在按 `0.5` 兜底。
+  - 验收：实测不传 `confidence` 的 capture 返回 id 且落库 `confidence=0.5`。
+- **测试不再依赖部署的 deny-list（`tests/conftest.py`）**：测试此前会命中本机 `security.disabled_agents` 里的真实条目（如 `gateway_test`），失败原因与被测代码无关。现在 fixture 同时清空 `disabled_agents` / `disabled_projects` 并锁定配置 mtime。
+
+### Changed
+
+- `.gitignore` 覆盖一次性探针脚本与其产物（`query_*.py`、`create_goal_*.py`、`goal_*_decompose.*`、`memall_guard_*` 目录、`jieba.cache` 等）。此前这类脚本混在受版本控制的目录里，下一个人分不清哪个是工具、哪个是一次性探针。
+
+### Fixed（打包：wheel 里一个 `__init__.py` 都没有）
+
+- **`.gitignore` 的 `__*.py` 把全部 `__init__.py` 忽略了**：这条规则本意是屏蔽 `__analysis.py` 之类的一次性脚本，但 `__init__.py` 同样以 `__` + `.py` 结尾。而 hatchling 构包时遵守 `.gitignore`，因此**每个发布出去的 wheel 都不含包标记**——`import memall` 得到的是 namespace package，`__file__` 为 `None`、`__version__` 不存在、包内相对导入失效。同一规则还让 `src/memall/strategy/__init__.py` 从未进入版本库。现加 `!__init__.py` / `!**/__init__.py` 反向规则修复。
+  - 验收：修复前 wheel 264 项条目里 `__init__.py` 数为 0；修复后 17 个包标记全部入包。干净 venv 安装后 `memall.__version__ == "0.1.69"`、36→37 张表齐全、`handle_call` 的 capture/retrieve 端到端可用。
+
+### 已知未修（本轮不声称已解决）
+
+- **`claim_task` 并发双认领**（`mcp/tasks.py:46` 读→改→`UPDATE ... WHERE id=?` 无状态谓词、无行锁）：并发双认领是 last-writer-wins，`claimed_by` 会被静默覆盖。这是"已实现但语义是错的"里唯一一条，未在本轮修复。
+- **goal 层 `return None` 无归因**：卡片层已有 `last_block_reason` 两值枚举，但 goal 层"这个目标为什么不动"仍不可见（`dependency_missing` 也未补齐）。
+- **守卫全量仍需以小时计**：每个守卫都 `init_db()` 重放全部迁移。本轮只跑了 20 条相关守卫（全 PASS）与 60 个相关 pytest（全 PASS），**没有跑全量**，不据此声称"全绿"。
+- **`%TEMP%` 守卫残留**：`check_fixes.py` 的 `mkdtemp` 仍未清理，目录数已从 3943 增至 3987 个。
+
 ## [Unreleased] - 2026-10-29
 
 ### Docs（多 Agent 协作改进方案定稿，任务 #1001193）

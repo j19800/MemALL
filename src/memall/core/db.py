@@ -364,6 +364,58 @@ CREATE INDEX IF NOT EXISTS idx_shared_target ON shared_records(target_agent);
 CREATE INDEX IF NOT EXISTS idx_shared_source ON shared_records(source_agent);
 """.replace("__LEVEL_ENUM__", LEVEL_SQL_LIST)
 
+# Goal cards carry the lifecycle (phase, verdict, task_ids) that the pipeline
+# drives; a row that vanishes silently strands its children and discussions.
+# Audit 2026-10-29: four goal cards in ``verifying`` disappeared between two
+# backups, with no ``ops_log`` entry and no archive copy, so some DELETE path
+# had no trail.  A goal's normal end is ``verify_goal``; the deliberate
+# exceptions (test fixtures, redaction) must go through
+# ``memall.pipeline.ops.audited_delete_memory``.
+#
+# The guard demands BOTH proofs: a ``delete_audit`` row AND a matching
+# ``ops_log`` entry.  The audit row alone is not enough — an external cleanup
+# script (dsh, 2026-10-29 12:58) inserted audit rows itself and then deleted 19
+# cards, leaving no ledger entry anywhere.  Requiring the ops_log row means a
+# caller cannot mint its own permission; it must go through the helper (or
+# reproduce its exact two writes, which is an explicit, reviewable act).
+OPS_LOG_DDL = """
+CREATE TABLE IF NOT EXISTS ops_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    op_type     TEXT NOT NULL,
+    target_ids  TEXT NOT NULL,
+    before_snapshot TEXT NOT NULL,
+    op_metadata TEXT NOT NULL DEFAULT '{}',
+    executed_at TEXT NOT NULL,
+    rolled_back_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ops_log_type ON ops_log(op_type);
+CREATE INDEX IF NOT EXISTS idx_ops_log_rolled ON ops_log(rolled_back_at);
+"""
+
+GOAL_DELETE_GUARD = """
+CREATE TABLE IF NOT EXISTS delete_audit (
+    memory_id INTEGER PRIMARY KEY,
+    at        TEXT NOT NULL,
+    by        TEXT NOT NULL,
+    reason    TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TRIGGER IF NOT EXISTS memories_bd_goal_guard
+BEFORE DELETE ON memories
+WHEN COALESCE(OLD.category, '') = 'goal'
+ AND (
+      NOT EXISTS (SELECT 1 FROM delete_audit WHERE memory_id = OLD.id)
+   OR NOT EXISTS (
+          SELECT 1 FROM ops_log, json_each(ops_log.target_ids) AS je
+          WHERE ops_log.op_type = 'delete' AND je.value = OLD.id
+      )
+ )
+BEGIN
+    SELECT RAISE(ABORT,
+        'goal card cannot be deleted without a delete_audit row AND an ops_log delete entry: close it with verify_goal, or delete it through memall.pipeline.ops.audited_delete_memory');
+END;
+"""
+
 # The FTS ``tags`` column stores the JSON array flattened to space-separated
 # text (memall_tags_text) and then CJK-split (memall_split_cjk), so a tag like
 # "检索" becomes the token pair "检 索" — exactly what fts_query() emits for a
@@ -621,6 +673,7 @@ def init_db(conn=None, migrate=True, db_path_for_backup: str = ""):
         # the triggers *after* migrating, then backfill any gap so the index is
         # consistent with the table.
         _ensure_fts_triggers(conn)
+        _ensure_goal_delete_guard(conn)
         _backfill_fts_if_empty(conn)
         # Seed "system" identity — required by capture() identity check
         # (normalize_agent_name() falls back to "system" for empty/invalid names)
@@ -642,11 +695,57 @@ def _ensure_fts_triggers(conn) -> None:
     creation time.
     """
     done = conn.execute(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'memories_%'"
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' "
+        "AND name IN ('memories_ai', 'memories_ad', 'memories_au')"
     ).fetchone()[0]
     if done < 3:
         conn.executescript(FTS5_TRIGGERS)
         conn.commit()
+
+
+def ensure_ops_log(conn, commit: bool = True) -> None:
+    """Create the ``ops_log`` ledger table if missing (idempotent).
+
+    Lives here rather than in ``pipeline.ops`` because the goal-delete guard
+    trigger reads this table: ``init_db`` has to be able to create it before
+    any pipeline module is imported.  Statement-by-statement (not
+    ``executescript``) so a caller inside an open transaction is not silently
+    committed.
+    """
+    for stmt in OPS_LOG_DDL.split(";"):
+        if stmt.strip():
+            conn.execute(stmt)
+    if commit:
+        conn.commit()
+
+
+def _ensure_goal_delete_guard(conn) -> None:
+    """Install or upgrade the goal-card delete guard after migrations.
+
+    ``DROP TABLE memories`` (021 / 028) also drops
+    ``memories_bd_goal_guard``, and migrations may recreate ``memories``
+    without it — the same window that left the FTS triggers missing.
+
+    The trigger is also replaced in place when only the first version is
+    present: that one demanded a ``delete_audit`` row alone, which an external
+    cleanup script could mint for itself (dsh, 2026-10-29 12:58, 19 cards).  The
+    current version additionally demands the ``ops_log`` delete entry, so a
+    single-proof trigger is dropped and rebuilt.
+    """
+    # The trigger reads ops_log, so the ledger table must exist before the
+    # first goal delete; otherwise the guard fails with "no such table"
+    # instead of its actionable message.
+    ensure_ops_log(conn)
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' "
+        "AND name='memories_bd_goal_guard'"
+    ).fetchone()
+    if row and "ops_log" in (row[0] or ""):
+        return
+    if row:
+        conn.execute("DROP TRIGGER memories_bd_goal_guard")
+    conn.executescript(GOAL_DELETE_GUARD)
+    conn.commit()
 
 
 def _backfill_fts_if_empty(conn) -> None:

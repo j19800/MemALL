@@ -7,6 +7,7 @@ memall_write task_resolve / task_block actions route through.
 import json
 import os
 import sys
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -184,12 +185,14 @@ def test_close_task_reminders():
 
     tid = _make_task()
     conn = get_conn()
+    now = datetime.now(timezone.utc).isoformat()
     try:
         conn.execute(
             "INSERT INTO memories (content, content_hash, level, category, "
-            "agent_name, metadata) VALUES (?,?,?,?,?,?)",
+            "agent_name, metadata, occurred_at, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             ("reminder", "hash_reminder_1", "P2", "task_pending",
-             "testagent", json.dumps({"task_id": tid})))
+             "testagent", json.dumps({"task_id": tid}), now, now, now))
         conn.commit()
     finally:
         conn.close()
@@ -212,12 +215,14 @@ def test_resolve_closes_reminders():
 
     tid = _make_task()
     conn = get_conn()
+    now = datetime.now(timezone.utc).isoformat()
     try:
         conn.execute(
             "INSERT INTO memories (content, content_hash, level, category, "
-            "agent_name, metadata) VALUES (?,?,?,?,?,?)",
+            "agent_name, metadata, occurred_at, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             ("reminder", "hash_reminder_2", "P2", "task_pending",
-             "testagent", json.dumps({"task_id": tid})))
+             "testagent", json.dumps({"task_id": tid}), now, now, now))
         conn.commit()
     finally:
         conn.close()
@@ -240,12 +245,14 @@ def test_block_closes_reminders():
 
     tid = _make_task()
     conn = get_conn()
+    now = datetime.now(timezone.utc).isoformat()
     try:
         conn.execute(
             "INSERT INTO memories (content, content_hash, level, category, "
-            "agent_name, metadata) VALUES (?,?,?,?,?,?)",
+            "agent_name, metadata, occurred_at, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             ("reminder", "hash_reminder_3", "P2", "task_pending",
-             "testagent", json.dumps({"task_id": tid})))
+             "testagent", json.dumps({"task_id": tid}), now, now, now))
         conn.commit()
     finally:
         conn.close()
@@ -271,7 +278,10 @@ def test_acknowledge_forbidden_for_stranger():
 
 
 def test_block_from_claimed():
-    from memall.pipeline.task_lifecycle import block_task, claim_task
+    # claim_task migrated to memall.mcp.tasks (92373ee consolidated resolve /
+    # block into pipeline.task_lifecycle; claim stayed on the MCP side).
+    from memall.mcp.tasks import claim_task
+    from memall.pipeline.task_lifecycle import block_task
     from memall.core.db import get_conn
 
     tid = _make_task()
@@ -290,7 +300,9 @@ def test_block_from_claimed():
 
 
 def test_resolve_from_claimed():
-    from memall.pipeline.task_lifecycle import resolve_task, claim_task
+    # claim_task migrated to memall.mcp.tasks — see test_block_from_claimed.
+    from memall.mcp.tasks import claim_task
+    from memall.pipeline.task_lifecycle import resolve_task
     from memall.core.db import get_conn
 
     tid = _make_task()
@@ -305,6 +317,3 @@ def test_resolve_from_claimed():
         assert meta.get("status") == "resolved"
     finally:
         conn.close()
-    """,
-    "file_path": "E:\\MemALL\\tests\\test_task_lifecycle.py",
-}

@@ -199,10 +199,68 @@ def _rate_limited(agent_name: str, key: str) -> Optional[str]:
     return None
 
 
+def _argv_summary(argv: list, prompt: str) -> str:
+    """Shape of the command, never the prompt text.
+
+    The prompt can be long and may quote user data; what an operator needs from
+    the ledger is "which command did we run", not a copy of the assignment.
+    """
+    parts = []
+    for part in (argv or [])[:4]:
+        text = str(part)
+        if prompt and text == prompt:
+            parts.append("<prompt>")
+        elif len(text) > 60:
+            parts.append(text[:57] + "...")
+        else:
+            parts.append(text)
+    return " ".join(parts)
+
+
 def _record(entry: dict) -> None:
+    """Append a wake decision to the durable audit (and a small in-memory tail).
+
+    The ledger is the point: the driver that decides to spawn lives in a
+    short-lived script or a timer callback, so an in-memory list dies with the
+    process — and the question "why did this agent wake and then do nothing?"
+    is exactly the one asked afterwards.  A wake starts a process that can edit
+    code; its decisions must be reviewable from outside.
+    """
     with _lock:
         _wake_log.append(entry)
-        del _wake_log[:-50]  # keep the last 50 for diagnostics
+        del _wake_log[:-50]  # fallback tail for when the DB is unavailable
+    try:
+        from memall.core.db import get_conn
+
+        conn = get_conn()
+        try:
+            conn.execute(
+                "INSERT INTO wake_audit (at, agent, goal_id, action, woke, reason,"
+                " pid, rc, duration_ms, argv_summary, env_keys, stdout_tail,"
+                " stderr_tail, host) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    str(entry.get("at") or _now_iso()),
+                    str(entry.get("agent") or ""),
+                    int(entry.get("goal_id") or 0),
+                    str(entry.get("action") or ""),
+                    1 if entry.get("woke") else 0,
+                    str(entry.get("reason") or "")[:400],
+                    entry.get("pid"),
+                    entry.get("rc"),
+                    entry.get("duration_ms"),
+                    str(entry.get("argv_summary") or "")[:400],
+                    str(entry.get("env_keys") or "")[:200],
+                    str(entry.get("stdout_tail") or "")[-400:],
+                    str(entry.get("stderr_tail") or "")[-400:],
+                    _host(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        # Never let audit I/O change a wake decision.
+        logger.debug("agent_waker: audit insert failed", exc_info=True)
 
 
 def _host() -> str:
@@ -335,6 +393,7 @@ def wake_agent(agent_name: str, prompt: str, *, goal_id: int = 0,
 
         if is_disabled_agent(agent):
             _record({"at": _now_iso(), "agent": agent, "woke": False,
+                     "goal_id": goal_id, "action": action,
                      "reason": "agent is disabled"})
             return {"woke": False, "reason": "agent is disabled"}
     except Exception:
@@ -367,7 +426,10 @@ def wake_agent(agent_name: str, prompt: str, *, goal_id: int = 0,
 
     if dry_run():
         _record({"at": _now_iso(), "agent": agent, "woke": False,
-                 "reason": "dry_run", "argv_len": len(argv)})
+                 "goal_id": goal_id, "action": action,
+                 "reason": "dry_run",
+                 "argv_summary": _argv_summary(argv, body),
+                 "env_keys": ",".join(sorted(extra_env)) if extra_env else ""})
         return {"woke": False, "reason": "dry_run", "would_run": argv[:4],
                 "env_keys": sorted(extra_env) if extra_env else []}
 
@@ -377,7 +439,7 @@ def wake_agent(agent_name: str, prompt: str, *, goal_id: int = 0,
     claimed, why = _db_claim(agent, goal_id, action, _cooldown())
     if not claimed:
         _record({"at": _now_iso(), "agent": agent, "woke": False,
-                 "reason": why})
+                 "goal_id": goal_id, "action": action, "reason": why})
         return {"woke": False, "reason": why}
 
     started = time.time()
@@ -403,6 +465,8 @@ def wake_agent(agent_name: str, prompt: str, *, goal_id: int = 0,
         # nothing.
         _db_release(agent, goal_id, action)
         _record({"at": _now_iso(), "agent": agent, "woke": False,
+                 "goal_id": goal_id, "action": action,
+                 "argv_summary": _argv_summary(argv, body),
                  "reason": f"spawn failed: {e}"})
         logger.warning("agent_waker: spawn failed for %s: %s", agent, e)
         return {"woke": False, "reason": f"spawn failed: {e}"}
@@ -428,12 +492,19 @@ def wake_agent(agent_name: str, prompt: str, *, goal_id: int = 0,
             except Exception:
                 out, err = "", ""
             _record({"at": _now_iso(), "agent": agent, "woke": True,
-                     "timeout": True, "pid": proc.pid})
+                     "goal_id": goal_id, "action": action, "timeout": True,
+                     "pid": proc.pid,
+                     "duration_ms": int(time.time() * 1000) - int(started * 1000),
+                     "argv_summary": _argv_summary(argv, body),
+                     "reason": f"timeout after {_timeout()}s; killed"})
             logger.warning("agent_waker: %s timed out after %ss, killed",
                            agent, _timeout())
             return
         _record({"at": _now_iso(), "agent": agent, "woke": True,
+                 "goal_id": goal_id, "action": action,
                  "pid": proc.pid, "rc": proc.returncode,
+                 "duration_ms": int(time.time() * 1000) - int(started * 1000),
+                 "argv_summary": _argv_summary(argv, body),
                  "stdout_tail": (out or "")[-400:],
                  "stderr_tail": (err or "")[-400:]})
         logger.info("agent_waker: %s finished rc=%s", agent, proc.returncode)
@@ -467,11 +538,73 @@ def wake_for_actions(actions: list[dict]) -> dict:
     return {"woke": woke, "skipped": skipped}
 
 
-def diagnostics() -> dict:
+def diagnostics(limit: int = 10) -> dict:
+    """Current posture plus the most recent decisions, read from the ledger.
+
+    Reads the DB rather than the in-memory tail so the answer survives the
+    process that made the decision — which is precisely when someone asks.
+    """
+    recent = []
+    try:
+        from memall.core.db import get_conn
+
+        conn = get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT at, agent, goal_id, action, woke, reason, pid, rc,"
+                " duration_ms, argv_summary FROM wake_audit "
+                "ORDER BY id DESC LIMIT ?", (int(limit),)).fetchall()
+            for r in rows:
+                recent.append({
+                    "at": r[0], "agent": r[1], "goal_id": r[2], "action": r[3],
+                    "woke": bool(r[4]), "reason": r[5], "pid": r[6], "rc": r[7],
+                    "duration_ms": r[8], "argv": r[9],
+                })
+        finally:
+            conn.close()
+    except Exception:
+        logger.debug("agent_waker: audit read failed", exc_info=True)
+    if not recent:
+        with _lock:
+            recent = list(_wake_log[-int(limit):])
     with _lock:
         return {
             "enabled": enabled(),
             "dry_run": dry_run(),
             "configured_agents": sorted(_commands().keys()),
-            "recent": list(_wake_log[-10:]),
+            "recent": recent,
         }
+
+
+def audit_history(goal_id: int = 0, agent: str = "", limit: int = 50) -> list:
+    """Query the wake ledger: what was attempted, and what came back."""
+    out = []
+    try:
+        from memall.core.db import get_conn
+
+        sql = ("SELECT at, agent, goal_id, action, woke, reason, pid, rc,"
+               " duration_ms, argv_summary, stdout_tail, stderr_tail "
+               "FROM wake_audit WHERE 1=1")
+        args = []
+        if goal_id:
+            sql += " AND goal_id = ?"
+            args.append(int(goal_id))
+        if agent:
+            sql += " AND agent = ?"
+            args.append(agent)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(int(limit))
+        conn = get_conn()
+        try:
+            for r in conn.execute(sql, args).fetchall():
+                out.append({
+                    "at": r[0], "agent": r[1], "goal_id": r[2], "action": r[3],
+                    "woke": bool(r[4]), "reason": r[5], "pid": r[6], "rc": r[7],
+                    "duration_ms": r[8], "argv": r[9],
+                    "stdout_tail": r[10], "stderr_tail": r[11],
+                })
+        finally:
+            conn.close()
+    except Exception:
+        logger.debug("agent_waker: audit history failed", exc_info=True)
+    return out

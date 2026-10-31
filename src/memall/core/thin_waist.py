@@ -1395,7 +1395,11 @@ def _capture_insert_row(conn, data: MemoryInput, h: str, now: str) -> int:
                 now,
                 now,
                 supersedes,
-                data.confidence,
+                # ``confidence`` is NOT NULL. Passing None explicitly bypasses
+                # the column DEFAULT 0.5 and hits IntegrityError *inside a
+                # background thread*, so the write is lost while the caller
+                # still reports success. Coalesce here.
+                data.confidence if data.confidence is not None else 0.5,
                 data.visibility,
                 json.dumps(data.metadata)
                 if isinstance(data.metadata, dict)
@@ -1882,7 +1886,8 @@ def unified_search(arguments: dict) -> str:
             "include_content": True,
         }
         retrieve_args = {k: v for k, v in retrieve_args.items() if v is not None}
-        result = retrieve(**retrieve_args)
+        viewer = arguments.get("viewer") or arguments.get("agent_name") or ""
+        result = retrieve(viewer=viewer, **retrieve_args)
         if result is None:
             return json.dumps({"query": query, "mode": "direct", "results": [], "total": 0})
         if isinstance(result, list):
@@ -1911,7 +1916,8 @@ def unified_search(arguments: dict) -> str:
             "include_content": True,
         }
         retrieve_args = {k: v for k, v in retrieve_args.items() if v is not None}
-        result = retrieve(**retrieve_args)
+        viewer = arguments.get("viewer") or arguments.get("agent_name") or ""
+        result = retrieve(viewer=viewer, **retrieve_args)
         if result is None:
             return json.dumps({"query": query, "mode": "fts5", "results": [], "total": 0})
         if isinstance(result, list):
@@ -1937,6 +1943,7 @@ def unified_search(arguments: dict) -> str:
             owner=arguments.get("owner"),
             project=arguments.get("project"),
             agent_name=arguments.get("agent_name"),
+            viewer=arguments.get("viewer") or arguments.get("agent_name"),
         )
         if wants_enhancements:
             _apply_enhancements_inplace(
@@ -1959,7 +1966,7 @@ def unified_search(arguments: dict) -> str:
         project=arguments.get("project"),
         agent_name=arguments.get("agent_name"),
         rerank=arguments.get("rerank", False),
-        viewer=arguments.get("agent_name"),
+        viewer=arguments.get("viewer") or arguments.get("agent_name"),
     )
     if wants_enhancements:
         _apply_enhancements_inplace(
@@ -2357,7 +2364,7 @@ def retrieve(query=None, viewer=None, **filters) -> list | Memory | None:
             row = cur.fetchone()
             if row:
                 result = _row_to_memory(row)
-                if viewer:
+                if viewer is not None:
                     result = (_filter_by_trust(conn, [result], viewer) or [None])[0]
                 dispatch_lifecycle(HOOK_POST_RETRIEVE, query=query, result=result)
                 return result
@@ -2425,7 +2432,7 @@ def retrieve(query=None, viewer=None, **filters) -> list | Memory | None:
             except sqlite3.Error:
                 logger.debug("retrieve: access_count update failed", exc_info=True)
 
-        if viewer:
+        if viewer is not None:
             results = _filter_by_trust(conn, results, viewer)
 
         dispatch_lifecycle(HOOK_POST_RETRIEVE, query=query, results=results)
@@ -2623,7 +2630,12 @@ def _get_agent_read_level(conn, agent_name: str) -> str:
         (agent_name,),
     ).fetchone()
     if not row:
-        return "private"  # unknown agents default to most restrictive
+        # Least privilege, not "private".  ``VISIBILITY_RANK`` is ordered
+        # ["public"(0) … "private"(4)] and the filter keeps a row when
+        # ``mem_rank <= viewer_rank`` — so returning the *most restricted*
+        # visibility name for an unknown agent granted it EVERY row instead.
+        # An unregistered identity may see public rows and nothing else.
+        return "public"
     agent_type = row["agent_type"]
     if agent_type == "human":
         return "private"

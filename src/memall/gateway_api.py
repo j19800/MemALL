@@ -55,7 +55,14 @@ async def handle_capture(request: web.Request, gw) -> web.Response:
     validated, err = gw._validate(data, CaptureInput)
     if err:
         return web.json_response({"error": err}, status=400)
-    mid = capture(MemoryInput(**validated))
+    try:
+        mid = capture(MemoryInput(**validated))
+    except ValueError as exc:
+        # A policy refusal (e.g. ``security.disabled_agents``) is not a server
+        # fault. Reporting it as 500 tells the caller to retry a request that
+        # can never succeed and pollutes the error-rate metric.
+        denied = "is disabled" in str(exc) or "denylist" in str(exc).lower()
+        return web.json_response({"error": str(exc)}, status=403 if denied else 400)
     return web.json_response({"id": mid, "status": "ok"})
 
 

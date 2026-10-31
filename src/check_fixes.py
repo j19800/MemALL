@@ -2142,9 +2142,15 @@ def guard_notification_bar_uses_session_identity() -> Tuple[bool, str]:
     notice = build_notice(session_name) or ""
     session_ok = session_name == "sessagent" and bool(notice)
 
-    # An explicit agent_name still wins.
+    # An explicit agent_name must NOT override a bound session identity.
+    # This assertion used to demand the opposite ("explicit wins"), which was
+    # precisely the impersonation hole found by the red/blue audit on
+    # 2026-10-31: one call with agent_name=otheragent rebounded the session
+    # permanently, so every later argument-less call (reads AND writes) ran as
+    # otheragent.  Dispatch actions are the documented exception, covered by
+    # red_blue_checks.py::session_identity_is_authoritative.
     explicit_name = si.identify({"agent_name": "otheragent"})
-    explicit_ok = explicit_name == "otheragent"
+    explicit_ok = explicit_name == "sessagent"
 
     # Every transport must read the identity through identify().
     from pathlib import Path as _P
@@ -2701,14 +2707,16 @@ def guard_goal_lifecycle_end_to_end() -> Tuple[bool, str]:
         m = json.loads(raw[0] or "{}") if raw else {}
         return m.get("phase")
 
-    # (1) intake + driver points at the owner
+    # (1) triage (human-in-the-loop gate) + driver points at the owner
     created = call("memall_write", {"action": "goal_create", "agent_name": PM,
                                     "objective": "守卫目标：验证全链路",
                                     "acceptance": "可验证", "verifier": VER})
     gid = created.get("goal_id")
     if not gid:
         return False, f"goal_create failed: {created}"
-    started = phase(gid) == "intake"
+    # A new objective is filed at ``triage`` so a named accountable party must
+    # sign it off; the sign-off is that party decomposing it.
+    started = phase(gid) == "triage"
     tick0 = goal_tick()
     points_at_owner = any(a.get("goal_id") == gid and a.get("action") == "decompose"
                           for a in tick0.get("actions", []))
@@ -3107,7 +3115,7 @@ def guard_empty_identity_rejected_everywhere() -> Tuple[bool, str]:
     init_db()
     PM, W1 = "gpm", "gw1"
 
-    created = G.create_goal("空身份守卫目标", PM, acceptance="可验证", verifier="gvr")
+    created = G.create_goal("空身份守卫目标", PM, acceptance="可验证", verifier="gvr", accountable=PM)
     gid = created.get("goal_id")
     if not gid:
         return False, f"create_goal failed: {created}"
@@ -3587,7 +3595,7 @@ def guard_verify_evidence_structured() -> Tuple[bool, str]:
 
     init_db()
     created = create_goal("evidence-guard-goal", "dsh",
-                          acceptance="可验证", verifier="qoder")
+                          acceptance="可验证", verifier="qoder", accountable="dsh")
     gid = created.get("goal_id")
     if not gid:
         return False, f"create_goal failed: {created}"
@@ -3737,6 +3745,7 @@ def guard_partial_finalize_leaves_goal_in_deliberating() -> Tuple[bool, str]:
     init_db()
     PM, VER = "pfm", "pfv"
     made = goals.create_goal("部分失败守卫目标", PM, acceptance="全部完成",
+                             accountable=PM,
                              verifier=VER)
     gid = made.get("goal_id")
     if not gid:
@@ -3922,6 +3931,7 @@ def guard_metadata_cas() -> Tuple[bool, str]:
 
     init_db()
     made = goals.create_goal("CAS 守卫目标", "casp", acceptance="可验证",
+                             accountable="casp",
                              verifier="casv")
     gid = made.get("goal_id")
     if not gid:
@@ -4011,7 +4021,7 @@ def guard_goal_dependency_warnings() -> Tuple[bool, str]:
 
     created = call("memall_write", {"action": "goal_create", "agent_name": PM,
                                     "objective": "依赖体检目标", "acceptance": "可验证",
-                                    "verifier": "warn_ver"})
+                                    "verifier": "warn_ver", "accountable": PM})
     gid = created.get("goal_id")
     if not gid:
         return False, f"goal_create failed: {created}"
@@ -4072,7 +4082,8 @@ def guard_goal_dependency_warnings() -> Tuple[bool, str]:
     # goal so the state manipulation cannot disturb the cases above.
     created2 = call("memall_write", {"action": "goal_create", "agent_name": PM,
                                      "objective": "finalize 依赖门目标",
-                                     "acceptance": "可验证", "verifier": "warn_ver"})
+                                     "acceptance": "可验证", "verifier": "warn_ver",
+                                     "accountable": PM})
     gid2 = created2.get("goal_id")
     call("memall_write", {"action": "goal_decompose", "agent_name": PM,
                           "goal_id": gid2, "children": [
@@ -4163,7 +4174,7 @@ def guard_goal_cards_require_audited_delete() -> Tuple[bool, str]:
 
     def new_goal(objective: str) -> int:
         r = G.create_goal(objective, owner="del_pm", acceptance="可验证",
-                          verifier="del_ver")
+                          verifier="del_ver", accountable="del_pm")
         return int(r.get("goal_id") or 0)
 
     gid = new_goal("守卫：目标卡删除必须留痕")
@@ -4427,6 +4438,79 @@ def guard_discussion_prompts_run_in_resident_tick() -> Tuple[bool, str]:
                 f"retired_after_response={retired}")
 
 
+def guard_wake_audit_persists() -> Tuple[bool, str]:
+    """A wake decision must be reviewable AFTER the deciding process is gone.
+
+    ``_wake_log`` was a module-level list capped at 50 entries, so the record
+    died with the driver.  Diagnosing a stalled hand-off on 2026-10-30 needed a
+    full manual re-run of the wake purely because the audit had evaporated —
+    exactly the question "why did this agent wake and then do nothing?", asked
+    after the evidence was gone.
+
+    A wake starts a process that can edit code, so the decision has to survive
+    the decision-maker.  Three properties matter and are checked here:
+
+      * the row is visible through a SEPARATE connection (the whole point);
+      * a skipped wake is recorded too — a silent dry_run or rate limit must be
+        distinguishable from a failure;
+      * the prompt is NOT copied into the ledger.  It can be long and may quote
+        user data; the operator needs the command shape, not a copy of the
+        assignment.  Measured: argv is stored as "prog -p <prompt>".
+    """
+    _fresh_db()
+    import importlib
+    from memall.core.db import get_conn, init_db
+    from memall.pipeline import agent_waker as W
+
+    init_db()
+    conn = get_conn()
+    try:
+        importlib.import_module("memall.migrations.042_create_wake_audit").apply(conn)
+        tables = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name='wake_audit'").fetchall()]
+    finally:
+        conn.close()
+    table_exists = bool(tables)
+
+    secret_prompt = "用户原文-不该进审计-" * 30
+    W._commands = lambda: {"audit_probe": {
+        "runtime_agent": "audit_probe",
+        "argv": ["prog", "-p", "{prompt}"],
+        "env": {"MEMALL_AGENT_NAME": "{agent}"}}}
+    _saved_enabled, _saved_dry = W.enabled, W.dry_run
+    W.enabled = lambda: True
+    W.dry_run = lambda: True          # a skipped wake must still be recorded
+    try:
+        W.wake_agent("audit_probe", secret_prompt, goal_id=424242, action="probe")
+    finally:
+        W.enabled, W.dry_run = _saved_enabled, _saved_dry
+
+    # Read it the way a later process would.
+    conn2 = get_conn()
+    try:
+        rows = conn2.execute(
+            "SELECT agent, goal_id, action, woke, reason, argv_summary "
+            "FROM wake_audit WHERE goal_id = 424242").fetchall()
+    finally:
+        conn2.close()
+
+    visible = len(rows) >= 1
+    row = rows[0] if rows else None
+    skipped_recorded = bool(row) and row[3] == 0 and "dry_run" in (row[4] or "")
+    prompt_not_stored = bool(row) and secret_prompt not in (row[5] or "")
+    argv_shape = bool(row) and "<prompt>" in (row[5] or "")
+    diag_reads_db = bool(W.diagnostics()["recent"])
+
+    ok = (table_exists and visible and skipped_recorded and prompt_not_stored
+          and argv_shape and diag_reads_db)
+    return ok, (f"table={table_exists} visible_from_another_connection={visible} "
+                f"skipped_wake_recorded={skipped_recorded} "
+                f"prompt_kept_out_of_ledger={prompt_not_stored} "
+                f"argv_summary_uses_placeholder={argv_shape} "
+                f"diagnostics_reads_ledger={diag_reads_db}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -4496,6 +4580,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "agent_waker_is_safe": guard_agent_waker_is_safe,
     "session_note_delivery_crosses_processes": guard_session_note_delivery_crosses_processes,
     "discussion_prompts_run_in_resident_tick": guard_discussion_prompts_run_in_resident_tick,
+    "wake_audit_persists": guard_wake_audit_persists,
     "wake_claimed_in_db": guard_wake_claimed_in_db,
     "goal_tick_on_heartbeat_cadence": guard_goal_tick_on_heartbeat_cadence,
     "empty_identity_rejected_everywhere": guard_empty_identity_rejected_everywhere,

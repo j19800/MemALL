@@ -157,11 +157,17 @@ test_mcp_tool.jsonl
 tests/coverage_html/
 __analysis.json
 __*.js
+# Scratch scripts use a __name prefix, but Python's __init__.py does too.
+# Without the negation every package marker is ignored and a clone cannot
+# import the package at all.
 __*.py
+!__init__.py
+!**/__init__.py
 __*.ps1
 __*.md
 _*.ps1
 _*.cmd
+!__init__.py
 __deep_data.json
 conversations/
 *.db
@@ -185,3 +191,35 @@ scratch/
 # Generated memory dumps (per-agent exports, regenerated on demand)
 _memory_export/
 
+# ── One-off investigation scripts and their dumps ──
+# These are probes written against the live DB during a specific session
+# (query_*.py, create_goal_*.py). They are not tooling and must not ship:
+# a script named create_goal_*.py sitting next to real source is
+# indistinguishable from a supported tool to the next reader.
+.tmp-*.py
+.tmp_*.py
+.tmp-*.md
+query_*.py
+create_goal_*.py
+search_goal.py
+check_dbs.py
+test_import.py
+goal_*_decompose.*
+goal_decompose.json
+decompose_*.json
+
+# ── Guard / heartbeat scratch directories left by check_fixes.py ──
+memall_guard_*/
+memall_hb_*/
+memall_guard_home_*/
+
+# ── Tokenizer cache rebuilt on first use ──
+jieba.cache
+src/jieba.cache
+
+# ── Local dashboard / viewer captures ──
+memall_browser.html
+
+goal_1000871_summary.txt
+tmp_*.py
+tmp_duel.py

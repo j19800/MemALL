@@ -7,21 +7,20 @@
 
 | Agent | 角色 | 职责 | 禁区 |
 |-------|------|------|------|
-| Claude | PM / 中枢 | 项目总控、架构终审、优先级拍板、讨论收敛仲裁、跨 agent 协调 | 不写实现代码 |
-| dsh | EM / 架构 | 技术方案设计、MCP 修复批次编排与落地、核心代码改动（F3 身份绑定、P0-3 冷却短路）主导 | 不做产品决策 |
+| dsh | EM / 架构负责人 | 技术方案设计、MCP 修复批次总编排、核心代码改动（F3 身份绑定、P0-3 冷却短路）主导、验收清单签发与终审 | 不做产品决策 |
 | opencode | 实现主力 / 桥梁 | 具体编码（P0-0 content_hash、安全治理、overhead 优化）、跨 agent 衔接、AGENTS.md 技术段维护 | 不拍板产品/架构方向 |
-| qoder | 编码（TBD） | 增量实现、单元测试、重构，承接 opencode 之外产能；首轮任务后回填画像定级 | 待画像回填后扩责 |
-| workbuddy | GTM / 评审 | 推广运营、技术评审报告、e2e 测试协调、讨论发起与论证组织、收敛结论写回 | 不直接改 MemALL 源码（调研/评审/测试除外） |
+| qoder | 编码 / 测试 | 增量实现、单元测试、契约测试、e2e 断言维护，承接 opencode 之外产能 | 不拍板架构 |
+| workbuddy | GTM / 评审 / 协调 | 推广运营、技术评审报告、e2e 测试协调、讨论发起与论证组织、收敛结论写回、独立验收 | 不直接改 MemALL 源码（调研/评审/测试除外） |
 
-**老陈 = 人类总闸**。P0 级任务卡必须人工确认后才可执行；agent 之间不得互相授权升级。
+**老陈 = 人类总闸（veto 模式）**。P0 级任务卡 agent 可自动推进执行并须即时通知老陈；老陈拥有 24h 否决权（veto），超时未否决自动生效；agent 之间不得互相授权升级。
 
-> ⚠️ **2026-10-22 更新**：上方 roster 已替换为真实接入的 `Claude / dsh / opencode / qoder / workbuddy`，**取代过时的 `claude / codex / opencode(内容) / workbuddy / marvis`**（codex、marvis 已出局；opencode 实证为实现/桥梁而非"内容"）。能力依据与详细分析见 `D:\Agent项目\Claw\memall-bus\agent能力分析与分工-多Agent自动协作项目.md`。
+> ⚠️ **2026-10-23 更新**：上方 roster 已按老陈指示替换为 `dsh / opencode / qoder / workbuddy`，**claude 已退出**（原 PM/终审职责由 dsh 承接终审、workbuddy 承接评审组织，老陈为最终拍板人）。能力依据与详细分析见 `D:\Agent项目\Claw\memall-bus\重新分工-4agent名册-20261023.md`。
 
-### 1.1 当前项目任务派发（草案，待 #999964 收敛确认）
+### 1.1 当前项目任务派发（#999964 已收敛，派发持续有效）
 
 | 任务 | 负责人 | 协同 | 说明 |
 |---|---|---|---|
-| P0-2 会话级身份绑定（灭 F3，头号阻塞） | dsh | Claude 终审 | 最高杠杆，从根灭 F3。**注意：方案 §Step1「从 clientInfo 取 agent_name」取不到**——MCP 的 clientInfo 结构只有 {name, version}，须另定身份协商方式（见 #999964 opencode 表态第三节）。`mcp/session_identity.py` 已落地握手绑定，绑定什么身份仍待定 |
+| P0-2 会话级身份绑定（灭 F3，头号阻塞） | dsh | dsh 终审（老陈人工终审） | 最高杠杆，从根灭 F3。**注意：方案 §Step1「从 clientInfo 取 agent_name」取不到**——MCP 的 clientInfo 结构只有 {name, version}，须另定身份协商方式（见 #999964 opencode 表态第三节）。`mcp/session_identity.py` 已落地握手绑定，绑定什么身份仍待定 |
 | P0-3 清 30 分钟冷却短路（`mcp/shared.py` 的 `_AUTO_START_COOLDOWN` 分支） | dsh | opencode 实现 | 让 e2e L3 生效 |
 | P0-0 content_hash 去重 | opencode | dsh 验收 | **已实现**：去重键由 content_hash 改为 `metadata.task_id` + 迁移 036 + 守卫 `task_reminder_one_per_task`（记忆 #1000209）。原派单的「INSERT OR IGNORE」只兜底并发、单独用会漏掉 level 被 promote 改写那条路径 |
 | P0-1 通知栏落到 agent_name（路线 B） | dsh | （F3 修后自然成立） | 复用现有通知栏，不复活表。**已完成**：通知栏已重构为 `mcp/notify.py` 单一实现，携带 [ID \| 标题 \| 状态] |
@@ -33,11 +32,13 @@
 | e2e 测试（memall-bus 脚本复跑） | workbuddy 协调 | opencode 配合 | **13/13 通过**（真 MCP stdio + 总线 + 三 agent） |
 | AGENTS.md 协作分工 + 实时通道段落 | opencode 写技术段 | workbuddy 审 | 同步本方案 |
 | GTM / 推广 / 社区 | workbuddy | — | 既定 |
-| 讨论 #999964 收敛仲裁 | Claude | 各 agent 表态 | 名册已修正为真实 roster，`convergence_rule=majority`（3/5） |
+| 讨论 #999964 收敛仲裁 | dsh | 各 agent 表态 | 名册已修正为 4 人 roster，`convergence_rule=majority`（3/4） |
 
-> 注：上表为基于提案 #999948 / 评审 #999964 的分工草案。dsh 在 #999964 论证中已发现 `F:\memall-agent-hub\` 曾真实运行的多 Agent 协作平台（2026-06 停摆），战略可能转向"评估/复活 Hub 而非修补 MCP 通道"。**最终分工以 #999964 收敛结论为准。**
+> 注：上表为基于提案 #999948 / 评审 #999964 的分工草案。
+> **2026-10-23 claude 退出名册，遗留卡已重新指派**：#1000411 → #1000539（dsh）；#11183 → #1000546（dsh）；#11174 → #1000551（opencode）；#10784 → #1000554（workbuddy 评审 + qoder 实测）。原 claude 卡保留作历史线索（supersedes 关联）。
+> dsh 在 #999964 论证中已发现 `F:\memall-agent-hub\` 曾真实运行的多 Agent 协作平台（2026-06 停摆），战略可能转向"评估/复活 Hub 而非修补 MCP 通道"。**最终分工以 #999964 收敛结论为准。**
 >
-> **名册与收敛规则（2026-10-22 opencode 更正）**：#999964 / #999948 的 `participants` 原为 `[claude, codex, opencode, workbuddy, marvis]`，含已出局的 codex/marvis、缺 dsh/qoder → 全体参与者必须回应，**数学上永不收敛**。已改为 `[claude, dsh, opencode, qoder, workbuddy]`。
+> **名册与收敛规则（2026-10-23 workbuddy 更新）**：#999964 / #999948 的 `participants` 原为 `[claude, codex, opencode, workbuddy, marvis]`，含已出局的 codex/marvis、缺 dsh/qoder → 全体参与者必须回应，**数学上永不收敛**。2026-10-22 已改为 `[claude, dsh, opencode, qoder, workbuddy]`；**2026-10-23 claude 退出，现为 `[dsh, opencode, qoder, workbuddy]`**。新建讨论的 participants 必须使用当前 4 人名单，否则永不收敛。
 > 同时补上 `convergence_rule`（此前是死字段，无人读取，且 MCP schema 声明了但 `handle_create` 丢弃）：`unanimous`（默认，历史行为）/ `majority`（过半）/ `any`（1 人）。只决定**何时收敛**，收敛结论仍如实记录各人立场与 dissenters。
 
 ## 二、任务卡协议（替代"文件夹任务卡"）
@@ -77,7 +78,7 @@ auto_inject 会自动返回分配给自己的 `pending_tasks`（id/content/subje
    - ⚠️ **读路径的物理前提当前不成立**：`memall_read` 的 `viewer` 在 `unified_search` 多数分支未透传，实测任何 agent 检索都能读到别人的卡（见 §1.1 P0-4b）。在修好之前，**不要把「agent 只看自己的数据」当作已有保证**——涉及他人项目数据的读取须显式用 `agent_name` 过滤参数，并自行确认该参数在目标路径上确实生效。
 5. **会审机制**：涉及 ≥2 个 agent 的决策，必须走 memall_discussion 多 agent 表态收敛，禁止单 agent 自说自话
    - **名册必须与真实 roster 一致**：`participants` 写当前实际在册的 agent（见 §一）。名册里留一个已退出的 agent，**讨论在数学上永不收敛**——收敛要求全体参与者已回应，而那个 agent 不会再来。线上实证：#999964 / #999948 的名册含已出局的 codex/marvis，缺 dsh/qoder，两条讨论因此永久卡在 active。
-   - **收敛规则**：`metadata.convergence_rule` 决定何时收敛——`unanimous`（默认，全员回应）/ `majority`（过半，5 人需 3）/ `any`（1 人）。规则只决定**何时**收敛，**收敛结论仍如实记录每个人的立场与 dissenters**：有反对票时 `consensus=false`、反对方进 `dissenters`，不会被"多数通过"抹掉。
+   - **收敛规则**：`metadata.convergence_rule` 决定何时收敛——`unanimous`（默认，全员回应）/ `majority`（过半，4 人需 3）/ `any`（1 人）。规则只决定**何时**收敛，**收敛结论仍如实记录每个人的立场与 dissenters**：有反对票时 `consensus=false`、反对方进 `dissenters`，不会被"多数通过"抹掉。
    - 讨论创建时由 `memall_discussion(action="create", convergence_rule=...)` 指定；未指定按 `unanimous`。
    - **前置未交付则不收敛（2026-10-23 dsh 落地，提交 1aad348）**：`action_items` 里 `assigned_to` 的 assignee **若在名册内且尚未表态**，讨论不会收敛——被指派的人可以安心做到交付，讨论会等。
      - 只拦**名册内**的 assignee；名册外的指派属于别人的承诺，不冻结本讨论。
@@ -88,7 +89,7 @@ auto_inject 会自动返回分配给自己的 `pending_tasks`（id/content/subje
 
 | 禁区 | 规则 |
 |------|------|
-| 生产源码 | 仅 Claude/dsh/opencode 可写（qoder 定级后加入），workbuddy 只读（调研/评审/测试除外） |
+| 生产源码 | 仅 dsh/opencode/qoder 可写，workbuddy 只读（调研/评审/测试除外） |
 | 商业/定价数据 | visibility 限制，仅老陈 + workbuddy |
 | API 密钥/凭证 | 严禁入记忆库（例外：老陈明确要求归档的凭证表） |
 | 他人项目数据 | 不读不写不引用 |
@@ -99,14 +100,14 @@ auto_inject 会自动返回分配给自己的 `pending_tasks`（id/content/subje
 2. **验收三问**：交付物是否齐全 / 是否满足验收标准 / 是否引入新风险
 3. **量化基线**：验收参考 echo_score、confidence、access_count，不凭感觉
 4. **打回有据**：验收不通过必须写 `[验收]` 记忆说明理由 + 修正要求，走 corrections 记录
-5. **人工终审**：P0 任务验收通过后，仍需老陈确认才算闭环
+5. **veto 终审**：P0 任务验收通过后进入老陈 24h 否决窗口，超时未否决自动闭环；老陈在窗口内可否决回滚
 
 ## 六、自动巡检（scheduled_tasks）
 
 | 巡检项 | 频率 | 动作 |
 |--------|------|------|
-| 超 48h 未接单的 todo | 每日 | 提醒 owner + 升级给 claude |
-| 超 7 天的 task 无进度 | 每日 | claude 介入拆解或关闭 |
+| 超 48h 未接单的 todo | 每日 | 提醒 owner + 升级给 dsh |
+| 超 7 天的 task 无进度 | 每日 | dsh 介入拆解或关闭 |
 | 验收通过未归档的 report | 每周 | 蒸馏进 L9 知识层 |
 
 ---
@@ -135,7 +136,7 @@ auto_inject 会自动返回分配给自己的 `pending_tasks`（id/content/subje
 
 ```python
 # 1) PM 派单：只传 memory_id 指针，正文别复制
-memall_msg(action="send", agent_name="claude", to="dsh",
+memall_msg(action="send", agent_name="dsh", to="opencode",
            type="task", payload={"memory_id": 999766})
 
 # 2) 执行方取正文（凭 id）
@@ -161,12 +162,9 @@ _本协议自身也是记忆：level=L4, category=decision, project=memall。修
 配置方式：在 MCP 服务器的 `env` 里设 `MEMALL_AGENT_NAME`。
 
 ```jsonc
-// Claude Code (~/.claude.json) 与 Claude Desktop (claude_desktop_config.json)
-"memall": {
-  "command": "memall",
-  "args": ["serve"],
-  "env": { "MEMALL_AGENT_NAME": "claude" }
-}
+// 示例：DeepSeek Harness (~/.dsh/profiles/web/cordis.patch.yml)
+        env:
+          MEMALL_AGENT_NAME: dsh
 ```
 
 ```yaml
@@ -175,8 +173,8 @@ _本协议自身也是记忆：level=L4, category=decision, project=memall。修
           MEMALL_AGENT_NAME: dsh
 ```
 
-**已配置**（2026-10-22）：claude（Claude Code / Desktop）、dsh（DeepSeek Harness）。
-**未配置**：codex / opencode / workbuddy / marvis —— 用各自客户端时须自行补上，值必须与 `identities` 表中的 agent_name 完全一致。
+**已配置**（2026-10-23）：dsh（DeepSeek Harness）。
+**未配置**：opencode / qoder / workbuddy —— 用各自客户端时须自行补上，值必须与 `identities` 表中的 agent_name 完全一致。
 
 身份来源优先级：调用参数 `agent_name` > 握手 `params.agent_name` / `clientInfo.agent_name` > 环境变量 `MEMALL_AGENT_NAME`。
 **客户端软件名（`clientInfo.name`，如 `dsh-mcp-client`）不会被当作身份** —— 那会让所有 agent 挤进同一个桶，隔离与路由全错。
