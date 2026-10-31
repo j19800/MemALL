@@ -24,6 +24,35 @@ SRC = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SRC)
 
 
+def _test_human(name: str = "guard_human") -> str:
+    """Register and bind a HUMAN identity so read surfaces are callable.
+
+    v0.1.69 policy (CHANGELOG, "检索身份边界"): reads always apply the trust
+    filter, an identity-less caller can only ever see ``public``, and the MCP
+    entry point REFUSES an identity-less read instead of returning an empty
+    array that is indistinguishable from "no results".  Weakening the filter to
+    make guards pass would re-open the P0 that release closed, so the guards
+    supply an identity instead — exactly what the CLI does (it binds
+    ``identity.human_owner`` with ``agent_type='human'``, which resolves to the
+    ``private`` read level and can therefore see the store).
+
+    Returns the name to pass as ``viewer=`` to library-level search calls.
+    """
+    from memall.core.db import get_conn
+    from memall.mcp.session_identity import bind_handshake_agent
+
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO identities (agent_name, agent_type) "
+            "VALUES (?, 'human')", (name,))
+        conn.commit()
+    finally:
+        conn.close()
+    bind_handshake_agent(name)
+    return name
+
+
 def _fresh_db() -> str:
     # The MCP session identity is process-global by design (it is bound once
     # at handshake and reused for every subsequent call).  Guards must not
@@ -539,8 +568,9 @@ def guard_facets_match_population() -> Tuple[bool, str]:
                     "如果它进了分面计数就说明过滤集漂移了。",
                     level="L9", category="testing", project="other",
                     agent_name="otherg", owner="老陈")
+    human = _test_human()
     res = enhanced_search(query="分面对齐验证词条", agent_name="facetg",
-                          limit=5, facet_fields=["level"])
+                          viewer=human, limit=5, facet_fields=["level"])
     facets = res.get("facets", {}).get("level", {})
     total = sum(facets.values())
     n_res = len(res["results"])
@@ -558,6 +588,7 @@ def guard_hot_topics_functional() -> Tuple[bool, str]:
     from memall.mcp.adapter import handle_call
 
     init_db()
+    _test_human()   # 'hot' is a read surface: identity required (v0.1.69 policy)
     mid = capture("热门榜单验证记忆：这条记忆刚被访问过，应当出现在热榜里而不是被时间窗过滤掉。",
                   level="P2", category="testing", project="hotg", agent_name="hotg",
                   owner="老陈")
@@ -588,6 +619,7 @@ def guard_digest_excludes_archived() -> Tuple[bool, str]:
     from memall.mcp.adapter import handle_call
 
     init_db()
+    _test_human()   # 'digest' is a read surface: identity required (v0.1.69 policy)
     mid = capture("每日摘要排除验证：这条今天写入的记忆先计入摘要，归档后应当从摘要中消失，"
                   "因此这条内容本身需要足够长并通过质量门的实测。",
                   level="P2", category="acceptance2", project="dg", agent_name="dgg",
@@ -863,15 +895,17 @@ def guard_search_filters_pushed_to_sql() -> Tuple[bool, str]:
             level="P2", category="decision", project="projB",
             agent_name="agentB", owner="老陈")
 
-    r = hybrid_search(query="过滤下推验证", top_k=10, project="projA")
+    human = _test_human()
+    r = hybrid_search(query="过滤下推验证", top_k=10, project="projA", viewer=human)
     projs = {x.get("project") for x in r.get("results", [])}
     ok_a = bool(r.get("results")) and projs == {"projA"}
 
-    r2 = hybrid_search(query="过滤下推验证", top_k=10, category="decision")
+    r2 = hybrid_search(query="过滤下推验证", top_k=10, category="decision",
+                       viewer=human)
     cats = {x.get("category") for x in r2.get("results", [])}
     ok_b = bool(r2.get("results")) and cats == {"decision"}
 
-    r3 = vector_search(query="过滤下推验证", top_k=8, project="projA")
+    r3 = vector_search(query="过滤下推验证", top_k=8, project="projA", viewer=human)
     v_projs = {x.get("project") for x in r3.get("results", [])}
     ok_c = (not r3.get("results")) or v_projs == {"projA"}
 
@@ -951,6 +985,7 @@ def guard_batch_search_is_semantic() -> Tuple[bool, str]:
     capture("批量语义检索验证：这条记忆与查询措辞不同但语义相关，用于验证批量搜索走了向量通路。",
             level="P2", category="testing", project="g", agent_name="batchbot",
             owner="老陈")
+    _test_human()   # read surfaces require an identity under the v0.1.69 policy
     out = json.loads(handle_call("memall_read", {
         "action": "batch_search", "queries": ["语义相关的另一种问法"], "limit": 3}))
     items = out.get("results", [])

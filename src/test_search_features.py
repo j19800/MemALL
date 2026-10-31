@@ -46,7 +46,31 @@ def seed():
     return ids
 
 
+def _suite_human(name: str = "suite_human") -> str:
+    """Bind a HUMAN identity: read surfaces require one (v0.1.69 policy).
+
+    Reads always apply the trust filter, an identity-less caller sees only
+    ``public``, and the MCP entry refuses an identity-less read rather than
+    returning an empty array that looks like "no results".  A human identity
+    resolves to the ``private`` read level — the same route the CLI uses — so
+    the suite can exercise search without weakening the filter.
+    """
+    from memall.core.db import get_conn
+    from memall.mcp.session_identity import bind_handshake_agent
+
+    conn = get_conn()
+    try:
+        conn.execute("INSERT OR IGNORE INTO identities (agent_name, agent_type) "
+                     "VALUES (?, 'human')", (name,))
+        conn.commit()
+    finally:
+        conn.close()
+    bind_handshake_agent(name)
+    return name
+
+
 def main():
+    HUMAN = _suite_human()
     init_db()
     ids = seed()
     print(f"\n=== seeded {len(ids)} memories: {ids} ===\n")
@@ -56,7 +80,7 @@ def main():
     check("retrieve() unchanged (returns list)", isinstance(plain, list) and len(plain) > 0)
 
     # ── 1. Faceted search ──
-    res = enhanced_search(query="检索", agent_name="workbuddy", limit=5,
+    res = enhanced_search(query="检索", agent_name="workbuddy", viewer=HUMAN, limit=5,
                           facet_fields=["level", "category"])
     check("enhanced_search returns facets dict", isinstance(res.get("facets"), dict),
           f"got {res.get('facets')}")
@@ -69,12 +93,12 @@ def main():
           f"facets={total_facet} page={len(res['results'])}")
 
     # facet_fields="auto"
-    res_auto = enhanced_search(query="", agent_name="workbuddy", limit=3, facet_fields="auto")
+    res_auto = enhanced_search(query="", agent_name="workbuddy", viewer=HUMAN, limit=3, facet_fields="auto")
     check("facet_fields='auto' uses config defaults",
           set(res_auto.get("facets", {}).keys()) >= {"level", "category", "project"})
 
     # unsafe facet field must be dropped, never interpolated into SQL
-    res_bad = enhanced_search(query="", agent_name="workbuddy", limit=3,
+    res_bad = enhanced_search(query="", agent_name="workbuddy", viewer=HUMAN, limit=3,
                               facet_fields=["level; DROP TABLE memories;--"])
     check("unsafe facet field dropped (no SQL injection)",
           "level; DROP TABLE memories;--" not in res_bad.get("facets", {}))
@@ -102,7 +126,7 @@ def main():
     check("suggest_queries returns list", isinstance(sugg, list))
 
     # ── 4. Clustering ──
-    res_c = enhanced_search(query="", agent_name="workbuddy", limit=20)
+    res_c = enhanced_search(query="", agent_name="workbuddy", viewer=HUMAN, limit=20)
     dicts = [{"memory_id": m.id, "content": m.content, "subject": m.subject,
               "category": m.category, "level": m.level, "project": m.project,
               "rrf_score": 1.0 / (i + 1)} for i, m in enumerate(res_c["results"])]

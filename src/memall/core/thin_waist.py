@@ -2320,12 +2320,23 @@ def _build_retrieve_where(conn, query, viewer, filters) -> tuple[list, list, boo
             where.append(f"memories.{key} = ?")
             params.append(val)
 
-    # Agent isolation: when a viewer identifies itself but no explicit
-    # agent_name filter is set, default to viewing only its own memories.
-    # This ensures agents see their own data by default.
-    if viewer and not filters.get("agent_name"):
-        where.append("memories.agent_name = ?")
-        params.append(viewer)
+    # NOTE: ``viewer`` deliberately does NOT become an author filter.
+    # It used to: "when a viewer identifies itself but no explicit
+    # agent_name filter is set, default to viewing only its own memories"
+    # appended ``memories.agent_name = viewer``.  That confuses WHO IS
+    # ASKING with WHAT THEY WROTE, and the consequence is severe - a caller
+    # that identifies itself sees only rows it authored, so the human owner
+    # searching the store finds nothing written by any agent, and every read
+    # path that passes a viewer looks empty.  Measured: retrieve(viewer=
+    # "dg_human") returned 0 while retrieve() returned 1 for the same row.
+    #
+    # Isolation is a VISIBILITY question and is already enforced after the
+    # fetch by ``_filter_by_trust`` (rank check against the caller's read
+    # level), which is the boundary that actually protects rows.  A caller
+    # that wants only its own rows asks explicitly with ``agent_name=``,
+    # which is a real filter and is still applied below.
+    # (The same confusion was already fixed in unified_search's four
+    # branches; retrieve kept it.)
 
     subject = filters.get("subject")
     if subject:
@@ -2554,20 +2565,27 @@ def enhanced_search(
     out["total"] = len(results)
 
     with _pool_conn() as conn:
-        # ── Facet aggregates over the unlimited candidate set ──
+        # ── Facet aggregates ──
+        # Trust filter (visibility) is applied in Python AFTER the SQL fetch
+        # (see retrieve() -> _filter_by_trust), so the SQL population computed
+        # here is strictly larger than what the caller can actually read.  Using
+        # that population for facets leaks the existence & counts of rows the
+        # viewer cannot see ("total=0, facets={level:{L9:259}}").  Recompute
+        # facets from the trust-filtered result set instead, so facets and
+        # results describe the same population.  (Fix for the ceb3d7a side
+        # effect reported 2026-10-31.)
         if fields:
-            # The facet population must be the SAME set the results come from:
-            # same query match, same identity filter, same field filters.
-            # Building it by re-running the WHERE builder with the exact same
-            # arguments the retrieval above used is what guarantees that; an
-            # earlier version disagreed on the identity filter and printed
-            # "L9: 259" next to a 4-result page.
-            facet_filters = {k: v for k, v in retrieve_kwargs.items()
-                             if k != "limit"}
-            where, params, _ = _build_retrieve_where(
-                conn, effective_query, viewer, facet_filters,
-            )
-            out["facets"] = compute_facets(conn, " AND ".join(where), params, fields)
+            facet_counts: dict = {f: {} for f in fields}
+            for m in results:
+                for f in fields:
+                    val = getattr(m, f, None) if not isinstance(m, dict) else m.get(f)
+                    if val is None:
+                        val = ""
+                    val = str(val)
+                    facet_counts[f][val] = facet_counts[f].get(val, 0) + 1
+            out["facets"] = {
+                f: {k: v for k, v in sorted(d.items())} for f, d in facet_counts.items()
+            }
 
         # ── Query suggestions ──
         if suggest:
@@ -2677,15 +2695,56 @@ def _get_allowed_write_visibility(conn, agent_name: str, desired: str) -> str:
     return allowed  # clamp up to stricter level
 
 
+def _caller_has_identity(viewer: str) -> bool:
+    """True when the caller actually supplied an identity."""
+    return bool((viewer or "").strip())
+
+
+def _viewer_rank(conn, viewer: str) -> int:
+    """Visibility rank for a caller.
+
+    Two cases that must NOT be conflated (they were, and it cost a production
+    regression):
+
+    * A NAMED but unregistered agent is least-privilege -- ``public`` only.
+      That is deliberate: an invented name must not read the store.
+    * An EMPTY viewer means no identity was supplied at all, which is the normal
+      shape of a local, single-user MCP call (``viewer`` is optional and most
+      callers omit it).  Treating that as an unknown agent made every default
+      search return nothing: measured, six guards went red at once --
+      facets/digest/hot-topics/filters/batch-search/test_search_features -- all
+      with the same signature, results empty while the population was not.
+
+    An empty viewer is NOT special-cased to full read.  I tried that as the
+    quick fix for the six red guards and it was wrong: it re-opened, one
+    condition over, exactly the P0 that v0.1.69 closed ("未注册身份拿到最高读
+    权限，方向反了").  The project's policy is explicit — reads always apply the
+    trust filter, no identity can only ever see ``public``, and the ENTRY point
+    (mcp/adapter READ_ACTIONS) refuses an identity-less read with a structured
+    error instead of returning an empty array that looks like "no results".
+
+    So trust has exactly two layers and this function must keep the lower one
+    strict.  A read path that needs to work without an identity (the CLI) binds
+    a real ``human`` identity, which resolves to ``private`` here through
+    ``_get_agent_read_level`` — not through a special case for "".
+    """
+    level = _get_agent_read_level(conn, viewer)
+    return VISIBILITY_RANK.get(level, 0)
+
+
 def _filter_by_trust(conn, memories: list, viewer: str) -> list:
-    viewer_level = _get_agent_read_level(conn, viewer)
-    viewer_rank = VISIBILITY_RANK.get(viewer_level, 0)
+    viewer_rank = _viewer_rank(conn, viewer)
+    has_identity = _caller_has_identity(viewer)
     filtered = []
     for m in memories:
         v = m.visibility or "private"
         mem_rank = VISIBILITY_RANK.get(v, 4)
-        # Include if viewer is the owner, the creating agent, or has sufficient permission
-        if m.owner == viewer or m.agent_name == viewer:
+        # Include if viewer is the owner, the creating agent, or has sufficient
+        # permission.  The owner shortcut needs a REAL identity: without this
+        # guard an empty viewer matched every row whose owner column is blank,
+        # which is an impersonation, not a visibility rule.  It was fixed in the
+        # dict variant and left standing here.
+        if has_identity and (m.owner == viewer or m.agent_name == viewer):
             filtered.append(m)
         elif mem_rank <= viewer_rank:
             filtered.append(m)
@@ -2699,8 +2758,7 @@ def _filter_by_trust_dict(results: list[dict], viewer: str) -> dict[int, bool]:
     Uses the same VISIBILITY_RANK logic as _filter_by_trust.
     """
     with _pool_conn() as conn:
-        viewer_level = _get_agent_read_level(conn, viewer)
-    viewer_rank = VISIBILITY_RANK.get(viewer_level, 0)
+        viewer_rank = _viewer_rank(conn, viewer)
 
     allowed: dict[int, bool] = {}
     for r in results:
