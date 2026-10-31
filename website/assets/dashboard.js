@@ -1,7 +1,7 @@
 /* MemALL dashboard — data source priority: live gateway → real snapshot → built-in samples.
    The snapshot is produced by tools/sync.mjs from the local SQLite DB (shared-only profile). */
 import { get, post, ping, apiBase, setApiBase } from "./api.js";
-import { SAMPLE_MEMORIES, LEVEL_META, PIPELINE_STEPS } from "./sample-data.js";
+import { SAMPLE_MEMORIES, LEVEL_META, LEVEL_BOOST, LEVEL_BOOST_DEFAULT, PIPELINE_STEPS, OPTIONAL_STEPS } from "./sample-data.js";
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -195,7 +195,7 @@ V.memories.bind = () => {
 };
 
 let lastSearch = [];
-V.search = () => `<div class="panel"><h2>检索台 ${S.mode === "live" ? '<span class="badge" style="float:right">网关 retrieve / vector-search</span>' : S.mode === "snapshot" ? '<span class="badge" style="float:right">真实数据 · 浏览器内 RRF（与生产同式）</span>' : '<span class="badge" style="float:right">样例数据 · 模拟 RRF</span>'}</h2>
+V.search = () => `<div class="panel"><h2>检索台 ${S.mode === "live" ? '<span class="badge" style="float:right">网关 retrieve / vector-search</span>' : S.mode === "snapshot" ? '<span class="badge" style="float:right">真实数据 · 浏览器内 RRF（k=60 + _LEVEL_BOOST，不含重排）</span>' : '<span class="badge" style="float:right">样例数据 · 模拟 RRF</span>'}</h2>
   <div class="tools-row">
     <input type="text" id="s-q" placeholder="自然语言查询，回车检索…" ${lastSearch[0]?.q ? `value="${esc(lastSearch[0].q)}"` : ""}>
     <select id="s-mode">${S.mode === "live" ? '<option value="search">retrieve（语义+过滤）</option><option value="vector">vector-search</option>' : '<option value="search">hybrid_search（本地 RRF）</option>'}</select>
@@ -212,8 +212,9 @@ function suggestTips() {
     df.set(t, (df.get(t) || 0) + 1);
   }
   const cjk = (t) => /[\u4e00-\u9fff]/.test(t);
+  const noisy = (t) => /^[的了条个次在和与是有一中把被对为以而就都很]|[的了条个次在和与是有一中把被对为以而就都很]$/.test(t);
   const ranked = [...df.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const pick = [ranked.filter(([t]) => cjk(t)).slice(0, 3), ranked.filter(([t]) => !cjk(t) && t.length > 3).slice(0, 2)].flat().filter(([, n]) => n > 1);
+  const pick = [ranked.filter(([t]) => cjk(t) && !noisy(t)).slice(0, 3), ranked.filter(([t]) => !cjk(t) && t.length > 3).slice(0, 2)].flat().filter(([, n]) => n > 1);
   return pick.length ? `点击试试：${pick.map(([t]) => `<button class="s-tip mono" data-tip="${esc(t)}">${esc(t)}</button>`).join(" ")}` : "";
 }
 
@@ -244,23 +245,24 @@ V.search.bind = () => {
   $("#s-out").addEventListener("click", (e) => { const t = e.target.closest(".s-tip"); if (t) { $("#s-q").value = t.dataset.tip; run(); } });
 };
 
-/* browser-side RRF mirroring core/thin_waist_search.py */
+/* browser-side RRF mirroring core/thin_waist_search.py.
+   Level weighting = graph/retrieve._LEVEL_BOOST, applied to the keyword leg
+   only (production reranks the vector leg instead). */
 const tok = (s) => { const o = (s.toLowerCase().match(/[a-z0-9_\-\.\/]+/g) || []);
   for (const run of s.match(/[\u4e00-\u9fff]+/g) || []) for (let i = 0; i < run.length - 1; i++) o.push(run.slice(i, i + 2)); return o; };
 function localHybrid(query, k = 10) {
   const terms = [...new Set(tok(query))]; if (!terms.length) return [];
   const f = (m) => { const hay = `${m.subject} ${m.content} ${m.category}`.toLowerCase(); let h = 0; terms.forEach((t) => hay.includes(t) && h++); return h / terms.length * (1 + Math.log1p(m.access_count || 0) / 6); };
   const v = (m) => { const d = new Set(tok(`${m.subject} ${m.content}`)); let i = 0; terms.forEach((t) => d.has(t) && i++); return i / Math.sqrt(Math.max(d.size, 1)) / Math.sqrt(terms.length); };
-  const rrf = (fn) => S.memories.map((m) => ({ m, s: fn(m) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s).map((x, i) => [x.m.id, 1 / (60 + i + 1)]);
+  const rrf = (fn, boosted) => S.memories.map((m) => ({ m, s: fn(m) * (boosted ? (LEVEL_BOOST[m.level] ?? LEVEL_BOOST_DEFAULT) : 1) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s).map((x, i) => [x.m.id, 1 / (60 + i + 1)]);
   const fused = new Map();
-  for (const [id, s] of [...rrf(f), ...rrf(v)]) fused.set(id, (fused.get(id) || 0) + s);
-  const boost = { L11: 1.3, L10: 1.25, L9: 1.2, L8: 1.15, L7: 1.12, L6: 1.1, L4: 1.1, P0: 1.08 };
-  return [...fused.entries()].map(([id, s]) => ({ m: S.memories.find((x) => x.id === id), s: s * (boost[S.memories.find((x) => x.id === id).level] || 1) })).sort((a, b) => b.s - a.s).slice(0, k);
+  for (const [id, s] of [...rrf(f, true), ...rrf(v)]) fused.set(id, (fused.get(id) || 0) + s);
+  return [...fused.entries()].map(([id, s]) => ({ m: S.memories.find((x) => x.id === id), s })).sort((a, b) => b.s - a.s).slice(0, k);
 }
 
 V.graph = () => `<div class="panel"><h2>知识图谱 ${S.snap ? `<span class="muted" style="font-weight:400">· ${S.snap.graph.nodes.length} 个高连接度节点 / ${S.snap.graph.edges.length} 条边（库内共 ${num(S.snap.totals.edges)} 条边）· ${esc(S.snap.graph.note)}</span>` : S.mode === "live" ? '<span class="muted" style="font-weight:400">· 中心节点 BFS 展开</span>' : '<span class="muted" style="font-weight:400">· 样例数据</span>'}</h2>
   <canvas id="graph-canvas"></canvas>
-  <div class="graph-legend">${["var(--level-p)", "var(--level-l-low)", "var(--level-l-mid)", "var(--level-l-high)"].map((c, i) => `<span><i style="background:${c}"></i>${["规划 P0–P2", "基础 L1–L4", "行为 L5–L8", "沉淀 L9–L11"][i]}</span>`).join("")}
+  <div class="graph-legend">${["var(--level-p)", "var(--level-l-low)", "var(--level-l-mid)", "var(--level-l-high)"].map((c, i) => `<span><i style="background:${c}"></i>${["原始 P0–P2", "身份·时间·流程·会话 L1–L4", "计划·反思·教训·关系 L5–L8", "蒸馏·整合·商业 L9–L11"][i]}</span>`).join("")}
     <span style="margin-left:auto">拖拽平移 · 滚轮缩放 · 点击节点看详情</span></div>
   <div id="g-detail"></div></div>`;
 V.graph.bind = () => drawGraph();
@@ -284,12 +286,17 @@ V.pipeline = () => `<div class="panel"><h2>自进化管线 ${S.runs?.length ? `<
   <div id="p-detail"></div>
   <h2 style="margin-top:26px">步骤清单（源码 31 核心 + 5 可选）</h2>
   <div class="pipe-grid" id="p-grid"></div>
-  <p class="hint" id="p-tip" style="min-height:20px;color:var(--fg-muted)">悬停步骤查看职责。</p></div>`;
+  <p class="hint" id="p-tip" style="min-height:20px;color:var(--fg-muted)">悬停步骤查看职责（虚线边框 = 可选步骤）。</p></div>`;
 V.pipeline.bind = () => {
   const g = $("#p-grid");
   PIPELINE_STEPS.forEach(([n, d], i) => {
     const b = document.createElement("button"); b.className = "pipe-step"; b.textContent = n;
     b.addEventListener("mouseenter", () => ($("#p-tip").textContent = `${n} — ${d}`));
+    g.appendChild(b);
+  });
+  OPTIONAL_STEPS.forEach(([n, d]) => {
+    const b = document.createElement("button"); b.className = "pipe-step opt"; b.textContent = n;
+    b.addEventListener("mouseenter", () => ($("#p-tip").textContent = `${n} — ${d}（可选步骤）`));
     g.appendChild(b);
   });
   const detail = $("#p-detail");
