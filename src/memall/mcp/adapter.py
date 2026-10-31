@@ -137,6 +137,25 @@ def handle_call(tool_name: str, arguments: dict) -> str:
     except Exception:
         logger.debug("session identity resolution failed", exc_info=True)
 
+    # ── Read-path entry enforcement ────────────────────────────────────
+    # Every search path now applies the trust filter, so an identity-less
+    # read can only see 'public' rows -- and since visibility defaults to
+    # 'private', that reads as "no results".  Returning an empty list would
+    # be indistinguishable from "nothing matched", so refuse and explain.
+    # The local CLI binds the human owner before calling, so it is unaffected.
+    try:
+        from memall.mcp import session_identity as _si
+
+        _act = arguments.get("action", "") if isinstance(arguments, dict) else ""
+        if (_si.requires_identity(_act) and not (arguments.get("agent_name") or "")):
+            m.incr("tool_call_missing_identity")
+            return json.dumps({
+                "status": "error",
+                "error": _si.missing_identity_error(_act),
+            }, ensure_ascii=False)
+    except Exception:
+        logger.debug("read-path identity check failed", exc_info=True)
+
     # Session-based tools (memall_system actions) that should not auto-start sessions
     _SESSION_SKIP_TOOLS = frozenset({"ping"})
     _SESSION_SKIP_ACTIONS = frozenset({"session_start", "session_end", "session_summary", "onboarding"})

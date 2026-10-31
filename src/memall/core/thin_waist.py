@@ -1823,6 +1823,8 @@ def unified_search(arguments: dict) -> str:
         result = enhanced_search(
             query=query,
             viewer=arguments.get("viewer"),
+            # `agent_name` is the caller's session identity => viewer.
+            # `agent_name_filter` is the optional CONTENT filter by author.
             agent_name=arguments.get("agent_name"),
             limit=_seen_fetch_limit(arguments, top_k),
             facet_fields=facet_fields,
@@ -1833,7 +1835,7 @@ def unified_search(arguments: dict) -> str:
             personalize=personalize,
             context_boost=context_boost,
             owner=arguments.get("owner"),
-            agent_name_filter=arguments.get("agent_name"),
+            agent_name_filter=arguments.get("agent_name_filter"),
             category=arguments.get("category"),
             project=arguments.get("project"),
             level=arguments.get("level"),
@@ -1876,7 +1878,9 @@ def unified_search(arguments: dict) -> str:
             "query": query,
             "limit": _seen_fetch_limit(arguments, top_k),
             "owner": arguments.get("owner"),
-            "agent_name": arguments.get("agent_name"),
+            # Session identity is the viewer (see retrieve(viewer=...)); a
+            # content filter by author must be requested explicitly.
+            "agent_name": arguments.get("agent_name_filter"),
             "category": arguments.get("category"),
             "project": arguments.get("project"),
             "level": arguments.get("level"),
@@ -1906,7 +1910,9 @@ def unified_search(arguments: dict) -> str:
             "query": query,
             "limit": _seen_fetch_limit(arguments, top_k),
             "owner": arguments.get("owner"),
-            "agent_name": arguments.get("agent_name"),
+            # Session identity is the viewer (see retrieve(viewer=...)); a
+            # content filter by author must be requested explicitly.
+            "agent_name": arguments.get("agent_name_filter"),
             "category": arguments.get("category"),
             "project": arguments.get("project"),
             "level": arguments.get("level"),
@@ -1942,7 +1948,9 @@ def unified_search(arguments: dict) -> str:
             level=arguments.get("level"),
             owner=arguments.get("owner"),
             project=arguments.get("project"),
-            agent_name=arguments.get("agent_name"),
+            # Session identity is the viewer; an explicit content filter must
+            # come from agent_name_filter (see the hybrid branch below).
+            agent_name=arguments.get("agent_name_filter"),
             viewer=arguments.get("viewer") or arguments.get("agent_name"),
         )
         if wants_enhancements:
@@ -1964,7 +1972,13 @@ def unified_search(arguments: dict) -> str:
         level=arguments.get("level"),
         owner=arguments.get("owner"),
         project=arguments.get("project"),
-        agent_name=arguments.get("agent_name"),
+        # `agent_name` here is the caller's SESSION identity (the adapter
+        # re-attaches it to every call).  It is the viewer, NOT a content
+        # filter: passing it as one restricted results to rows *written by*
+        # that agent, so the human owner searching their own memories got
+        # nothing back unless they happened to have authored it themselves.
+        # An explicit content filter must come from `agent_name_filter`.
+        agent_name=arguments.get("agent_name_filter"),
         rerank=arguments.get("rerank", False),
         viewer=arguments.get("viewer") or arguments.get("agent_name"),
     )

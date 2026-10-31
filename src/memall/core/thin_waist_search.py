@@ -307,6 +307,7 @@ def vector_search(
     owner: Optional[str] = None,
     project: Optional[str] = None,
     agent_name: Optional[str] = None,
+    viewer: Optional[str] = None,
 ) -> dict:
     """Semantic vector search.
 
@@ -334,12 +335,28 @@ def vector_search(
         result = graph_retrieve(query, mode="vector", top_k=top_k)
 
     filters = [f for f in (category, level, owner, project, agent_name) if f]
-    if not filters or not isinstance(result, dict):
+    # Trust filter still needs to run when a viewer is supplied, even if no
+    # explicit filters were given — otherwise cross-agent content leaks.
+    if not isinstance(result, dict):
+        return result
+
+    # Early trust filter (no explicit filters path): apply before returning.
+    if not filters and isinstance(result, dict) and isinstance(result.get("results"), list):
+        from memall.core.thin_waist import _filter_by_trust_dict
+        vis = _filter_by_trust_dict(result["results"], viewer or "")
+        result["results"] = [r for r in result["results"] if vis.get(r.get("memory_id"), True)]
+        result["total"] = len(result["results"])
         return result
 
     # Re-query the matching rows and keep only the provider's ids.
     ids = [r.get("memory_id") for r in result.get("results", []) if r.get("memory_id")]
     if not ids:
+        # Still apply trust filter on the provider's raw results when viewer given
+        if isinstance(result, dict) and isinstance(result.get("results"), list):
+            from memall.core.thin_waist import _filter_by_trust_dict
+            vis = _filter_by_trust_dict(result["results"], viewer)
+            result["results"] = [r for r in result["results"] if vis.get(r.get("memory_id"), True)]
+            result["total"] = len(result["results"])
         return result
     from memall.core.thin_waist import _pool_conn
 
@@ -372,6 +389,13 @@ def vector_search(
                     except (IndexError, KeyError):
                         pass
         kept.append(r)
+    # Trust filter: candidates that survived the agent_name filter must
+    # still respect the viewer's visibility level (R3-3).
+    if kept:
+        from memall.core.thin_waist import _filter_by_trust_dict
+
+        vis = _filter_by_trust_dict(kept, viewer or "")
+        kept = [r for r in kept if vis.get(r.get("memory_id"), True)]
     result["results"] = kept
     result["total"] = len(kept)
     return result
@@ -540,8 +564,8 @@ def hybrid_search(
         sorted_results = sorted(scores.values(), key=lambda x: -x["rrf_score"])
 
         # Visibility filter: apply before returning results
-        if viewer and sorted_results:
-            visibility_scores = _filter_by_trust_dict(sorted_results, viewer)
+        if sorted_results:
+            visibility_scores = _filter_by_trust_dict(sorted_results, viewer or "")
             sorted_results = [
                 r for r in sorted_results if visibility_scores.get(r["memory_id"], True)
             ]
@@ -565,7 +589,7 @@ def hybrid_search(
             HOOK_POST_SEARCH,
             query=query,
             results=sorted_results,
-            total=len(scores),
+            total=len(sorted_results),
             fts_hits=len(fts_rows),
             vec_hits=len(vec_rows),
         )
@@ -573,7 +597,11 @@ def hybrid_search(
             "query": query,
             "mode": "hybrid_rerank" if rerank else "hybrid_rrf",
             "results": sorted_results,
-            "total": len(scores),
+            # `total` is what the caller can actually read.  It used to report
+            # len(scores) -- the candidate count BEFORE the trust filter -- so
+            # an unauthorised viewer saw total=1 next to results=[] and every
+            # caller that paginates on it was told there was more to read.
+            "total": len(sorted_results),
             "fts_hits": len(fts_rows),
             "vec_hits": len(vec_rows),
         }

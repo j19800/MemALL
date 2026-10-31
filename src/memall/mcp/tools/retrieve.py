@@ -77,6 +77,9 @@ def handle_vector_search(arguments: dict) -> str:
         owner=arguments.get("owner"),
         project=arguments.get("project"),
         agent_name=arguments.get("agent_name"),
+        # The adapter re-attaches the session identity; without handing it to
+        # the trust filter every path could return other agents' rows.
+        viewer=arguments.get("viewer") or arguments.get("agent_name") or "",
     )
     return json.dumps(result, ensure_ascii=False, default=str)
 
@@ -97,6 +100,7 @@ def handle_hybrid_search(arguments: dict) -> str:
         project=arguments.get("project"),
         agent_name=arguments.get("agent_name"),
         rerank=arguments.get("rerank", False),
+        viewer=arguments.get("viewer") or arguments.get("agent_name") or "",
     )
     return json.dumps(result, ensure_ascii=False, default=str)
 

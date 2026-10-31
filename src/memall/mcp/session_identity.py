@@ -63,6 +63,40 @@ def bind_handshake_agent(agent_name: Optional[str]) -> str:
     return _handshake_agent
 
 
+# ── Read-path entry enforcement ──────────────────────────────────────────
+# Search runs the trust filter on every path, so an identity-less call now
+# sees only ``public`` rows.  Because ``memories.visibility`` defaults to
+# ``private``, that is effectively "nothing".  Two consequences to keep
+# straight:
+#
+#   * the local CLI is the operator running on their own machine, so it binds
+#     the human owner before it calls, and keeps working;
+#   * an external transport that never handshook must NOT silently fall
+#     through to a permissive default.  Refuse the read and say why, rather
+#     than returning an empty list that looks like "no results".
+READ_ACTIONS = frozenset({
+    "search", "retrieve", "vector_search", "hybrid_search", "memall_search",
+    "unified_search", "timeline", "traverse", "trace", "hot", "digest",
+    "fed_query", "nl_search", "自然语言搜索", "chat",
+})
+
+
+def requires_identity(action: str) -> bool:
+    """True when *action* reads stored content and therefore needs a viewer."""
+    return (action or "").strip().lower() in READ_ACTIONS
+
+
+def missing_identity_error(action: str) -> str:
+    """The refusal text used when a read arrives with no identity."""
+    return (
+        f"'{action}' requires an agent identity: send agent_name in the MCP "
+        "handshake (initialize params or MEMALL_AGENT_NAME). Without it the "
+        "trust filter can only return 'public' memories, which is "
+        "indistinguishable from an empty result set — so the call is "
+        "refused instead of silently under-reporting."
+    )
+
+
 def get_session_agent() -> str:
     """Current session identity, or ``""`` when unknown."""
     return _session_agent.get() or _handshake_agent
