@@ -111,12 +111,15 @@ def forget_expired(days: int = 90, agent_name: Optional[str] = None) -> Dict[str
             cutoff = _ttl_cutoff(scaled_ttl)
             if agent_name:
                 rows = conn.execute(
-                    "SELECT id FROM memories WHERE level = ? AND created_at < ? AND LOWER(agent_name) = LOWER(?)",
+                    "SELECT id FROM memories WHERE level = ? AND created_at < ? "
+                    "AND LOWER(agent_name) = LOWER(?) "
+                    "AND COALESCE(category, '') <> 'goal'",
                     (level, cutoff, agent_name),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT id FROM memories WHERE level = ? AND created_at < ?",
+                    "SELECT id FROM memories WHERE level = ? AND created_at < ? "
+                    "AND COALESCE(category, '') <> 'goal'",
                     (level, cutoff),
                 ).fetchall()
             expired_ids.extend(r["id"] for r in rows)
@@ -183,6 +186,7 @@ def forget_low_value(agent_name: Optional[str] = None) -> Dict[str, Any]:
             "SELECT id FROM memories "
             "WHERE LENGTH(content) < 30 "
             "AND created_at < ? "
+            "AND COALESCE(category, '') <> 'goal' "
             "AND id NOT IN (SELECT DISTINCT target_id FROM edges WHERE target_id IS NOT NULL) "
             "AND id NOT IN (SELECT DISTINCT source_id FROM edges WHERE source_id IS NOT NULL)"
         )

@@ -50,6 +50,7 @@ def handle_goal_create(args, agent_name=""):
         verifier=args.get("verifier") or "",
         created_by=agent_name,
         participants=args.get("participants"),
+        accountable=args.get("accountable") or args.get("owner_agent") or agent_name,
     ))
 
 

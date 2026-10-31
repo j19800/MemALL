@@ -68,6 +68,7 @@ def _defrag(conn) -> dict:
     rows = conn.execute(
         "SELECT id, content, agent_name, category, level FROM memories "
         "WHERE level IN ('P2','L4') AND LENGTH(TRIM(content)) > 20 "
+        "AND COALESCE(category, '') <> 'goal' "
         "ORDER BY agent_name, category, created_at"
     ).fetchall()
 

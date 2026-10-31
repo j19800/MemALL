@@ -3,7 +3,11 @@ from memall.core.thin_waist import timeline
 
 
 def handle(arguments: dict) -> str:
-    items = timeline(**arguments)
+    # The adapter re-attaches the session identity to every call, but
+    # timeline() has no such parameter — splatting it raised TypeError.
+    args = dict(arguments)
+    args.pop("agent_name", None)
+    items = timeline(**args)
     # Include level/owner/agent_name/subject — the previous projection dropped
     # them, forcing every timeline consumer to do a follow-up trace call.
     return json.dumps([{

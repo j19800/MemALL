@@ -91,12 +91,14 @@ def handle_batch_capture(arguments: dict) -> str:
 
 
 def _is_supervisor(agent: str) -> bool:
-    """True if ``agent`` is listed in ``security.supervisor_agents``."""
-    supes = get_config("security.supervisor_agents", []) or []
-    if isinstance(supes, str):
-        supes = [s for s in supes.split(",") if s.strip()]
-    allowed = {normalize_agent_name(str(s)) for s in supes}
-    return normalize_agent_name(agent) in allowed
+    """True if ``agent`` is listed in ``security.supervisor_agents``.
+
+    Delegates to ``memall.core.task_identity`` — this was a third copy of the
+    same list lookup (P2-4); a policy change here would otherwise have applied
+    to the task gate and not to the ownership gate.
+    """
+    from memall.core.task_identity import is_supervisor
+    return is_supervisor(agent)
 
 
 def handle_update(arguments: dict) -> str:
@@ -118,10 +120,12 @@ def handle_update(arguments: dict) -> str:
     if get_config("security.enforce_agent_ownership", True):
         caller = arguments.get("agent_name")
         if caller is None:
-            # Trusted internal caller (no agent_name supplied): the gate is
-            # skipped exactly as task_lifecycle._caller_gate does for
-            # ``caller is None``.
-            caller = ""
+            # No identity supplied: unauthenticated, NOT trusted internal.
+            # Reject rather than silently bypass the ownership gate (R3-5).
+            return json.dumps({
+                "error": "agent_name is required: an empty identity is rejected",
+                "memory_id": mem_id,
+            }, ensure_ascii=False)
         elif not str(caller).strip():
             # An explicitly empty identity cannot be attributed to any agent,
             # so the ownership gate has nothing to compare against — refuse

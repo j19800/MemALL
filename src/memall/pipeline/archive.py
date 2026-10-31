@@ -53,7 +53,8 @@ def archive_step(days: int = _ARCHIVE_STEP_SCALE) -> dict:
             cutoff = _ttl_cutoff(scaled_ttl)
 
             rows = conn.execute(
-                "SELECT id FROM memories WHERE level = ? AND created_at < ?",
+                "SELECT id FROM memories WHERE level = ? AND created_at < ? "
+                "AND COALESCE(category, '') <> 'goal'",
                 (level, cutoff),
             ).fetchall()
             ids = [r["id"] for r in rows]

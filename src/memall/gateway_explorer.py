@@ -95,10 +95,39 @@ def _meta_summary(raw) -> dict:
     out: dict = {}
     for key in ("status", "kind", "l6_source", "source", "assignee",
                 "consensus", "convergence_rule", "claimed_by", "done",
-                "conclusion", "session_id"):
+                "conclusion", "session_id", "phase", "priority", "owner",
+                "verifier", "guard", "trigger", "reminder_for", "participant",
+                "goal_id", "stance"):
         if key in data and data[key] not in (None, "", [], {}):
             value = data[key]
+            # Versioned fields may be stored as {"value": ..., "_meta": {...}}.
+            if isinstance(value, dict) and "value" in value:
+                value = value["value"]
             out[key] = value if isinstance(value, (str, int, float, bool)) else str(value)[:200]
+
+    # Goal / task lifecycle fields (migrations 033-040): acceptance criteria and
+    # dependency ids are lists/strings the UI turns into jump chips.
+    acceptance = data.get("acceptance")
+    if isinstance(acceptance, str) and acceptance.strip():
+        out["acceptance"] = acceptance.strip()[:200]
+
+    depends = data.get("depends_on")
+    if isinstance(depends, list) and depends:
+        out["depends_on"] = [_safe_int(v, 0) for v in depends][:12]
+
+    evidence = data.get("evidence")
+    if isinstance(evidence, list) and evidence:
+        ids = []
+        for item in evidence[:12]:
+            if isinstance(item, (int, float)):
+                ids.append(int(item))
+            elif isinstance(item, str):
+                # Evidence entries are sometimes annotated ("#123 被升 L3").
+                head = item.strip().lstrip("#").split()[0] if item.strip() else ""
+                if head.isdigit():
+                    ids.append(int(head))
+        if ids:
+            out["evidence"] = ids
 
     quality = data.get("quality")
     if isinstance(quality, dict):
@@ -200,6 +229,24 @@ def _build_filters(request: web.Request) -> tuple[str, list, list[str]]:
         where.append("thread_id IS NOT NULL")
     elif has_thread == "0":
         where.append("thread_id IS NULL")
+
+    # Goal lifecycle (migrations 033-040): a task card points at its objective
+    # through metadata.goal_id, the objective itself carries metadata.phase.
+    goal_id = _safe_int(request.query.get("goal_id", "0"), 0)
+    if goal_id > 0:
+        where.append("(id = ? OR json_extract(metadata, '$.goal_id') = ?)")
+        params.extend([goal_id, goal_id])
+
+    has_goal = request.query.get("has_goal", "")
+    if has_goal == "1":
+        where.append("json_extract(metadata, '$.goal_id') IS NOT NULL")
+    elif has_goal == "0":
+        where.append("json_extract(metadata, '$.goal_id') IS NULL")
+
+    phases = _csv(request, "phase")
+    if phases:
+        where.append("json_extract(metadata, '$.phase') IN (%s)" % ",".join("?" * len(phases)))
+        params.extend(phases)
 
     query = (request.query.get("q") or "").strip()
     terms: list[str] = []
@@ -337,6 +384,34 @@ async def handle_detail(request: web.Request, gw) -> web.Response:
                 (thread_id, memory_id),
             ).fetchall()
 
+        # Goal lifecycle (migration 033+): an objective owns the task cards that
+        # carry metadata.goal_id; a task links back to exactly one objective.
+        goal_parent = None
+        goal_children = []
+        member_goal = _safe_int((memory["meta"] or {}).get("goal_id") or 0, 0)
+        if member_goal:
+            parent = conn.execute(
+                "SELECT id, subject, level, agent_name, created_at, metadata FROM memories "
+                "WHERE id = ?", (member_goal,)
+            ).fetchone()
+            if parent:
+                pmeta = _meta_summary(parent["metadata"])
+                goal_parent = {
+                    "id": parent["id"], "subject": parent["subject"],
+                    "level": parent["level"], "agent_name": parent["agent_name"],
+                    "created_at": parent["created_at"],
+                    "phase": pmeta.get("phase"), "status": pmeta.get("status"),
+                }
+        if memory.get("category") == "goal":
+            kids = conn.execute(
+                "SELECT id, subject, level, agent_name, created_at, "
+                "json_extract(metadata, '$.status') AS status "
+                "FROM memories WHERE json_extract(metadata, '$.goal_id') = ? "
+                "ORDER BY id ASC LIMIT 60",
+                (memory_id,),
+            ).fetchall()
+            goal_children = [dict(r) for r in kids]
+
     return web.json_response({
         "success": True,
         "data": {
@@ -344,6 +419,7 @@ async def handle_detail(request: web.Request, gw) -> web.Response:
             "edges": {"out": edges_out, "in": edges_in},
             "thread": [dict(r) for r in thread_rows],
             "thread_id": thread_id,
+            "goal": {"parent": goal_parent, "children": goal_children},
         },
     })
 
@@ -377,8 +453,18 @@ async def handle_facets(request: web.Request, gw) -> web.Response:
         ).fetchall())
         statuses = _rows(conn.execute(
             "SELECT json_extract(metadata, '$.status') AS label, COUNT(*) AS count "
-            "FROM memories WHERE json_extract(metadata, '$.status') IS NOT NULL "
+            "FROM memories WHERE json_type(metadata, '$.status') = 'text' "
             "GROUP BY label ORDER BY count DESC LIMIT 20"
+        ).fetchall())
+        mstatuses = _rows(conn.execute(
+            "SELECT memory_status AS label, COUNT(*) AS count "
+            "FROM memories WHERE memory_status IS NOT NULL AND memory_status != '' "
+            "GROUP BY memory_status ORDER BY count DESC"
+        ).fetchall())
+        phases = _rows(conn.execute(
+            "SELECT json_extract(metadata, '$.phase') AS label, COUNT(*) AS count "
+            "FROM memories WHERE json_type(metadata, '$.phase') = 'text' "
+            "GROUP BY label ORDER BY count DESC LIMIT 12"
         ).fetchall())
         tag_counts: dict[str, int] = {}
         for (raw,) in conn.execute(
@@ -400,6 +486,8 @@ async def handle_facets(request: web.Request, gw) -> web.Response:
             "project": projects,
             "stream": streams,
             "status": statuses,
+            "mstatus": mstatuses,
+            "phase": phases,
             "tag": tags,
         },
     })

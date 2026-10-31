@@ -98,13 +98,32 @@ async def handle_get_memory(request: web.Request, gw) -> web.Response:
 
 
 async def handle_delete_memory(request: web.Request, gw) -> web.Response:
-    """DELETE /v30api/memories/{memory_id} — delete a memory."""
+    """DELETE /v30api/memories/{memory_id} — delete a memory.
+
+    Goes through ``audited_delete_memory``: this endpoint used to issue a bare
+    DELETE with no ops_log row, which is how four goal cards could vanish
+    between two backups with no trace (audit 2026-10-29).
+    """
     memory_id = _safe_int(request.match_info.get("memory_id", "0"), 0)
+    from memall.pipeline.ops import audited_delete_memory
     with pool_conn() as conn:
-        conn.execute("DELETE FROM edges WHERE source_id = ? OR target_id = ?", (memory_id, memory_id))
-        conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+        row = conn.execute(
+            "SELECT category FROM memories WHERE id = ?", (memory_id,)
+        ).fetchone()
+        if not row:
+            return web.json_response({"error": "not found"}, status=404)
+        if (row["category"] or "") == "goal":
+            # A goal ends at verify_goal; deleting it would strand its
+            # children and discussions.
+            return web.json_response(
+                {"error": "goal cards cannot be deleted; close them by "
+                          "verification (goal_verify) instead"},
+                status=409,
+            )
+        result = audited_delete_memory(
+            conn, memory_id, by="gateway_v30", reason="HTTP DELETE /v30api/memories")
         conn.commit()
-    return web.json_response(_ok({"deleted": memory_id}))
+    return web.json_response(_ok(result))
 
 
 async def handle_create_memory(request: web.Request, gw) -> web.Response:

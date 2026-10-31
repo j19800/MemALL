@@ -94,7 +94,8 @@ def adaptive_clean(
             # SQLite GLOB does not support POSIX character classes [:punct:]/[:space:]
             # Use Python-side filter for punctuation/whitespace-only content instead
             cur = conn.execute(
-                "SELECT id, content FROM memories WHERE LENGTH(TRIM(content)) = 0"
+                "SELECT id, content FROM memories WHERE LENGTH(TRIM(content)) = 0 "
+                "AND COALESCE(category, '') <> 'goal'"
             )
             punct_ids = []
             for row in cur.fetchall():
@@ -122,7 +123,9 @@ def adaptive_clean(
                 f"compression activated"
             )
             rows = conn.execute(
-                "SELECT id, content FROM memories ORDER BY id LIMIT 5000"
+                "SELECT id, content FROM memories "
+                "WHERE COALESCE(category, '') <> 'goal' "
+                "ORDER BY id LIMIT 5000"
             ).fetchall()
             to_delete: List[int] = []
             n = len(rows)
@@ -182,14 +185,16 @@ def adaptive_clean(
                 f"standard cleaning sufficient"
             )
             cur = conn.execute(
-                "DELETE FROM memories WHERE content IS NULL OR LENGTH(TRIM(content)) = 0"
+                "DELETE FROM memories WHERE COALESCE(category, '') <> 'goal' "
+                "AND (content IS NULL OR LENGTH(TRIM(content)) = 0)"
             )
             cleaned_count = cur.rowcount
         else:
             mode = "standard"
             trigger_reason = f"Growth rate {growth_rate:.2%} within normal range"
             cur = conn.execute(
-                "DELETE FROM memories WHERE content IS NULL OR LENGTH(TRIM(content)) = 0"
+                "DELETE FROM memories WHERE COALESCE(category, '') <> 'goal' "
+                "AND (content IS NULL OR LENGTH(TRIM(content)) = 0)"
             )
             cleaned_count = cur.rowcount
 
