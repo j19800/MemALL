@@ -2694,7 +2694,7 @@ def _filter_by_trust_dict(results: list[dict], viewer: str) -> dict[int, bool]:
         owner = r.get("owner") or ""
         agent = r.get("agent_name") or ""
         # Include if viewer is the owner or creator
-        if owner == viewer or agent == viewer:
+        if viewer and (owner == viewer or agent == viewer):
             allowed[mid] = True
             continue
         # Need visibility — lazy fetch from DB
