@@ -337,6 +337,8 @@ def _handle_discussion(args: dict) -> str:
         return discussion.handle_respond(args)
     elif action == "status":
         return discussion.handle_status(args)
+    elif action == "amend":
+        return discussion.handle_amend(args)
     raise ValueError(f"memall_discussion: unknown action '{action}'")
 
 
@@ -344,7 +346,7 @@ registry.register(ToolDef(
     name="memall_discussion",
     description="Create multi-agent discussions, record stances, check status. Actions: create | respond | status",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["create", "respond", "status"]},
+        "action": {"type": "string", "enum": ["create", "respond", "status", "amend"]},
         "title": {"type": "string", "description": "Discussion title (create)"},
         "background": {"type": "string", "description": "Problem description"},
         "options": {"type": "array", "items": {"type": "string"}, "description": "Solution options"},

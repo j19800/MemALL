@@ -4511,6 +4511,111 @@ def guard_wake_audit_persists() -> Tuple[bool, str]:
                 f"diagnostics_reads_ledger={diag_reads_db}")
 
 
+def guard_discussion_amend_fixes_stale_roster() -> Tuple[bool, str]:
+    """A wrong roster must be CORRECTABLE, otherwise the discussion is stuck.
+
+    AGENTS.md §一.5 already states the requirement — ``participants`` must name
+    the agents actually on the roster, because a departed member makes a
+    discussion un-convergeable by arithmetic.  The protocol said so; the surface
+    did not let anyone act on it (create/respond/status only), so a discussion
+    that named someone who had left could not be repaired at all.
+
+    Measured on #1001746: six participants including claude and marvis (both off
+    the roster since 2026-10-23), rule majority, needing 4 of 6 while only three
+    could ever speak.  It sat active indefinitely.
+
+    What this asserts:
+      1. a 6-participant majority discussion with 3 responses stays ACTIVE
+         (needed = 4) — the stuck state is reproduced, not assumed;
+      2. amend to 3 participants converges it immediately, using the responses
+         already on file;
+      3. the correction is recorded (before/after, rule, actor) rather than
+         leaving a discussion that looks like it always had 3 participants;
+      4. amending a non-active discussion is refused without changing it;
+      5. an unknown rule is rejected;
+      6. the action is advertised on the schema (a surface that is reachable in
+         the dispatcher but absent from the enum is unreachable in practice —
+         the exact drift that cost hours on goal_decompose).
+    """
+    _fresh_db()
+    import json
+    from memall.core.db import get_conn, init_db
+    from memall.mcp.adapter import handle_call
+    from memall.pipeline import convergence as C
+
+    init_db()
+
+    def call(tool, args):
+        return json.loads(handle_call(tool, args))
+
+    def meta_of(did):
+        conn = get_conn()
+        try:
+            raw = conn.execute("SELECT metadata FROM memories WHERE id = ?",
+                               (did,)).fetchone()
+        finally:
+            conn.close()
+        return json.loads(raw[0] or "{}") if raw else {}
+
+    parts = ["dsh", "opencode", "qoder", "gone_a", "gone_b", "gone_c"]
+    made = call("memall_discussion", {"action": "create", "title": "名册修正守卫",
+                                      "background": "g", "participants": parts,
+                                      "convergence_rule": "majority"})
+    did = made.get("discussion_id") or made.get("memory_id")
+    if not did:
+        return False, f"create failed: {made}"
+    for ag in ("dsh", "opencode", "qoder"):
+        call("memall_discussion", {"action": "respond", "discussion_id": did,
+                                   "agent_name": ag, "stance": "agree",
+                                   "arguments": "ok"})
+    stuck = meta_of(did).get("status") == "active"
+
+    amended = call("memall_discussion", {"action": "amend", "discussion_id": did,
+                                         "agent_name": "dsh",
+                                         "participants": ["dsh", "opencode", "qoder"],
+                                         "reason": "gone_* are not on the roster"})
+    after = meta_of(did)
+    converged_after_amend = after.get("status") == "converged"
+    narrowed = amended.get("participants") == ["dsh", "opencode", "qoder"]
+
+    hist = (after.get("roster_history") or [{}])
+    h = hist[-1] if hist else {}
+    history_recorded = (h.get("participants_before") == parts
+                        and h.get("participants_after") == ["dsh", "opencode", "qoder"]
+                        and h.get("by") == "dsh")
+
+    # A non-active discussion is refused and left alone.
+    again = call("memall_discussion", {"action": "amend", "discussion_id": did,
+                                       "agent_name": "dsh",
+                                       "participants": ["dsh"]})
+    refused_when_done = again.get("status") == "converged"
+    unchanged_after_refusal = meta_of(did).get("participants") == ["dsh", "opencode", "qoder"]
+
+    bad = C.amend_discussion(did, participants=["dsh"], convergence_rule="bogus",
+                             actor="dsh", reason="x")
+    bad_rule_rejected = "error" in bad
+
+    import memall.mcp.adapter as ad
+    ad._ensure_loaded()
+    enum = []
+    for t in ad.TOOL_DEFINITIONS:
+        if t["name"] == "memall_discussion":
+            enum = t["inputSchema"]["properties"]["action"]["enum"]
+            break
+    advertised = "amend" in enum
+
+    ok = (stuck and converged_after_amend and narrowed and history_recorded
+          and refused_when_done and unchanged_after_refusal and bad_rule_rejected
+          and advertised)
+    return ok, (f"stuck_state_reproduced={stuck} "
+                f"converged_after_amend={converged_after_amend} "
+                f"roster_narrowed={narrowed} history_recorded={history_recorded} "
+                f"non_active_refused={refused_when_done} "
+                f"left_unchanged={unchanged_after_refusal} "
+                f"bad_rule_rejected={bad_rule_rejected} "
+                f"surface_advertises_amend={advertised}")
+
+
 GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fts_cjk": guard_fts_cjk,
     "fts_tags_indexed": guard_fts_tags_indexed,
@@ -4581,6 +4686,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "session_note_delivery_crosses_processes": guard_session_note_delivery_crosses_processes,
     "discussion_prompts_run_in_resident_tick": guard_discussion_prompts_run_in_resident_tick,
     "wake_audit_persists": guard_wake_audit_persists,
+    "discussion_amend_fixes_stale_roster": guard_discussion_amend_fixes_stale_roster,
     "wake_claimed_in_db": guard_wake_claimed_in_db,
     "goal_tick_on_heartbeat_cadence": guard_goal_tick_on_heartbeat_cadence,
     "empty_identity_rejected_everywhere": guard_empty_identity_rejected_everywhere,

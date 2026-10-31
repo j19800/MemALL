@@ -367,6 +367,102 @@ def list_all_discussions() -> list[dict]:
         conn.close()
 
 
+# ── Amend (roster / rule correction) ──
+
+def amend_discussion(discussion_id: int, participants=None,
+                     convergence_rule: str = "", actor: str = "",
+                     reason: str = "") -> dict:
+    """Correct a discussion's roster or rule, then re-evaluate convergence.
+
+    AGENTS.md §一.5 already states the rule this enforces: ``participants`` must
+    name the agents who are actually on the roster, because a departed member
+    makes the discussion un-convergeable by arithmetic — it will never answer.
+    Measured: #1001746 was created with ``claude``/``marvis`` (both out of the
+    roster since 2026-10-23) alongside the four live agents, so with
+    ``majority`` it needed 4 of 6 while only 3 could ever speak.
+
+    Until now the surface had create/respond/status only, so a wrong roster
+    could not be corrected at all — the discussion was simply stuck.  This is
+    that missing action.
+
+    It records what changed (before/after rosters, rule, actor, reason) in
+    ``metadata.roster_history`` so a later reader can see the correction rather
+    than finding a discussion that simply "always had" four participants, and it
+    re-evaluates immediately: correcting a roster often satisfies the rule with
+    responses that were already on file.
+    """
+    from memall.core.db import get_conn
+
+    if not discussion_id:
+        return {"error": "discussion_id is required"}
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM memories WHERE id = ?",
+                           (int(discussion_id),)).fetchone()
+        if not row:
+            return {"error": f"discussion #{discussion_id} not found"}
+        disc = dict(row)
+        meta = json.loads(disc.get("metadata") or "{}")
+        status = meta.get("status")
+
+        before_p = list(unwrap_meta(meta, "participants") or [])
+        before_r = (meta.get("convergence_rule") or "unanimous").strip().lower()
+
+        # Validate the REQUEST before consulting the state: an unknown rule or an
+        # empty roster is a malformed call whatever the discussion's status, and
+        # reporting it as "not active" would hide the real mistake.
+        new_p = before_p
+        if participants is not None:
+            cleaned = []
+            for p in participants:
+                name = str(p).strip()
+                if name and name.lower() not in [c.lower() for c in cleaned]:
+                    cleaned.append(name)
+            if not cleaned:
+                return {"error": "participants must contain at least one agent"}
+            new_p = cleaned
+
+        new_r = (convergence_rule or before_r).strip().lower()
+        if new_r not in ("unanimous", "majority", "any"):
+            return {"error": f"unknown convergence_rule '{new_r}' "
+                             f"(expected unanimous | majority | any)"}
+
+        if status != "active":
+            return {"status": status, "discussion_id": int(discussion_id),
+                    "warning": f"discussion is {status}; only active ones can be amended"}
+
+        if new_p == before_p and new_r == before_r:
+            return {"status": "unchanged", "discussion_id": int(discussion_id),
+                    "participants": new_p, "convergence_rule": new_r}
+
+        meta["participants"] = new_p
+        meta["convergence_rule"] = new_r
+        meta.setdefault("roster_history", []).append({
+            "at": datetime.now(timezone.utc).isoformat(),
+            "by": (actor or "").strip(), "reason": (reason or "")[:400],
+            "participants_before": before_p, "participants_after": new_p,
+            "rule_before": before_r, "rule_after": new_r,
+        })
+        conn.execute("UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
+                     (json.dumps(meta, ensure_ascii=False),
+                      datetime.now(timezone.utc).isoformat(), int(discussion_id)))
+        conn.commit()
+
+        disc["metadata"] = json.dumps(meta, ensure_ascii=False)
+        recheck = {}
+        try:
+            recheck = _converge_single(conn, disc)
+        except Exception as exc:
+            logger.debug("amend: recheck failed for %s", discussion_id, exc_info=True)
+            recheck = {"warning": f"recheck failed: {exc}"}
+        return {"status": "amended", "discussion_id": int(discussion_id),
+                "participants": new_p, "convergence_rule": new_r,
+                "participants_before": before_p, "rule_before": before_r,
+                "recheck": recheck}
+    finally:
+        conn.close()
+
+
 # ── Confirm & converge ──
 
 

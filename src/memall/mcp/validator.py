@@ -20,7 +20,7 @@ from pydantic import BaseModel, ValidationError
 
 from memall.mcp.models import (
     AdaptiveInput, AskInput, BatchCaptureInput, BatchSearchInput, CaptureInput, ConnectInput, DBInput,
-    DigestInput, DiscussionCreateInput, DiscussionRespondInput,
+    DigestInput, DiscussionAmendInput, DiscussionCreateInput, DiscussionRespondInput,
     DiscussionStatusInput, DistillListInput, DistillSummarizeInput,
     FedConflictsInput, FedDeliverInput, FedExtractInput, FedInjectInput,
     FedPublishInput, FedQueryInput, ForgetInput, GatewayInput,
@@ -114,6 +114,7 @@ _ACTION_MODELS: dict[tuple[str, str], type[BaseModel]] = {
     ("memall_discussion", "create"): DiscussionCreateInput,
     ("memall_discussion", "respond"): DiscussionRespondInput,
     ("memall_discussion", "status"): DiscussionStatusInput,
+    ("memall_discussion", "amend"): DiscussionAmendInput,
 
     # memall_federation
     ("memall_federation", "query"): FedQueryInput,

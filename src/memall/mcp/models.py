@@ -686,6 +686,40 @@ class DBInput(BaseModel):
 # ── Discussion tools (Phase 1.5) ──
 
 
+class DiscussionAmendInput(BaseModel):
+    """memall_discussion action=amend - correct a roster or rule.
+
+    AGENTS.md §一.5 requires ``participants`` to name the agents actually on the
+    roster; a departed member makes a discussion un-convergeable by arithmetic.
+    Until this action existed a wrong roster could not be corrected at all.
+    """
+    discussion_id: int = Field(..., ge=1)
+    participants: Optional[list] = None
+    convergence_rule: Optional[str] = Field(None, pattern=r"^(unanimous|majority|any)$")
+    reason: str = Field("", max_length=400)
+    agent_name: Optional[str] = Field(None, max_length=200)
+
+    @field_validator("participants", mode="before")
+    @classmethod
+    def _participants_accepts_json_string(cls, v):
+        if not isinstance(v, str):
+            return v
+        import json as _json
+
+        text = v.strip()
+        if not text:
+            return None
+        try:
+            parsed = _json.loads(text)
+        except Exception:
+            return [x.strip() for x in text.split(",") if x.strip()]
+        if isinstance(parsed, str):
+            return [parsed]
+        if not isinstance(parsed, list):
+            raise ValueError("participants must be a list or a comma-separated string")
+        return parsed
+
+
 class DiscussionCreateInput(BaseModel):
     title: str = Field(..., min_length=1, max_length=500)
     background: str = Field("", max_length=10000)

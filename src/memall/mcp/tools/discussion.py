@@ -43,6 +43,19 @@ def handle_respond(arguments: dict) -> str:
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
+def handle_amend(arguments: dict) -> str:
+    from memall.pipeline.convergence import amend_discussion
+
+    result = amend_discussion(
+        discussion_id=arguments.get("discussion_id"),
+        participants=arguments.get("participants"),
+        convergence_rule=arguments.get("convergence_rule") or "",
+        actor=arguments.get("agent_name") or "",
+        reason=arguments.get("reason") or "",
+    )
+    return json.dumps(result, ensure_ascii=False, default=str)
+
+
 def handle_status(arguments: dict) -> str:
     disc_id = arguments.get("discussion_id", 0)
     if disc_id:
