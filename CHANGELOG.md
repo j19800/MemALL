@@ -11,9 +11,19 @@
 - **保留派发能力（不因安全修复牺牲协作）**：`DISPATCH_ACTIONS`（capture / smart_store / batch_capture / task_claim / task_resolve / task_block / discussion_create 等）显式 `agent_name` 表示"为谁建卡"，属正常协作，予以放行且**不绑定**为会话身份；读取路径一律以握手身份为准。
 - 验收：`red_blue_checks.py` 的 `session_identity_is_authoritative`、`unregistered_identity_is_least_privilege` 由 FAIL 转 PASS；独立复现脚本确认攻击返回 `total=0` 且会话保持 `alpha`。
 
-**仍未修复（需产品决策，未擅自改动）**：
+**第三项已按"无身份 = 只读公开 + 强制入口身份"的方案修复**（详见下方「检索身份边界」一节）。
 
-- **无 viewer 的检索绕过信任过滤**：`unified_search` 在 direct / fts5 / vector / hybrid 四个分支未把 `viewer` 传到底层检索，无身份调用可读到任何可见性的行（红蓝 `every_read_path_applies_trust_filter` 仍 FAIL）。修复需决定"无身份检索是否只返回 public"——这会改变 CLI 单用户场景的检索结果，故留待拍板。
+### Security（检索身份边界：无身份 = 只读公开 + 入口强制身份）
+
+选定的策略：**检索一律走信任过滤；无身份只可能看到 `public`；外部入口没有身份就直接拒绝**。三条实现要点：
+
+- **入口强制身份（`mcp/adapter.py`、`session_identity.READ_ACTIONS`）**：`search` / `retrieve` / `vector_search` / `hybrid_search` / `timeline` / `traverse` / `trace` / `hot` / `digest` / `fed_query` 等读动作，若会话与参数都没有身份，返回结构化错误并**说明原因**，而不是返回一个与"没搜到"无法区分的空数组。新增指标 `tool_call_missing_identity`。
+- **CLI 绑定本机人类身份（`cli/handle_call.py`）**：CLI 是操作者在自己机器上跑的可信入口，调用前绑定 `identity.human_owner`（`agent_type='human'`，读级别 `private`）。这样"无身份只读 public"不会把 CLI 打死——实测 `memall capture` 写入后 `memall search` 能读回（`total=1`）。
+- **修正"查看者身份"与"内容归属过滤"的混淆（`unified_search`）**：四个分支原先把 `agent_name`（adapter 每轮重贴的**会话身份**）当成了 `agent_name` 内容过滤器传给底层检索，于是**人类本人搜自己库里的记忆会得到 0 条**（那些行是别的 agent 写的）。现在 `agent_name` 只作为 viewer，按作者过滤必须显式传 `agent_name_filter`。
+- **`total` 不再虚报**：`hybrid_search` 的 `total` 原为 `len(scores)`（信任过滤**前**的候选数），越权调用方会看到 `total=1` 却 `results=[]`，任何按 total 分页的调用方都被误导。现改为过滤后的实际条数。
+- **`retrieve.py` 两个 handler 补传 `viewer`**：`handle_vector_search` / `handle_hybrid_search` 拿到了 `agent_name` 却从未交给信任过滤器，MCP 面因此可绕过隔离。
+
+验收：红蓝三项**全部转绿**——`session_identity_is_authoritative`、`unregistered_identity_is_least_privilege`、`every_read_path_applies_trust_filter`。另有独立实测四场景：无身份→拒绝；`eve`（shared）→0 条；人类本人→1 条；CLI→1 条。60/60 pytest、10/10 定向守卫。
 
 ### Fixed（仓库可克隆：HEAD 曾是断的）
 
