@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/MCP-2025--03--26-purple" alt="MCP">
-  <img src="https://img.shields.io/badge/version-0.1.71-green" alt="Version 0.1.69">
+  <img src="https://img.shields.io/badge/version-0.1.72-green" alt="Version 0.1.69">
   <img src="https://img.shields.io/github/stars/j19800/MemALL?style=social" alt="GitHub stars">
 </p>
 
@@ -203,6 +203,7 @@ src/memall/
 - [x] **v0.1.70** — 关闭剩余全部跨 Agent 读路径泄露：
 esources/read、ed_publish 洗白与署名伪造、	raverse/	imeline/	race 均执行信任过滤；amily.db 跟随 MEMALL_DB_PATH。五个红蓝 duel 持续守护。
 - [x] **v0.1.71** — 关闭最后四项 P1：security permit 加授权门（禁止自我放宽）、契约 level/category 不再能经 update() 改写、网关破坏性路由即便来自 loopback 也要凭据、两套身份归一化合并为一。七个红蓝 duel 持续守护。并修复了我自己那轮身份改动引入的讨论收敛回归。
+- [x] **v0.1.72** — 任务卡状态转换改为对"观察到的状态"做 compare-and-set，不再整块覆盖 metadata：并发认领不会再抹掉完成记录（修复前实测 10/40 丢失，修复后 0/80），已完成的卡也不会被认领重开。同时消除了最后一个 flaky 守卫。
 - [ ] **v0.2.0** — Web 仪表盘、用户系统、Pro 版
 - [ ] **v0.3.0** — 云同步、团队协作、API 网关
 

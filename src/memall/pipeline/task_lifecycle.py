@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 
 from memall.core.db import get_conn
 from memall.core.status import NOT_ARCHIVED, pending_tasks, task_status_of, task_status_eq
+from memall.core.task_cas import cas_update_metadata
 from memall.core.task_identity import can_mutate, forbidden_payload
 from memall.core.utils import now_iso, unwrap
 
@@ -234,11 +235,27 @@ def resolve_task(task_id: int, result: str = "", caller=None) -> dict:
         meta["resolved_at"] = now
         if result:
             meta["resolution"] = result[:2000]
-        # Also close the arc so it drops off dashboards
-        conn.execute(
-            "UPDATE memories SET metadata=?, updated_at=?, arc_status='closed' WHERE id=?",
-            (json.dumps(meta, ensure_ascii=False), now, task_id),
-        )
+        # Also close the arc so it drops off dashboards.
+        #
+        # The guard above ("status not in active/claimed/blocked") is a CHECK,
+        # and a check is not a fence: a concurrent claim can land between it
+        # and this write, after which a stale copy overwrites the other's
+        # change.  Measured 10/40 real claim/resolve interleavings ended with
+        # a completed card back at "claimed".  The predicate makes the write
+        # atomic at the row.
+        won = cas_update_metadata(conn, task_id, meta, expected_status=status, now=now)
+        if not won:
+            conn.rollback()
+            current = conn.execute(
+                "SELECT metadata FROM memories WHERE id=?", (task_id,)).fetchone()
+            live = task_status_of(
+                (json.loads(current["metadata"] or "{}").get("status") if current else ""))
+            return {"error": (
+                f"task #{task_id} changed while it was being resolved "
+                f"(observed '{status}', now '{live}'). Nothing was written."
+            ), "task_id": task_id, "observed_status": status,
+                "current_status": live}
+        conn.execute("UPDATE memories SET arc_status='closed' WHERE id=?", (task_id,))
         closed = close_task_reminders(conn, task_id)
         conn.commit()
         return {"task_id": task_id, "resolved_at": now,

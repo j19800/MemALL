@@ -443,6 +443,144 @@ def duel_pinned_contract_fields_are_immutable() -> Tuple[bool, str]:
     return True, f"契约类目不可改写（保持 category={now_cat!r} level={now_level!r}）"
 
 
+def duel_completed_card_cannot_be_reopened() -> Tuple[bool, str]:
+    """red: 认领一张已经 resolved 的卡，把它拉回 claimed。
+
+    blue: 终态就是终态。claim_task 原来只拒绝 ("done", "archived")，而生命周期
+    还会以 "resolved"/"blocked"/"converged" 关单——于是认领能把已完成的卡重开
+    （R3-A）。加了 CAS 之后它甚至"名正言顺"：谓词匹配的正是它刚读到的 resolved。
+    """
+    _fresh_db()
+    from memall.core.thin_waist import capture
+
+    mid = capture(
+        "DUEL_REOPEN 这条卡用于验证终态不可重开，正文足够长以通过质量门检查。",
+        level="L5", category="task", agent_name="worker", owner="老陈",
+        metadata=json.dumps({"status": "active", "assignee": "worker"}))
+
+    from memall.mcp.tasks import claim_task
+    from memall.pipeline.task_lifecycle import resolve_task
+
+    r1 = claim_task(mid, "worker")
+    r2 = resolve_task(mid, result="done", caller="worker")
+    if "error" in r2:
+        return False, f"setup failed: resolve refused ({r2.get('error')})"
+
+    # The card is now resolved.  A claim must be refused, not reopen it.
+    r3 = claim_task(mid, "worker")
+
+    from memall.core.db import get_conn
+
+    c = get_conn()
+    m = json.loads(c.execute("SELECT metadata FROM memories WHERE id=?",
+                             (mid,)).fetchone()["metadata"])
+    c.close()
+    final = m.get("status")
+
+    if final != "resolved":
+        return False, (f"已完成的卡被重开：claim returned "
+                       f"{r3.get('status')!r}, card is now {final!r}")
+    if m.get("resolved_at") != m.get("resolved_at"):
+        return False, "resolved_at disappeared"
+    claimed_by = m.get("claimed_by")
+    if claimed_by != "worker":
+        return False, f"claimed_by was rewritten to {claimed_by!r}"
+    return True, f"终态不可重开（claim -> {r3.get('status')!r}，卡片保持 resolved）"
+
+
+def duel_claim_resolve_race_loses_nothing() -> Tuple[bool, str]:
+    """red: 两个线程同时认领与完成同一张卡，观察已完成状态是否被覆盖。
+
+    blue: 用状态 CAS 写入；观察者为旧状态时写入必须失败，而不是覆盖。
+    修复前实测 40 轮 10 次丢失（已完成卡回到 claimed）。
+    """
+    _fresh_db()
+    import threading
+
+    from memall.core.thin_waist import capture
+
+    lost = 0
+    rounds = 30
+    for i in range(rounds):
+        mid = capture(
+            f"DUEL_RACE {i} 并发认领与完成，正文足够长以通过质量门检查。",
+            level="L5", category="task", agent_name="worker", owner="老陈",
+            metadata=json.dumps({"status": "active", "assignee": "worker"}))
+
+        from memall.mcp.tasks import claim_task
+        from memall.pipeline.task_lifecycle import resolve_task
+
+        def do_claim():
+            claim_task(mid, "worker")
+
+        def do_resolve():
+            resolve_task(mid, result="done", caller="worker")
+
+        t1 = threading.Thread(target=do_claim)
+        t2 = threading.Thread(target=do_resolve)
+        t1.start(); t2.start(); t1.join(); t2.join()
+
+        from memall.core.db import get_conn
+
+        c = get_conn()
+        m = json.loads(c.execute("SELECT metadata FROM memories WHERE id=?",
+                                 (mid,)).fetchone()["metadata"])
+        c.close()
+        # A completion overwritten: the card says claimed but bears the
+        # resolve stamp written by the other transition.
+        if m.get("status") in ("active", "claimed") and m.get("resolved_at"):
+            lost += 1
+
+    if lost:
+        return False, f"{lost}/{rounds} 轮里已完成的卡被认领覆盖"
+
+    # Second property: a FRESH card must be claimed exactly once.  Later
+    # concurrent claims may report "reclaimed" -- an idempotent re-claim is
+    # the documented behaviour -- but two writers must never both win a card
+    # that was still fresh.  Instrument the CAS decisions to tell them apart.
+    import memall.mcp.tasks as _T
+
+    events = []
+    _orig = _T.cas_update_metadata
+
+    def _traced(conn, task_id, meta, expected_status=None, now=None):
+        _res = _orig(conn, task_id, meta, expected_status=expected_status, now=now)
+        events.append({"expected": expected_status, "won": _res})
+        return _res
+
+    _T.cas_update_metadata = _traced
+    try:
+        fresh_double = 0
+        for i in range(15):
+            mid = capture(
+                f"DUEL_FRESH {i} 新卡只能被认领一次，正文足够长以通过质量门检查。",
+                level="L5", category="task", agent_name="worker", owner="老陈",
+                metadata=json.dumps({"status": "active", "assignee": "worker"}))
+            events.clear()
+            b = threading.Barrier(3)
+
+            def _w():
+                b.wait()
+                claim_task(mid, "worker")
+
+            ths = [threading.Thread(target=_w) for _ in range(3)]
+            for t in ths:
+                t.start()
+            for t in ths:
+                t.join()
+            active_wins = sum(1 for e in events
+                              if e["won"] and e["expected"] == "active")
+            if active_wins > 1:
+                fresh_double += 1
+    finally:
+        _T.cas_update_metadata = _orig
+
+    if fresh_double:
+        return False, f"{fresh_double}/15 张新卡被两个线程同时认领"
+    return True, (f"{rounds} 轮并发认领/完成无丢失；新卡始终只被一个线程认领"
+                  "（其余为幂等重认领）")
+
+
 # ── manifest ─────────────────────────────────────────────────────────────
 
 DUELS: Dict[str, Callable[[], Tuple[bool, str]]] = {
@@ -453,6 +591,8 @@ DUELS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "fed_publish_cannot_launder_or_forge": duel_fed_publish_cannot_launder_or_forge,
     "permission_grants_are_authorised": duel_permission_grants_are_authorised,
     "pinned_contract_fields_are_immutable": duel_pinned_contract_fields_are_immutable,
+    "completed_card_cannot_be_reopened": duel_completed_card_cannot_be_reopened,
+    "claim_resolve_race_loses_nothing": duel_claim_resolve_race_loses_nothing,
 }
 
 

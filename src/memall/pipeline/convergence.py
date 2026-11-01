@@ -635,7 +635,47 @@ def confirm_discussion(
     the discussion — no multi-agent waiting.
 
     Returns decision_id + task_ids from converge_discussion.
+
+    Retried on ``database is locked``: this function reads the discussion,
+    commits the response, then reads again and WRITES the converged state on
+    the same connection.  In WAL, a read snapshot that upgrades to a writer
+    raises "database is locked" immediately and ``busy_timeout`` does not
+    cover it.  Under a concurrent writer (a background pipeline thread while
+    an agent answers) that is exactly the upgrade, so the stance was lost and
+    the discussion silently stayed "active" — measured 1 in 8 guard runs.
+    The retry is safe: the response insert is idempotent by content hash and
+    the convergence write is guarded by the status check at the top.
     """
+    import random
+    import sqlite3
+    import time
+
+    from memall.config import get_config
+    from memall.core.thin_waist import _is_lock_error
+
+    attempts = max(1, int(get_config("convergence.lock_retries", 5) or 5))
+    for attempt in range(attempts):
+        try:
+            return _confirm_discussion_once(discussion_id, agent_name, stance, note)
+        except sqlite3.OperationalError as exc:
+            if not _is_lock_error(exc) or attempt == attempts - 1:
+                raise
+            wait = min(0.05 * (2 ** attempt), 1.0) + random.uniform(0, 0.03)
+            logger.warning(
+                "confirm_discussion: %s (attempt %d/%d), retrying in %.2fs",
+                exc, attempt + 1, attempts, wait,
+            )
+            time.sleep(wait)
+    raise RuntimeError("confirm_discussion: retry loop exited")  # pragma: no cover
+
+
+def _confirm_discussion_once(
+    discussion_id: int,
+    agent_name: str,
+    stance: str = "confirm",
+    note: str = "",
+) -> dict:
+    """One attempt of :func:`confirm_discussion` (see it for the retry policy)."""
     agent_name = normalize_agent_name(agent_name)
     conn = get_conn()
     try:

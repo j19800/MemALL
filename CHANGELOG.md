@@ -1,3 +1,36 @@
+## [v0.1.72] - 2026-11-01
+
+修掉最后一个已知缺陷（`claim_task` 并发），以及修它的过程中暴露的**两个真问题**：一个卡片的丢失更新竞态、一个原本 flaky 的守卫。
+
+### Fixed（R3-A 卡片状态丢失更新）
+
+- **已完成的卡会被"认领"抹回去**：`claim_task` / `resolve_task` 都是"读整行 metadata → 在内存里改 → 整块写回 `WHERE id = ?`"。两个转换交错时，后写的一方会把先写的一方**整块覆盖**。实测真实 claim/resolve 交错：**40 轮里 10 次**，一张 `resolved` 的卡被回退成 `claimed`，完成记录蒸发。
+- 修法：新增 `core/task_cas.py`，写入改为**状态 CAS**——`UPDATE ... WHERE id = ? AND COALESCE(json_extract(metadata,'$.status'),'') = <观察到的状态>`。观察到的状态已经变了就写不进去，返回 `conflict` 让调用方重新读取，而不是覆盖别人的工作。
+- 验收：同样的并发测试从 **10/40 丢失降到 0/80**；`claim vs claim` 的双写从 **50/50 双成功降到新卡永远只被一个线程认领**（其余是幂等重认领 `claimed→claimed`，属文档行为）。
+
+### Fixed（R3-A2 终态可被重开）
+
+- **`claim_task` 只把 `done`/`archived` 当终态**，而生命周期还会以 `resolved`/`blocked`/`converged` 关单。于是认领能把一张**已完成**的卡拉回 `claimed`——加了 CAS 之后它甚至"名正言顺"：谓词匹配的正是它刚读到的 `resolved`。
+- 修法：`is_terminal_task_status()` 统一终态集合，claim 遇到任何终态直接返回 `already_closed`。**终态就是终态。**
+- 验收：`completed_card_cannot_be_reopened` 守卫通过；把终态集合换回旧的两值后该守卫**立即 FAIL**，证明它不是空守卫。
+
+### Fixed（守卫 flaky：`goal_lifecycle_end_to_end`）
+
+- 该守卫有 **2/5～1/8 的失败率**，失败信息是 `chain=False` 连带后面全 False。追下去是两个各自独立的原因：
+  1. **`confirm_discussion` 缺锁重试**：它「读讨论 → 提交回应 → 再读 → 写收敛状态」，在 WAL 下读快照升级写者会**立即**抛 `database is locked`（`busy_timeout` 对这种升级不生效）。撞上后台管线线程时就丢掉这次表态，讨论静默停在 `active`。已改为带指数退避的重试（回应按 content hash 幂等，收敛写入有 status 前置检查，重试安全）。
+  2. **守卫自身的断言有竞态**：`resolve_pending_deliberations()` 会收敛任何"至少有一个回应"的讨论，所以 step(3)「finalize 未收敛时应 blocked」在别人已经答过时会得到 `blocked_before_converge=False`——那是 finalize 的正确行为，不是 bug。现在先断言前置状态（讨论必须仍是 `active`），再断言阻塞。
+- 验收：连跑 **12/12 全过**（修复前 1/5 失败）。
+
+### Added（守卫固化）
+
+- 新增 duel：`completed_card_cannot_be_reopened`、`claim_resolve_race_loses_nothing`。`src/red_blue_checks.py` 现为 **9/9 全绿**。
+- 定向 `check_fixes` **13/13**，相关 pytest **60/60**。
+
+### 已知未修
+
+- **写入侧署名不受限**：按既定「写入放行、读取锁定」策略保留（冒名靠 `wake_audit`/`ops_log` 可观测）。
+- 网关 loopback 白名单已收窄（破坏性路由需凭据），但 SPA 读取按设计仍免 token。
+
 ## [v0.1.71] - 2026-11-01
 
 关闭 10-31 红蓝审查的最后四项 P1。每一项都先复现、后修、再固化成守卫。

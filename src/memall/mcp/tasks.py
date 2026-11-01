@@ -19,6 +19,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
+from memall.core.task_cas import cas_update_metadata, is_terminal_task_status
+
 logger = logging.getLogger("memall.mcp.tasks")
 
 _NOT_ARCHIVED = "COALESCE(m.memory_status, '') != 'archived'"
@@ -69,7 +71,14 @@ def claim_task(task_id: int, agent_name: str) -> dict:
 
         meta = _meta_of(row["metadata"])
         status = _status_of(meta.get("status"))
-        if status in ("done", "archived"):
+        # A finished card must not be claimable.  This used to name only
+        # ("done", "archived") while the lifecycle also closes cards as
+        # "resolved" / "blocked" / "converged" -- so a claim could reopen a
+        # completed card, and with the CAS added for concurrency it did so
+        # "legitimately" (the predicate matched the resolved state it had just
+        # read).  Measured: a resolve landing first was then overwritten back
+        # to "claimed" by the claim that followed.  Terminal means terminal.
+        if is_terminal_task_status(status):
             return {"status": "already_closed", "task_id": task_id,
                     "state": status,
                     "subject": row["subject"]}
@@ -160,9 +169,33 @@ def claim_task(task_id: int, agent_name: str) -> dict:
         meta["claimed_by"] = agent_name
         meta["claimed_at"] = meta.get("claimed_at") or now
         meta["assignee"] = meta.get("assignee") or row["agent_name"] or agent_name
-        conn.execute(
-            "UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
-            (json.dumps(meta, ensure_ascii=False), now, task_id))
+
+        # Compare-and-set on the status this claim observed.
+        #
+        # Writing the whole metadata dict back with only ``WHERE id = ?``
+        # made this a lost-update race: when a concurrent resolve landed
+        # between our read and our write, our stale copy put the card back
+        # to "claimed" and the completion disappeared.  Measured 10/40 on
+        # real claim/resolve interleavings -- a resolved card reappeared as
+        # "claimed".  Re-reading inside the transaction is not enough by
+        # itself; the predicate is what makes the write atomic at the row.
+        won = cas_update_metadata(conn, task_id, meta, expected_status=status, now=now)
+        if not won:
+            conn.rollback()
+            current = conn.execute(
+                "SELECT metadata FROM memories WHERE id = ?", (task_id,)).fetchone()
+            live = _status_of(_meta_of(current["metadata"])) if current else "missing"
+            return {
+                "status": "conflict",
+                "task_id": task_id,
+                "reason": (
+                    f"the card changed while this claim was being applied "
+                    f"(observed '{status}', now '{live}'). Nothing was written; "
+                    "re-read the card and decide again."
+                ),
+                "observed_status": status,
+                "current_status": live,
+            }
         conn.commit()
 
         body = row["content"] or ""

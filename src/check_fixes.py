@@ -2722,6 +2722,7 @@ def guard_goal_lifecycle_end_to_end() -> Tuple[bool, str]:
     """
     _fresh_db()
     import json
+    import time
     from memall.core.db import get_conn, init_db
     from memall.mcp.adapter import handle_call
     from memall.pipeline.goals import goal_tick
@@ -2782,6 +2783,21 @@ def guard_goal_lifecycle_end_to_end() -> Tuple[bool, str]:
                           "goal_id": gid, "discussion_id": did})
 
     # (3) finalize blocked before convergence
+    #
+    # Assert the precondition too: this step used to flake because
+    # resolve_pending_deliberations() (the pipeline sweep) converges any
+    # discussion that has AT LEAST ONE response, so if anything in the same
+    # process had already answered this discussion, finalize would not be
+    # blocked and the guard reported "blocked_before_converge=False" for a
+    # perfectly correct finalize.  Check the state first, and only then
+    # assert the block.
+    dstat = (call("memall_discussion", {"action": "status",
+                                        "discussion_id": did}).get("discussion") or {}
+             ).get("status")
+    if dstat != "active":
+        return False, (f"precondition violated: discussion #{did} is {dstat!r} "
+                       "before any stance was recorded")
+
     pre = call("memall_write", {"action": "goal_finalize", "agent_name": PM,
                                 "goal_id": gid})
     blocked_before = pre.get("status") == "blocked"
@@ -2790,6 +2806,23 @@ def guard_goal_lifecycle_end_to_end() -> Tuple[bool, str]:
         call("memall_discussion", {"action": "respond", "discussion_id": did,
                                    "agent_name": ag, "stance": "agree",
                                    "arguments": f"{ag} ok"})
+
+    # Convergence can be applied inline OR scheduled on the capture pipeline,
+    # depending on which path the last stance took.  Finalising immediately
+    # after the last respond was therefore FLAKY: measured 1 failure in 5 runs
+    # ("chain=False" with every later step also False, because finalize was
+    # still blocked).  Wait for the discussion to actually converge instead of
+    # assuming the last call did it synchronously.
+    converged = False
+    for _ in range(40):
+        st = call("memall_discussion", {"action": "status", "discussion_id": did})
+        state = (st.get("discussion") or {}).get("status") or st.get("status")
+        if state == "converged":
+            converged = True
+            break
+        time.sleep(0.25)
+    if not converged:
+        return False, f"discussion #{did} never converged (last status: {state!r})"
 
     # (4) finalize materialises the chain
     fin = call("memall_write", {"action": "goal_finalize", "agent_name": PM,

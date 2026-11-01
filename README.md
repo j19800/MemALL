@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/MCP-2025--03--26-purple" alt="MCP">
-  <img src="https://img.shields.io/badge/version-0.1.71-green" alt="Version 0.1.69">
+  <img src="https://img.shields.io/badge/version-0.1.72-green" alt="Version 0.1.69">
   <img src="https://img.shields.io/github/stars/j19800/MemALL?style=social" alt="GitHub stars">
 </p>
 
@@ -208,14 +208,16 @@ src/memall/
 
 - [x] **v0.1.0** — Core MCP server, 7 consolidated tool endpoints, CLI, PyPI package
 - [x] **v0.1.69** — Repo made clonable again (`task_identity` + migrations 038/040 were live but uncommitted), goal `triage` gate now emits an action, skills layer transactions fixed for concurrency, policy refusals return 403 instead of 500
-- [x] **v0.1.70** — Every remaining cross-agent read path closed: esources/read, ed_publish laundering/attribution forgery, and 	raverse/	imeline/	race now apply the trust filter; amily.db follows MEMALL_DB_PATH. Five red/blue duels now guard these.
+- [x] **v0.1.70** — Every remaining cross-agent read path closed: 
+esources/read, ed_publish laundering/attribution forgery, and 	raverse/	imeline/	race now apply the trust filter; amily.db follows MEMALL_DB_PATH. Five red/blue duels now guard these.
 - [x] **v0.1.71** — The four remaining P1s: security permit is now authorised (no self-escalation), contract level/category can no longer be rewritten through update(), destructive gateway routes require a credential even from loopback, and the two identity normalisers are unified. Seven red/blue duels guard them. Also fixes a convergence regression my own identity change introduced.
+- [x] **v0.1.72** — Task-card transitions are now a compare-and-set on the observed status instead of a whole-metadata overwrite: a concurrent claim can no longer erase a completion (measured 10/40 lost before, 0/80 after), and a finished card can no longer be re-opened by a claim. Also removed the last known flaky guard.
 - [ ] **v0.2.0** — Web dashboard, user system, Pro tier gating
 - [ ] **v0.3.0** — Cloud sync, team collaboration, API gateway
 
 ### Known gaps (stated, not hidden)
 
-- **`claim_task` is not atomic across processes.** `mcp/tasks.py` does read → modify → `UPDATE ... WHERE id = ?` with no state predicate and no row lock, so two concurrent claims end last-writer-wins and `claimed_by` is silently overwritten. Planned: add a state predicate or a unique index on `(task_id, status)`.
+- **Task transitions use an optimistic compare-and-set, not a row lock.** `core/task_cas.py` writes only if the stored status still equals the one the caller read, so a lost update becomes a `conflict` the caller retries. It is not a true pessimistic lock: two writers can still both pass the read and one simply loses the write, which is safe for status but means callers must handle `conflict`.
 - **Goal-level block reasons are not observable.** Cards already carry a two-value `last_block_reason` enum; goals still `return None` when they are stuck, so "why this goal is not moving" is invisible.
 - **The guard suite is slow by design.** Every guard replays all migrations via `init_db()`, so a full run is measured in hours rather than minutes. Treat a green card guard set as evidence for that set, not for the whole repository.
 - **`check_fixes.py` leaves scratch directories** under `%TEMP%` (`mkdtemp` without `rmtree`).
