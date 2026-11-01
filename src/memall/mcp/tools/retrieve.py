@@ -315,12 +315,25 @@ def handle_trace(arguments: dict) -> str:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, thread_id, level, category, subject, content, agent_name, owner, metadata, created_at "
-            "FROM memories WHERE id = ?", (mem_id,)
+            "SELECT * FROM memories WHERE id = ?", (mem_id,)
         ).fetchone()
         if not row:
             return json.dumps({"error": f"memory #{mem_id} not found"})
-        
+
+        # trace returns a memory's full content plus its neighbours; without a
+        # trust check it was a direct read of any private row by id.
+        viewer = (arguments.get("agent_name") or "").strip()
+        if not viewer:
+            return json.dumps({"error": (
+                "trace requires an agent identity: it returns memory content, "
+                "so the caller must be identified for the trust filter."
+            )}, ensure_ascii=False)
+        from memall.core.thin_waist import _filter_by_trust, _row_to_memory
+
+        if not _filter_by_trust(conn, [_row_to_memory(row)], viewer):
+            return json.dumps({"error": f"memory #{mem_id} is not visible to {viewer!r}"},
+                              ensure_ascii=False)
+
         meta = {}
         try:
             meta = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]

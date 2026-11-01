@@ -22,6 +22,9 @@ def handle_publish(arguments: dict) -> str:
         source_agent=arguments.get("source_agent", ""),
         trust_level=arguments.get("trust_level", "family"),
         category=arguments.get("category", ""),
+        # The adapter re-attaches the session identity; publishing must verify
+        # the caller may actually SEE the source memory.
+        viewer=arguments.get("agent_name", ""),
     )
     return json.dumps(result, ensure_ascii=False)
 

@@ -13,6 +13,10 @@ def handle_connect(arguments: dict) -> str:
 
 def handle_traverse(arguments: dict) -> str:
     args = dict(arguments)
-    args.pop("agent_name", None)
-    graph = traverse(**args)
+    agent_name = args.pop("agent_name", None)
+    # Traversal returns node CONTENT: hand the caller's identity down as the
+    # viewer so the trust filter can drop nodes it may not read.  Previously
+    # the identity was dropped entirely and `traverse(1)` returned a private
+    # memory plus its whole neighbourhood.
+    graph = traverse(viewer=agent_name or None, **args)
     return json.dumps(graph, ensure_ascii=False)

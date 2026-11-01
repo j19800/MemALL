@@ -2979,8 +2979,15 @@ def traverse(
     relation_filter: Optional[str] = None,
     thread_aware: bool = False,
     as_of: Optional[str] = None,
+    viewer: Optional[str] = None,
 ) -> dict:
     """BFS graph traversal from ``node_id``.
+
+    ``viewer``: when supplied, nodes the viewer may not read are dropped from
+    the returned graph.  Graph traversal used to hand back every node's content
+    to any caller, so ``traverse(1)`` leaked a private memory plus everything
+    reachable from it.  Passing no viewer keeps the historical
+    no-filter behaviour for internal callers.
 
     Bitemporal (P0-3): by default only edges whose validity window covers
     ``as_of`` (defaults to now) are traversed; invalidated edges are
@@ -3132,6 +3139,22 @@ def traverse(
                 "level": root["level"],
                 "confidence": root["confidence"],
             }
+
+        # Trust filter over the assembled graph.  Traversal returns node
+        # CONTENT, so without this a single call exposed a private memory and
+        # everything reachable from it to any caller.
+        if viewer:
+            full_rows = conn.execute(
+                f"SELECT * FROM memories WHERE id IN ({','.join('?' for _ in nodes)})",
+                tuple(nodes),
+            ).fetchall()
+            allowed = {m.id for m in _filter_by_trust(
+                conn, [_row_to_memory(r) for r in full_rows], viewer)}
+            nodes = {k: v for k, v in nodes.items() if k in allowed}
+            # Drop edges that would now point at invisible nodes.
+            edges_out = [e for e in edges_out
+                         if e.get("source_id") in nodes or e.get("source_id") is None]
+            edges_out = [e for e in edges_out if e.get("target_id") in nodes]
 
         return {"root": node_id, "nodes": list(nodes.values()), "edges": edges_out}
 

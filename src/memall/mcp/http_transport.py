@@ -345,14 +345,35 @@ async def handle_mcp_post(request: web.Request) -> web.Response:
     if method == "resources/read":
         uri = params.get("uri", "")
         from memall.core.db import get_conn
+        from memall.mcp import session_identity as _si
+        from memall.core.thin_waist import _filter_by_trust, _row_to_memory
+
+        # A resource read is a READ.  It used to return any memory's full
+        # content to anyone who could reach the HTTP endpoint — the red/blue
+        # audit pulled an agent's private memory with `memall://memory/1`.
+        # Every resource read now resolves a viewer and runs the trust filter.
+        viewer = _si.get_session_agent()
+        if not viewer:
+            return web.json_response({"jsonrpc": "2.0", "id": req_id, "error": {
+                "code": -32000,
+                "message": _si.missing_identity_error("resources/read"),
+            }})
         conn = get_conn()
         try:
             if uri.startswith("memall://memory/"):
                 mem_id = int(uri.split("/")[-1])
-                row = conn.execute("SELECT id, content, subject, category, level, agent_name, created_at FROM memories WHERE id=?", (mem_id,)).fetchone()
+                row = conn.execute("SELECT * FROM memories WHERE id=?", (mem_id,)).fetchone()
                 if not row:
                     return web.json_response({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32000, "message": "memory not found"}})
-                result = {"uri": uri, "mimeType": "application/json", "text": json.dumps(dict(row), ensure_ascii=False, default=str)}
+                allowed = _filter_by_trust(conn, [_row_to_memory(row)], viewer)
+                if not allowed:
+                    return web.json_response({"jsonrpc": "2.0", "id": req_id, "error": {
+                        "code": -32000,
+                        "message": f"memory {mem_id} is not visible to {viewer!r}",
+                    }})
+                payload = {k: row[k] for k in ("id", "content", "subject", "category",
+                                               "level", "agent_name", "created_at")}
+                result = {"uri": uri, "mimeType": "application/json", "text": json.dumps(payload, ensure_ascii=False, default=str)}
             elif uri.startswith("memall://agent/"):
                 name = uri.split("/")[-1]
                 row = conn.execute("SELECT agent_name, agent_type, description, status, persona_updated_at FROM identities WHERE LOWER(agent_name)=LOWER(?)", (name,)).fetchone()
@@ -361,8 +382,21 @@ async def handle_mcp_post(request: web.Request) -> web.Response:
                 result = {"uri": uri, "mimeType": "application/json", "text": json.dumps(dict(row), ensure_ascii=False, default=str)}
             elif uri.startswith("memall://search/"):
                 query = uri.split("/", 2)[-1]
-                rows = conn.execute("SELECT id, subject, category, LEFT(content, 200) as preview FROM memories WHERE content LIKE ? OR subject LIKE ? LIMIT 10", (f"%{query}%", f"%{query}%")).fetchall()
-                result = {"uri": uri, "mimeType": "application/json", "text": json.dumps([dict(r) for r in rows], ensure_ascii=False, default=str)}
+                # LEFT() is not a SQLite function; this raised an InternalError
+                # on every call.  Also apply the same trust filter as search.
+                rows = conn.execute(
+                    "SELECT * FROM memories WHERE content LIKE ? OR subject LIKE ? LIMIT 10",
+                    (f"%{query}%", f"%{query}%"),
+                ).fetchall()
+                visible = _filter_by_trust(conn, [_row_to_memory(r) for r in rows], viewer)
+                keep = {m.id for m in visible}
+                result = {"uri": uri, "mimeType": "application/json",
+                          "text": json.dumps(
+                              [{"id": r["id"], "subject": r["subject"],
+                                "category": r["category"],
+                                "preview": (r["content"] or "")[:200]}
+                               for r in rows if r["id"] in keep],
+                              ensure_ascii=False, default=str)}
             elif uri == "memall://stats":
                 total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
                 agents = conn.execute("SELECT COUNT(DISTINCT agent_name) FROM memories").fetchone()[0]

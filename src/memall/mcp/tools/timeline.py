@@ -3,11 +3,12 @@ from memall.core.thin_waist import timeline
 
 
 def handle(arguments: dict) -> str:
-    # The adapter re-attaches the session identity to every call, but
-    # timeline() has no such parameter — splatting it raised TypeError.
     args = dict(arguments)
-    args.pop("agent_name", None)
-    items = timeline(**args)
+    agent_name = args.pop("agent_name", None)
+    # Timeline is a read path: pass the session identity down as the viewer so
+    # core.timeline can drop rows this caller may not read.  It used to be
+    # dropped entirely, which returned every row to every caller.
+    items = timeline(viewer=agent_name or None, **args)
     # Include level/owner/agent_name/subject — the previous projection dropped
     # them, forcing every timeline consumer to do a follow-up trace call.
     return json.dumps([{

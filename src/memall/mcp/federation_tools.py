@@ -104,13 +104,51 @@ def fed_query(query: str = "", agent_name: str = "", category: str = "",
 
 
 def fed_publish(memory_id: int, source_agent: str = "",
-                trust_level: str = "family", category: str = "") -> dict:
-    """Publish a memory to shared_memories."""
-    from memall.core.thin_waist import retrieve
+                trust_level: str = "family", category: str = "",
+                viewer: str = "") -> dict:
+    """Publish a memory to shared_memories.
 
-    mem = retrieve(int(memory_id))
+    Two holes fixed here after the red/blue audit:
+      * the source memory was read with ``retrieve(memory_id)`` and no viewer,
+        so anyone could publish ANOTHER agent's private memory into the shared
+        family database;
+      * ``source_agent`` was taken from the argument verbatim, so the
+        attribution on the shared copy could simply be invented.
+
+    Publishing therefore requires the caller's own identity (``viewer``), the
+    source row must pass that identity's trust filter, and the recorded
+    ``source_agent`` is the viewer — never a caller-supplied string.
+    """
+    from memall.core.thin_waist import _filter_by_trust, retrieve
+    from memall.mcp import session_identity as _si
+
+    viewer = (viewer or _si.get_session_agent() or "").strip()
+    if not viewer:
+        return {"error": _si.missing_identity_error("fed_publish")}
+    if source_agent and source_agent.strip().lower() != viewer.lower():
+        return {"error": (
+            f"source_agent {source_agent!r} does not match the caller identity "
+            f"{viewer!r}: attribution cannot be declared, only observed"
+        )}
+
+    mem = retrieve(int(memory_id), viewer=viewer)
     if not mem:
-        return {"error": f"memory {memory_id} not found"}
+        return {"error": f"memory {memory_id} not found or not visible to {viewer!r}"}
+
+    # retrieve() already filters, but by-id retrieval historically
+    # short-circuited the trust filter; assert it once more explicitly so
+    # publishing can never become a laundering path.
+    from memall.core.db import get_conn
+    from memall.core.thin_waist import _row_to_memory
+
+    conn_chk = get_conn()
+    try:
+        row = conn_chk.execute("SELECT * FROM memories WHERE id = ?",
+                               (int(memory_id),)).fetchone()
+        if row is not None and not _filter_by_trust(conn_chk, [_row_to_memory(row)], viewer):
+            return {"error": f"memory {memory_id} is not visible to {viewer!r}"}
+    finally:
+        conn_chk.close()
 
     content = redact_content(mem.content)
     now = datetime.now(timezone.utc).isoformat()
@@ -121,7 +159,7 @@ def fed_publish(memory_id: int, source_agent: str = "",
             """INSERT OR IGNORE INTO shared_memories
                (original_id, source_agent, source_db, content, category, level, project, owner, published_at, trust_level)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (memory_id, source_agent or mem.agent_name, "",
+            (memory_id, viewer, "",
              content, category or mem.category, mem.level,
              mem.project, mem.owner, now, trust_level),
         )
@@ -129,7 +167,7 @@ def fed_publish(memory_id: int, source_agent: str = "",
         # Fix Bug-3: 用 cur.rowcount 判断是否真插入，total_changes 是累计值
         # INSERT OR IGNORE 时已存在 rowcount=0，新插入 rowcount=1
         inserted = cur.rowcount > 0
-        return {"memory_id": memory_id, "source_agent": source_agent or mem.agent_name,
+        return {"memory_id": memory_id, "source_agent": viewer,
                 "published": inserted, "was_new": inserted, "published_at": now}
     finally:
         conn.close()

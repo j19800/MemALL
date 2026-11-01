@@ -616,6 +616,7 @@ def timeline(
     start: Optional[str] = None,
     end: Optional[str] = None,
     days: Optional[int] = None,
+    viewer: Optional[str] = None,
 ) -> list:
     from memall.core.thin_waist import _pool_conn, fts_query, _row_to_memory
 
@@ -660,4 +661,12 @@ def timeline(
         params.append(limit)
         sql = f"SELECT * FROM memories WHERE {' AND '.join(where)} ORDER BY occurred_at DESC LIMIT ?"
         rows = conn.execute(sql, params).fetchall()
-        return [_row_to_memory(r) for r in rows]
+        mems = [_row_to_memory(r) for r in rows]
+        # Timeline is a read path: it used to return every row regardless of
+        # who asked.  Filter by the viewer when one is supplied (the MCP
+        # handler always supplies the session identity).
+        if viewer:
+            from memall.core.thin_waist import _filter_by_trust
+
+            mems = _filter_by_trust(conn, mems, viewer)
+        return mems

@@ -249,12 +249,106 @@ def duel_every_read_path_applies_trust_filter() -> Tuple[bool, str]:
     return True, "四个检索分支均执行了信任过滤"
 
 
+def duel_graph_and_timeline_read_paths_filter() -> Tuple[bool, str]:
+    """red: 陌生人用 traverse / timeline / trace 按 id 读他人 private 记忆.
+
+    blue: 这些入口都返回记忆正文，必须和 search 一样过信任过滤。
+    R3-11：traverse 返回节点全文、timeline 无 agent 过滤、trace 无 viewer。
+    """
+    _fresh_db()
+    _seed_identity("writer")
+    _seed_identity("eve")
+    mid = _read_private("writer")
+
+    from memall.core.thin_waist import traverse
+    from memall.mcp.tools.retrieve import handle_trace
+    from memall.mcp.tools.timeline import handle
+    from memall.mcp.tools.graph import handle_traverse
+
+    leaks = []
+
+    try:
+        g = traverse(mid, viewer="eve")
+        if any("DUEL_SECRET" in (n.get("content") or "") for n in g.get("nodes", [])):
+            leaks.append("traverse")
+    except Exception as exc:
+        leaks.append(f"traverse(raised {exc!r})")
+
+    try:
+        items = json.loads(handle({"limit": 20, "agent_name": "eve"}))
+        if any("DUEL_SECRET" in (i.get("content") or "") for i in items):
+            leaks.append("timeline")
+    except Exception as exc:
+        leaks.append(f"timeline(raised {exc!r})")
+
+    try:
+        out = json.loads(handle_trace({"memory_id": mid, "agent_name": "eve"}))
+        if "DUEL_SECRET" in (json.dumps(out, ensure_ascii=False)):
+            leaks.append("trace")
+    except Exception as exc:
+        leaks.append(f"trace(raised {exc!r})")
+
+    try:
+        out = json.loads(handle_traverse({"node_id": mid, "agent_name": "eve"}))
+        if "DUEL_SECRET" in (json.dumps(out, ensure_ascii=False)):
+            leaks.append("traverse-handler")
+    except Exception as exc:
+        leaks.append(f"traverse-handler(raised {exc!r})")
+
+    if leaks:
+        return False, f"以下读入口泄露他人 private 记忆：{leaks}"
+    return True, "traverse / timeline / trace 均执行了信任过滤"
+
+
+def duel_fed_publish_cannot_launder_or_forge() -> Tuple[bool, str]:
+    """red: 把他人私有记忆发布到共享库，并伪造 source_agent.
+
+    blue: fed_publish 必须校验 viewer 可见性，且 source_agent 只能取自调用者
+    身份（R3-7）。写入共享库是不可撤销的，这一步必须先拦住。
+    """
+    import tempfile
+    from pathlib import Path
+
+    _fresh_db()
+    _seed_identity("writer")
+    _seed_identity("eve")
+    mid = _read_private("writer")
+
+    # Keep family.db inside the throwaway directory: it used to be hard-coded
+    # to ~/.memall/family.db, which is how the audit polluted production.
+    from memall.core import db as core_db
+
+    fam = Path(str(core_db.get_db_path())).parent / "family.db"
+    os.environ["MEMALL_DB_PATH"] = str(core_db.get_db_path())
+
+    from memall.mcp.federation_tools import fed_publish
+
+    problems = []
+
+    out = fed_publish(mid, source_agent="dsh", viewer="eve")
+    if out.get("published"):
+        problems.append("陌生身份仍然发布成功")
+    if out.get("error") and "source_agent" not in out["error"] and "not visible" not in out["error"]:
+        problems.append(f"拒绝原因不明确: {out['error']}")
+
+    # Forging attribution must be refused even for a legitimate viewer.
+    out2 = fed_publish(mid, source_agent="dsh", viewer="老陈")
+    if out2.get("published"):
+        problems.append("伪造 source_agent 仍然发布成功")
+
+    if problems:
+        return False, "; ".join(problems)
+    return True, "fed_publish 拒绝越权发布与伪造署名"
+
+
 # ── manifest ─────────────────────────────────────────────────────────────
 
 DUELS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "session_identity_is_authoritative": duel_session_identity_is_authoritative,
     "unregistered_identity_is_least_privilege": duel_unregistered_identity_is_least_privilege,
     "every_read_path_applies_trust_filter": duel_every_read_path_applies_trust_filter,
+    "graph_and_timeline_read_paths_filter": duel_graph_and_timeline_read_paths_filter,
+    "fed_publish_cannot_launder_or_forge": duel_fed_publish_cannot_launder_or_forge,
 }
 
 

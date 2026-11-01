@@ -63,7 +63,17 @@ def _get_memory_by_id(memory_id: int):
 
 
 def get_family_db_path() -> Path:
-    return Path.home() / ".memall" / "family.db"
+    """Path to family.db, resolved next to the main database.
+
+    It used to be hard-coded to ``~/.memall/family.db``, ignoring
+    ``MEMALL_DB_PATH`` entirely.  That made family.db the one store a test or
+    sandboxed run could still pollute: the red/blue audit wrote a row into the
+    PRODUCTION family.db while every other write went to a temp database.
+    Resolving beside the configured database keeps the two in step, and falls
+    back to the old location when no override is set.
+    """
+    base = Path(get_db_path())
+    return base.parent / "family.db"
 
 
 def init_family_db(force: bool = False):
