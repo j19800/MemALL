@@ -1,8 +1,8 @@
-﻿<p align="center">
+<p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/MCP-2025--03--26-purple" alt="MCP">
-  <img src="https://img.shields.io/badge/version-0.1.74-green" alt="Version 0.1.69">
+  <img src="https://img.shields.io/badge/version-0.1.75-green" alt="Version 0.1.69">
   <img src="https://img.shields.io/github/stars/j19800/MemALL?style=social" alt="GitHub stars">
 </p>
 
@@ -219,6 +219,21 @@ ormalize_agent_name vs canonical_agent）仍并存。读路径与署名已收口
 - **写入侧署名不被拒绝**：按既定策略「写入放行、读取锁定」，capture 时显式 gent_name 仍可为他人建卡；冒名通过 wake_audit/ops_log 可观测，而非被拒。
 
 ---
+
+## ✅ 提交前先过验收门
+
+一条命令回答「这棵树能不能提交 / 发布」：
+
+```bash
+python tools/verify.py --plan fast    # 约 4 分钟：导入 + 9 个对抗 duel + 快速测试子集
+python tools/verify.py --plan guards  # 含完整 92 条守卫（约 40 分钟）
+python tools/verify.py --plan full    # 全部，含全量 pytest
+python tools/verify.py --list         # 查看计划与阶段
+```
+
+每个阶段独立记结论（一个失败不中断其余），打印每条失败项与完整日志路径，有红灯就以非零退出码收场。它还会把 `MEMALL_DB_PATH` 指向一次性临时目录，**验收过程碰不到你的库**。
+
+为什么要它：守卫套件与 pytest 这两个真门**早就存在**，但守卫全量约 40 分钟、只能"想起来才跑"，pytest 则长期挂起——裸 `BEGIN` 事务缺陷就是这样合进主线的。
 
 ## 🤝 贡献
 

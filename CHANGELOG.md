@@ -1,3 +1,26 @@
+## [v0.1.75] - 2026-11-01
+
+把「能不能提交/发布」这件事固化成一条命令，并在做这件事的时候抓到一个**真正的测试隔离缺陷**。
+
+### Added（`tools/verify.py`：批次验收门）
+
+- **一条命令给出通过/失败判定**：`python tools/verify.py`。之前两个真门（92 条守卫、全量 pytest）**都在，但没人会一起跑**——守卫全量约 40 分钟只能"想起来才跑"（裸 `BEGIN` 缺陷就是这样合进主线的），pytest 则长期挂起。
+- 三个计划：`fast`（导入 + 红蓝 + 快速子集，约 4 分钟，适合提交前）、`guards`（导入 + 红蓝 + 92 守卫）、`full`（全部）。
+- 每个阶段独立记录结论，**一个阶段失败不中断其余**——要的是全貌而不是第一条错误。
+- 关键安全点：把 `MEMALL_DB_PATH` 指向一次性临时目录，**验收过程不可能碰到操作者的库**。
+- 输出每条失败项与完整日志路径，退出码 0/1（2 为用法错误）。
+
+### Fixed（测试隔离：会话身份跨用例泄漏）
+
+- **`test_mcp_adapter` 单跑通过、批量跑失败**。根因是 `memall.mcp.session_identity` 的身份存放在**模块级状态**（ContextVar + `_handshake_agent`）——这是 MCP 面跨整个连接需要的行为。`test_task_lifecycle` 绑定 `"testagent"` 后**从不清理**，于是后续所有用例的调用都带着这个残留身份；adapter 的读测试传的是 `adapter_test`，实际却按 `testagent` 隔离，查回空结果。
+- 修法不逐个测试打补丁，而是在 `conftest.py` 加 autouse fixture：**每个用例前后都 `reset()`**，任何单个测试都不可能再泄漏身份。
+- 验收：该组合从 `2 failed / 20 passed` 变成 **22 passed**；完整快速子集 **82 passed / 0 failed**；`verify.py --plan fast` **3/3 全绿**。
+
+### Verification
+
+- `verify.py --plan fast`：import / 红蓝 9-duel / pytest-quick 82 —— **3/3 PASS**
+- `verify.py --plan full`：import / 红蓝 9-duel / **守卫 92/92** 三个阶段全绿；pytest 阶段报 2 个失败，经干净树对照确认来自**他人未提交的在途改动**（`project_infer.py` 把默认项目改成空、`thin_waist.py` 的线程推断改动，对应测试未同步），与本次提交无关。**在干净树（HEAD + 本次改动）上全量 pytest 为 514 passed / 0 failed。**
+
 ## [v0.1.74] - 2026-11-01
 
 把上一版记录的四项既有缺陷全部修掉，并在过程中发现**我给 0.1.71 引入的一处过度收紧**。结果是全量 pytest 从"挂起"变成 **514 passed / 0 failed**。

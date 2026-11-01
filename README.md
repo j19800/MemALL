@@ -1,8 +1,8 @@
-﻿<p align="center">
+<p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/MCP-2025--03--26-purple" alt="MCP">
-  <img src="https://img.shields.io/badge/version-0.1.74-green" alt="Version 0.1.69">
+  <img src="https://img.shields.io/badge/version-0.1.75-green" alt="Version 0.1.69">
   <img src="https://img.shields.io/github/stars/j19800/MemALL?style=social" alt="GitHub stars">
 </p>
 
@@ -225,6 +225,27 @@ esources/read, ed_publish laundering/attribution forgery, and 	raverse/	imeline
 - **Write-side attribution is not refused.** By the chosen policy ("writes pass, reads are locked") an explicit `agent_name` can still create work on another agent's behalf; impersonation is made observable via `wake_audit`/`ops_log` rather than rejected.
 
 ---
+
+## ✅ Before you commit: the acceptance gate
+
+There is one command that answers "is this tree fit to commit / release?":
+
+```bash
+python tools/verify.py --plan fast    # ~4 min: imports + 9 duels + fast pytest subset
+python tools/verify.py --plan guards  # includes the full 92-guard suite (~40 min)
+python tools/verify.py --plan full    # everything, including the full pytest suite
+python tools/verify.py --list         # show plans and stages
+```
+
+It runs each stage, records its own verdict (a failing stage does not abort the
+rest), prints every failure line with the full log path, and exits non-zero if
+anything is red. It also points `MEMALL_DB_PATH` at a throwaway directory, so a
+gate run can never touch your database.
+
+Why it exists: the two real gates — the guard suite and pytest — both existed
+before, but the guard run took ~40 minutes so it was only run "when someone
+remembered", and pytest hung outright. That is how a bare-`BEGIN` transaction
+defect reached the mainline.
 
 ## 🤝 Contributing
 

@@ -19,6 +19,33 @@ collect_ignore = ["smoke_test.py", "stress_test.py", "quality_test.py"]
 
 
 @pytest.fixture(autouse=True)
+def _reset_session_identity():
+    """Clear the process-global session identity around every test.
+
+    ``memall.mcp.session_identity`` keeps the caller's identity in module-level
+    state (a ContextVar plus a ``_handshake_agent`` fallback) because the MCP
+    surface needs it across a whole connection.  A test that binds one and
+    forgets to clear it therefore leaks into EVERY later test in the same
+    process: ``test_task_lifecycle`` binds "testagent" and never resets, after
+    which ``test_mcp_adapter``'s calls silently carry that identity instead of
+    the one they pass, and its reads come back empty.
+
+    That is why the adapter tests passed alone and failed in a batch.  Resetting
+    here — before and after each test — makes identity leakage impossible
+    regardless of what any individual test does.
+    """
+    try:
+        from memall.mcp import session_identity as _si
+
+        _si.reset()
+        yield
+        _si.reset()
+    except Exception:
+        # Identity module missing/changed: nothing to isolate.
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _test_db(monkeypatch, tmp_path):
     """Redirect DB_PATH to a temporary database for test isolation.
 
