@@ -1,3 +1,3 @@
 """MemALL — multi-agent collaborative memory OS."""
 
-__version__ = "0.1.72"
+__version__ = "0.1.73"

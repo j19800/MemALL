@@ -1,3 +1,31 @@
+## [v0.1.73] - 2026-11-01
+
+本版是一件修复 + 一次**首次完成的全量验证**。
+
+### Fixed（读路径身份检查误拒合法调用）
+
+- **校验层把 `agent_name` 剥掉后，入口检查才跑**：0.1.70 加的"读动作必须有身份"检查，读的是**校验后**的 payload。但 `TimelineInput`、`TraverseInput` 等模型从不声明 `agent_name`，`validate_tool_input` 会按模型把它丢掉——于是**调用方明明传了身份，却仍被判为无身份而拒绝**。这与最初的 F3 缺陷是同一形状，只是在反方向：那次是身份被丢导致路由失效，这次是身份被丢导致合法读被拒。
+- 修法：在校验**之前**把原始 `agent_name` 记下来（`_raw_agent`），`identify()` 用补回后的参数解析，再写回已校验的 arguments。
+- 验收：传身份的 `timeline` 正常返回列表；不传身份仍**正确拒绝**并给出原因（安全行为未被削弱）。`red_blue_checks` 9/9 仍全绿。
+
+### Verification（首次跑完整套）
+
+在**已发布提交的干净 worktree** 上跑（不是带其他人未提交改动的工作树）：
+
+- **`check_fixes.py` 全量：92/92 守卫 PASS，0 失败**，内置 4 个 suite 也全 PASS。（此前只跑过定向子集。）
+- **全量 pytest 逐文件 76 个**：69 个通过。剩余的都不是本版引入：
+  - `test_hooks::test_default_hooks_loaded`、`test_pipeline_contract::test_every_registered_step_declares_a_contract`、`test_mcp_adapter::test_tool_definitions_expose_seven_top_level_tools` —— **在 v0.1.71 上同样失败**（既有缺陷：`TOOL_DEFINITIONS` 需先调用加载函数才非空；`promote` 步骤缺幂等契约）。
+  - `test_embeddings.py` —— **在 v0.1.71 上同样卡死**（既有问题）。
+  - `test_pipeline_locking`（69s）与 `test_task_lifecycle`（9s）单独跑都通过；大批量并发逐文件跑时因资源争用超过我设的 60s 门限，属测量方法问题而非测试失败。
+- 直接 `pytest tests` 一次跑全量会**挂起**（22 分钟里 CPU 只涨 24s、110 线程无输出），根因是 `conftest` 每个用例都 `init_db(migrate=True)` 重放全部迁移。这是设计债，非本版引入。
+
+### 已知未修（既有，未在本版处理）
+
+- `TOOL_DEFINITIONS` 在模块导入时为空，必须先调用加载函数；测试未这样做。
+- 管线 `promote` 步骤缺少幂等契约声明。
+- `test_embeddings.py` 会挂起。
+- `conftest` 每用例重放全部迁移 → 全量 pytest 不可作为提交门槛。
+
 ## [v0.1.72] - 2026-11-01
 
 修掉最后一个已知缺陷（`claim_task` 并发），以及修它的过程中暴露的**两个真问题**：一个卡片的丢失更新竞态、一个原本 flaky 的守卫。

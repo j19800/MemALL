@@ -83,6 +83,17 @@ def handle_call(tool_name: str, arguments: dict) -> str:
             "valid_tools": known,
         }, ensure_ascii=False)
 
+    # Remember the identity as it arrived, BEFORE validation.
+    #
+    # validate_tool_input drops any field the action's model does not declare,
+    # and models such as TimelineInput never declared agent_name.  The
+    # read-path check below therefore saw an already-stripped payload and
+    # refused a call that had in fact supplied an identity.  This is the same
+    # shape as the original F3 defect; capture the value at the boundary.
+    _raw_agent = ""
+    if isinstance(arguments, dict):
+        _raw_agent = str(arguments.get("agent_name") or "").strip()
+
     is_valid, validated_data, err_msg = validate_tool_input(tool_name, arguments)
     if not is_valid:
         m.incr("tool_call_validation_error")
@@ -130,7 +141,14 @@ def handle_call(tool_name: str, arguments: dict) -> str:
         from memall.mcp.session_identity import identify
 
         _action = arguments.get("action", "") if isinstance(arguments, dict) else ""
-        _caller = identify(arguments, _action) or ""
+        # Re-attach the identity the validator may have stripped, so identify()
+        # can see it.  Without this, an action whose model lacks agent_name
+        # (timeline, traverse, …) looked identity-less even when the caller
+        # supplied one, and the read-path check then refused a legitimate call.
+        _args_for_id = dict(arguments) if isinstance(arguments, dict) else {}
+        if _raw_agent and not _args_for_id.get("agent_name"):
+            _args_for_id["agent_name"] = _raw_agent
+        _caller = identify(_args_for_id, _action) or ""
         if _caller:
             arguments = dict(arguments)
             arguments["agent_name"] = _caller

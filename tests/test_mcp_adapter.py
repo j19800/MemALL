@@ -51,8 +51,13 @@ def test_handle_call_read_timeline_happy_path():
         agent_name="adapter_test",
         level="P2",
     )
-    out = json.loads(handle_call("memall_read", {"action": "timeline", "days": 7}))
-    assert isinstance(out, list)
+    # A read now requires an identity: the trust filter can otherwise only
+    # return "public" rows, which is indistinguishable from an empty result
+    # set, so the adapter refuses and explains (read-path enforcement).
+    out = json.loads(handle_call("memall_read", {"action": "timeline",
+                                                "days": 7,
+                                                "agent_name": "adapter_test"}))
+    assert isinstance(out, list), out
     assert any("适配器读取路径测试" in item.get("content", "") for item in out)
 
 
