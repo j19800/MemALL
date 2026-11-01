@@ -1,8 +1,8 @@
-﻿<p align="center">
+<p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/MCP-2025--03--26-purple" alt="MCP">
-  <img src="https://img.shields.io/badge/version-0.1.69-green" alt="Version 0.1.69">
+  <img src="https://img.shields.io/badge/version-0.1.70-green" alt="Version 0.1.69">
   <img src="https://img.shields.io/github/stars/j19800/MemALL?style=social" alt="GitHub stars">
 </p>
 
@@ -208,6 +208,7 @@ src/memall/
 
 - [x] **v0.1.0** — Core MCP server, 7 consolidated tool endpoints, CLI, PyPI package
 - [x] **v0.1.69** — Repo made clonable again (`task_identity` + migrations 038/040 were live but uncommitted), goal `triage` gate now emits an action, skills layer transactions fixed for concurrency, policy refusals return 403 instead of 500
+- [x] **v0.1.70** — Every remaining cross-agent read path closed: esources/read, ed_publish laundering/attribution forgery, and 	raverse/	imeline/	race now apply the trust filter; amily.db follows MEMALL_DB_PATH. Five red/blue duels now guard these.
 - [ ] **v0.2.0** — Web dashboard, user system, Pro tier gating
 - [ ] **v0.3.0** — Cloud sync, team collaboration, API gateway
 
@@ -217,6 +218,8 @@ src/memall/
 - **Goal-level block reasons are not observable.** Cards already carry a two-value `last_block_reason` enum; goals still `return None` when they are stuck, so "why this goal is not moving" is invisible.
 - **The guard suite is slow by design.** Every guard replays all migrations via `init_db()`, so a full run is measured in hours rather than minutes. Treat a green card guard set as evidence for that set, not for the whole repository.
 - **`check_fixes.py` leaves scratch directories** under `%TEMP%` (`mkdtemp` without `rmtree`).
+- **Several P1 security items from the 2026-10-31 red/blue audit are still open.** `security permit` has no authorisation gate, `core.update()` does not enforce pinned fields, the gateway's loopback carve-out exempts too many endpoints from auth, and two competing identity-normalisation helpers (`normalize_agent_name` vs `canonical_agent`) still coexist. Read paths and attribution are closed; these are not.
+- **Write-side attribution is not refused.** By the chosen policy ("writes pass, reads are locked") an explicit `agent_name` can still create work on another agent's behalf; impersonation is made observable via `wake_audit`/`ops_log` rather than rejected.
 
 ---
 

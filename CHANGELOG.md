@@ -1,3 +1,27 @@
+## [v0.1.70] - 2026-11-01
+
+本版把 10-31 红蓝审查里**仍然存在的跨 agent 读路径漏洞**全部关闭，并把这些攻击固化成可重复的红蓝守卫。0.1.69 是在身份漏洞修复**之前**构建的，故安全修复需要单独发版。
+
+### Security（读路径泄露：R3-6 / R3-7 / R3-11）
+
+复核报告后逐条实测（报告写于 15 小时前，其中 R3-5/R3-14/R3-15 已修，其余仍存在）：
+
+- **`resources/read` 任意记忆全文泄露（R3-6）**：`memall://memory/{id}` 不校验任何身份，任何能连到 HTTP 端口的人都能拿到私有记忆全文。现在解析会话身份并过信任过滤；无身份直接拒绝并给出原因。同一条路径上的 `memall://search/{q}` 一并加固，并把 `LEFT(content,200)`（SQLite 无此函数，每次都抛 InternalError）改为 `SUBSTR`（R3-14）。
+- **`fed_publish` 可洗白他人私有记忆 + 伪造署名（R3-7）**：源记忆用 `retrieve(id)` 且不传 viewer，任何人都能把**别人**的 private 记忆发布进共享库；`source_agent` 直接取自参数，署名可以凭空写。现在发布要求调用者身份、对源行再验一次信任过滤、且 `source_agent` 一律取 viewer——**署名只能被观测，不能被声明**。
+- **`traverse` / `timeline` / `trace` 返回正文且无 viewer（R3-11）**：`traverse(1)` 会返回一条私有记忆**以及它可达的全部邻居**；`timeline` 无任何过滤；`trace` 无 viewer 校验。现在三者都过信任过滤，handler 把会话身份传下去而不是丢掉。
+- **`family.db` 不受 `MEMALL_DB_PATH` 隔离**：`get_family_db_path()` 硬编码 `~/.memall/family.db`——这正是审计时"所有写入都进了临时库、唯独 family.db 写进了生产"的原因。现在跟随主库目录解析。
+
+### Added（红蓝守卫固化）
+
+- 新增两个 duel：`graph_and_timeline_read_paths_filter`、`fed_publish_cannot_launder_or_forge`。加上原有 3 个，`src/red_blue_checks.py` 现为 **5/5 全绿**。攻击被写成可重复执行的测试，而不是一次性的审查记录。
+
+### 已知未修（本版不声称已解决）
+
+- **`claim_task` 并发双认领**：读→改→`UPDATE ... WHERE id=?` 无状态谓词、无行锁，并发下 last-writer-wins。
+- **R3-8 `security permit` 无授权门**、**R3-9 `core.update()` 未强制 pinned 字段**、**R3-10 gateway loopback 免鉴权面过大**、**R3-12 两套 identity 归一化**：均为 P1，未在本版处理。
+- **写入侧署名不受限**：按既定策略「写入放行、读取锁定」，capture 时显式 `agent_name` 仍可用于为他人建卡；冒名的可观测性依赖 `wake_audit` / `ops_log`，而非拒绝。
+- **守卫全量仍需以小时计**：本版跑的是 9 条定向守卫 + 5 个红蓝 duel + 37 个相关 pytest，**未跑全量**。
+
 ## [v0.1.69] - 2026-10-31
 
 本轮的重点不是加功能，而是**把"已在生产生效但从未入库"的代码补回版本库，并让审计发现的三个红灯转绿**。发布前逐条复核过源代码、守卫与真实库，未通过的项在下面写明。
