@@ -17,10 +17,17 @@ EXPECTED_TOOLS = {
     "memall_federation",
     "memall_system",
     "memall_hooks_recent",
+    # Registered after this set was written: real-time delivery over the
+    # memall-bus (the L5 task card stays the source of truth; the bus carries
+    # only a pointer to it).
+    "memall_msg",
 }
 
 
-def test_tool_definitions_expose_seven_top_level_tools():
+def test_tool_definitions_expose_top_level_tools():
+    from memall.mcp.adapter import _ensure_loaded
+    # Same as above: the list is populated by the lazy loader, not at import.
+    _ensure_loaded()
     names = {d.get("name") for d in TOOL_DEFINITIONS}
     assert names == EXPECTED_TOOLS
 

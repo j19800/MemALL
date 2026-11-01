@@ -49,11 +49,38 @@ AGENT_BLACKLIST = frozenset({
 })
 
 # Embedded dates and long digit runs mark a per-run test/probe identity
-# (``autocapdimtsxcg`` style suffixes, ``dsh_20261031``).  The digit run is
-# 6+, not 10+: ``20261031`` (YYYYMMDD) is 8 digits and is exactly the shape a
-# timestamp-suffixed test identity arrives in, so a 10-digit threshold let it
-# through.  Hyphenated dates stay covered for ``dsh-2026-10-31``.
-AGENT_TAG_RE = re.compile(r"(\d{4}-\d{2}-\d{2}|\d{6,})")
+# (``autocapdimtsxcg`` style suffixes, ``dsh_20261031``).
+#
+# The pattern is deliberately NARROW.  It used to be ``\d{10,}``, which missed
+# ``20261031`` (YYYYMMDD is 8 digits); widening it to ``\d{6,}`` then rejected
+# perfectly good identities such as ``t_agent_ed920908`` — a uuid4 hex slice
+# that happens to be all digits.  A digit run is only suspicious when it is
+# BOTH long and date-shaped:
+#
+#   * a hyphenated date (2026-10-31), or
+#   * exactly 8 digits that parse as a plausible YYYYMMDD, or
+#   * 10+ digits (epoch millis/seconds), which no human name uses.
+#
+# Eight digits that do NOT parse as a date (e.g. 92090812) are a hex slice, so
+# they are allowed through.
+AGENT_TAG_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2}|\d{10,}|(?<!\d)(\d{8})(?!\d))")
+
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _has_date_like_digits(name: str) -> bool:
+    """True when *name* carries a hyphenated date, an 8-digit YYYYMMDD, or 10+ digits."""
+    if _DATE_RE.search(name):
+        return True
+    if re.search(r"\d{10,}", name):
+        return True
+    for m in re.finditer(r"(?<!\d)(\d{8})(?!\d)", name):
+        digits = m.group(1)
+        month, day = int(digits[4:6]), int(digits[6:8])
+        if 1 <= month <= 12 and 1 <= day <= 31:
+            return True
+    return False
 
 # Distinct inputs already warned about, bounded so a spammy producer cannot
 # grow it without limit.
@@ -81,7 +108,7 @@ def _invalid_reason(name: str) -> str:
         return "invalid characters"
     if name in AGENT_BLACKLIST:
         return "reserved/generic name"
-    if AGENT_TAG_RE.search(name):
+    if _has_date_like_digits(name):
         return "embedded timestamp or digit run"
     if len(name) < 2:
         return "single character"

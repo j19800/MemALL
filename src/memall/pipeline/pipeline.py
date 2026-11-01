@@ -85,6 +85,10 @@ STEP_IDEMPOTENCY: dict[str, str] = {
     "distill":           "dedup",
     "integrate":         "dedup",
     "improve":           "dedup",      # guarded by (agent_name, pattern_id)
+    # Consuming: it records metadata.promoted_at_access and only heat earned
+    # SINCE that snapshot may promote again.  Without the snapshot the same
+    # row walked L1 -> L2 -> L3 -> L4 across consecutive runs.
+    "promote":           "recompute",
     "observation":       "dedup",
     "identity":          "recompute",
     "reasoning":         "recompute",

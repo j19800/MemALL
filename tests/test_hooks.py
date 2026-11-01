@@ -93,7 +93,10 @@ def test_match_tool():
 
 
 def test_default_hooks_loaded():
-    from memall.mcp.adapter import TOOL_DEFINITIONS
+    from memall.mcp.adapter import TOOL_DEFINITIONS, _ensure_loaded
+    # TOOL_DEFINITIONS is empty until the lazy loader runs -- that is deliberate
+    # (importing memall.mcp.tools would block the MCP initialize handshake).
+    _ensure_loaded()
     assert len(TOOL_DEFINITIONS) >= 7
     # Re-register built-in hooks in case another test cleared them
     from memall.mcp import hooks_builtin as _hb

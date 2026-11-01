@@ -71,7 +71,16 @@ def _check_st_available(timeout: float = 5.0) -> bool:
 
 
 def _get_model():
-    """Lazy-load the SentenceTransformer model (cached after first call)."""
+    """Lazy-load the SentenceTransformer model (cached after first call).
+
+    Loads with ``local_files_only`` first.  HuggingFace's default behaviour is
+    to revalidate the snapshot against the Hub on every load; when the network
+    is slow or unreachable that call does not fail fast — it hangs, which made
+    every embedding test (and any pipeline run touching embeddings) stall
+    indefinitely.  The model is already cached locally, so loading it offline
+    is both correct and fast.  Only if the local cache is incomplete do we
+    fall back to an online download (with a clear log line).
+    """
     if not _check_st_available():
         raise ImportError(
             "sentence-transformers is required for embedding. "
@@ -80,8 +89,19 @@ def _get_model():
     global _MODEL
     if _MODEL is None:
         from sentence_transformers import SentenceTransformer
-        logger.info("Loading embedding model %s ...", _MODEL_NAME)
-        _MODEL = SentenceTransformer(_MODEL_NAME, device="cpu")
+
+        logger.info("Loading embedding model %s (local files only) ...", _MODEL_NAME)
+        try:
+            _MODEL = SentenceTransformer(
+                _MODEL_NAME, device="cpu", local_files_only=True)
+        except Exception as exc:
+            # Missing/incomplete cache: allow one online fetch so a fresh
+            # install still works.  This is the only path that touches the
+            # network, and it is logged so a hang is diagnosable.
+            logger.warning(
+                "Embedding model not available locally (%s); retrying with "
+                "network access. Set HF_HUB_OFFLINE=1 to fail fast instead.", exc)
+            _MODEL = SentenceTransformer(_MODEL_NAME, device="cpu")
         logger.info("Embedding model loaded, dim=%d", _MODEL.get_embedding_dimension())
     return _MODEL
 

@@ -1,10 +1,22 @@
 """
 Heat-based level promotion — automatically promote frequently accessed memories
 to higher knowledge levels based on access patterns and references.
+
+Idempotency contract: ``recompute`` — but only because promotion is now
+CONSUMING.  ``access_count`` is a lifetime counter (the hot-topic ranking and
+the decay score read it), so it must not be reset.  Instead the step records
+``metadata.promoted_at_access`` — the access count as of the last promotion —
+and only the INCREMENT beyond that snapshot can promote a memory again.
+
+Without this the step promoted the same row on every run: measured a single
+L1 memory walk L1 -> L2 -> L3 -> L4 across three consecutive runs while its
+access count stayed at 9.  That is not "recomputable", it is unbounded
+escalation — and it is why the step had no declared contract.
 """
 
 from memall.config import get_config
 from memall.core.db import get_conn
+import json
 import sqlite3
 
 
@@ -26,7 +38,8 @@ def _should_promote_memory(conn, memory_id: int, current_level: str) -> tuple[bo
     
     # Get memory stats
     row = conn.execute(
-        "SELECT access_count, created_at, julianday('now') - julianday(created_at) as days_old "
+        "SELECT access_count, created_at, metadata, "
+        "julianday('now') - julianday(created_at) as days_old "
         "FROM memories WHERE id = ?",
         (memory_id,)
     ).fetchone()
@@ -36,16 +49,31 @@ def _should_promote_memory(conn, memory_id: int, current_level: str) -> tuple[bo
     
     access_count = row["access_count"] or 0
     days_old = row["days_old"] or 0
-    
+
+    # Only heat SINCE the last promotion counts.  access_count is a lifetime
+    # counter and must not be reset (the hot-topic ranking and decay score
+    # read it), so the snapshot is what makes this step consuming rather than
+    # an unbounded escalator.
+    consumed = 0
+    try:
+        meta = row["metadata"]
+        if isinstance(meta, str) and meta:
+            meta = json.loads(meta)
+        if isinstance(meta, dict):
+            consumed = int(meta.get("promoted_at_access") or 0)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        consumed = 0
+    earned = max(0, access_count - consumed)
+
     # Check minimum age requirement
     min_age_days = get_config("promotion.min_age_days", 7)
     if days_old < min_age_days:
         return False, ""
-    
-    # Check access count thresholds
+
+    # Check access count thresholds against the UNCONSUMED heat
     level_thresholds = thresholds[current_level]
     for target_level, min_access in level_thresholds.items():
-        if access_count >= min_access:
+        if earned >= min_access:
             # If considering references, also check reference count
             if get_config("promotion.consider_references", True):
                 ref_count = conn.execute(
@@ -104,10 +132,27 @@ def promote_step() -> dict:
             
             if should_promote:
                 eligible += 1
-                # Perform the promotion
+                # Perform the promotion AND consume the heat that earned it.
+                # Recording the snapshot is what stops the same row from being
+                # promoted again on the next run; the metadata is MERGED so
+                # existing keys (pinned_fields, status, …) survive.
+                mrow = conn.execute(
+                    "SELECT metadata FROM memories WHERE id = ?", (memory_id,)
+                ).fetchone()
+                meta = {}
+                try:
+                    if mrow and mrow["metadata"]:
+                        meta = json.loads(mrow["metadata"])
+                        if not isinstance(meta, dict):
+                            meta = {}
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+                meta["promoted_at_access"] = access_count
+                meta.setdefault("promotion_history", [])
                 conn.execute(
-                    "UPDATE memories SET level = ?, updated_at = datetime('now') WHERE id = ?",
-                    (target_level, memory_id)
+                    "UPDATE memories SET level = ?, metadata = ?, "
+                    "updated_at = datetime('now') WHERE id = ?",
+                    (target_level, json.dumps(meta, ensure_ascii=False), memory_id)
                 )
                 promoted += 1
                 
