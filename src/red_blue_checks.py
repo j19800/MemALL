@@ -341,6 +341,108 @@ def duel_fed_publish_cannot_launder_or_forge() -> Tuple[bool, str]:
     return True, "fed_publish 拒绝越权发布与伪造署名"
 
 
+def duel_permission_grants_are_authorised() -> Tuple[bool, str]:
+    """red: 一个普通 agent 把自己的可见性放宽到 public，或给别人设权限。
+
+    blue: ``security permit`` 只允许 supervisor / 人类 owner 配置他人；本人
+    只能收紧（往 private 方向）。R3-8：原实现里 agent_name 既是目标又是调用
+    者，任意 agent 都能提权。
+    """
+    _fresh_db()
+    for who, lv in (("eve", "private"), ("writer", "private"), ("老陈", "private")):
+        from memall.core.db import get_conn
+
+        conn = get_conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO identities (agent_name, agent_type, permission_level, status) "
+            "VALUES (?,?,?,'active')", (who, "human" if who == "老陈" else "ai", lv))
+        conn.commit()
+        conn.close()
+
+    from memall.mcp import session_identity as si
+    from memall.mcp.adapter import handle_call
+
+    def permit(caller, target, level):
+        si.reset()
+        si.bind_handshake_agent(caller)
+        try:
+            return json.loads(handle_call("memall_system", {
+                "action": "security", "security_sub_action": "permit",
+                "agent_name": caller, "target_agent": target, "level": level,
+            }))
+        except Exception as exc:
+            return {"_exc": repr(exc)}
+
+    def level_of(name):
+        from memall.core.db import get_conn
+
+        conn = get_conn()
+        row = conn.execute("SELECT permission_level FROM identities WHERE agent_name=?",
+                           (name,)).fetchone()
+        conn.close()
+        return row["permission_level"] if row else ""
+
+    problems = []
+
+    # 1. self-widening must be refused (private is the strictest level)
+    permit("eve", "eve", "public")
+    if level_of("eve") != "private":
+        problems.append("自身放宽到 public 未被拒绝")
+
+    # 2. configuring somebody else without authorisation must be refused
+    r = permit("eve", "writer", "public")
+    if level_of("writer") != "private":
+        problems.append("越权给他人设权限未被拒绝")
+
+    # 3. the human owner may configure anyone
+    permit("老陈", "writer", "trusted")
+    if level_of("writer") != "trusted":
+        problems.append("人类 owner 无法配置 agent")
+
+    if problems:
+        return False, "; ".join(problems)
+    return True, "permit 授权门：自放宽被拒、越权被拒、owner 可配置"
+
+
+def duel_pinned_contract_fields_are_immutable() -> Tuple[bool, str]:
+    """red: 把一条 decision 记忆改写成 category='goal'（伪造目标卡）。
+
+    blue: ``level``/``category`` 是与下游消费者的契约，update() 必须拒绝改写
+    契约类目。R3-9：管线各步都遵守 pinned 契约，唯独用户写入路径没有——于是
+    可以凭空造出绕过双证删除保护的目标卡。
+    """
+    _fresh_db()
+    from memall.core.thin_waist import capture
+
+    mid = capture(
+        "DUEL_PINNED 这条记忆的分类是 decision，正文足够长以通过质量门检查。",
+        level="L4", category="decision", agent_name="writer", owner="老陈")
+
+    from memall.mcp import session_identity as si
+    from memall.mcp.adapter import handle_call
+
+    si.reset()
+    si.bind_handshake_agent("writer")
+    try:
+        out = json.loads(handle_call("memall_write", {
+            "action": "update", "memory_id": mid,
+            "category": "goal", "level": "P0",
+        }))
+    except Exception as exc:
+        out = {"_exc": repr(exc)}
+
+    from memall.core.db import get_conn
+
+    conn = get_conn()
+    row = conn.execute("SELECT category, level FROM memories WHERE id=?", (mid,)).fetchone()
+    conn.close()
+    now_cat, now_level = (row["category"], row["level"]) if row else ("", "")
+
+    if now_cat == "goal" or now_level == "P0":
+        return False, f"pinned 字段被改写：category={now_cat!r} level={now_level!r}"
+    return True, f"契约类目不可改写（保持 category={now_cat!r} level={now_level!r}）"
+
+
 # ── manifest ─────────────────────────────────────────────────────────────
 
 DUELS: Dict[str, Callable[[], Tuple[bool, str]]] = {
@@ -349,6 +451,8 @@ DUELS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "every_read_path_applies_trust_filter": duel_every_read_path_applies_trust_filter,
     "graph_and_timeline_read_paths_filter": duel_graph_and_timeline_read_paths_filter,
     "fed_publish_cannot_launder_or_forge": duel_fed_publish_cannot_launder_or_forge,
+    "permission_grants_are_authorised": duel_permission_grants_are_authorised,
+    "pinned_contract_fields_are_immutable": duel_pinned_contract_fields_are_immutable,
 }
 
 

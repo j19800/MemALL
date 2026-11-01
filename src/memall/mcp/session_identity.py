@@ -32,14 +32,31 @@ _handshake_agent: str = ""
 
 
 def canonical_agent(agent_name: Optional[str]) -> str:
-    """Canonical identity form: lowercase.
+    """Canonical identity form: lowercase, and validated against the same rule
+    set the write path uses.
 
     Every store of agent identity (memories.agent_name, identities.agent_name,
     bus_agents/*.token) is lowercase, and isolation filters compare with
     ``agent_name = ?`` — an exact match.  A client handshaking as "WorkBuddy"
     therefore matched zero rows and every search came back empty, silently.
+
+    Validation matters as much as the case fold (R3-12): this is the ONLY
+    normalisation the read paths apply, and it used to accept anything a
+    client sent.  Names the write path rejects as artefacts — embedded
+    timestamps (``dsh_20261031``), single characters, template leaks — could
+    therefore still handshake and become a viewer identity, diverging from
+    the identity their memories were stored under.
+
+    Unlike ``normalize_agent_name`` this does NOT redirect to ``"system"``.
+    Silently re-attributing an identity is worse than refusing it: the whole
+    point of binding a session is to know who is talking.
     """
-    return (agent_name or "").strip().lower()
+    from memall.core.agent_names import validate_agent_name
+
+    raw = (agent_name or "").strip().lower()
+    if not raw:
+        return ""
+    return validate_agent_name(raw) or ""
 
 
 def bind_session_agent(agent_name: Optional[str]) -> str:
@@ -126,6 +143,18 @@ DISPATCH_ACTIONS = frozenset({
     "task_resolve",
     "task_block",
     "discussion_create",  # participants are addressed explicitly
+    # A stance belongs to the agent that holds it.  The adapter re-attaches
+    # ONE session identity to every call, so when several agents are driven
+    # through a single hosting session their replies all landed on the
+    # session's identity -- every stance was attributed to the orchestrator,
+    # the discussion never satisfied "all participants responded", and
+    # majority convergence could never fire.
+    #
+    # ``memall_discussion`` dispatches on the BARE action ("respond"), while
+    # the write-side spellings carry the discussion_ prefix; accept both, since
+    # the adapter passes whichever the caller used.
+    "discussion_respond",
+    "respond",
     "record_interaction",
 })
 

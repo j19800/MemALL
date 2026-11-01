@@ -626,6 +626,7 @@ registry.register(ToolDef(
         "level": {"type": "string", "enum": ["public", "trusted", "private"]},
         "requester": {"type": "string"},
         "target": {"type": "string"},
+        "target_agent": {"type": "string", "description": "security permit/audit only — the identity being configured (agent_name is the caller's own identity)"},
     }, "required": ["action"]},
     handler=_handle_system,
     annotations={"readOnlyHint": False, "idempotentHint": False},

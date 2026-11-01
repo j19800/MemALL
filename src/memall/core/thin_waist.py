@@ -288,44 +288,19 @@ def sanitize_subject(value: str, max_len: int = 120) -> str:
 def normalize_agent_name(name: str) -> str:
     """Normalize and validate an agent_name. Returns safe fallback "system" if invalid.
 
-    The redirect to "system" is logged (once per distinct input): silently
-    renaming an identity means memories land attributed to the wrong agent and
-    every later agent-scoped query misses them.  A visible warning costs
-    nothing and turns a silent data-attribution failure into a diagnosable
-    one (this exact redirect cost a debugging cycle when a timestamp-suffixed
-    test agent was quietly renamed).
+    Delegates to :mod:`memall.core.agent_names`, which is the single rule set
+    shared with the read-path normaliser (``mcp.session_identity.canonical_agent``).
+    The two used to carry different rules, so an identity could be accepted as
+    a *viewer* while the write path rejected it as an artefact — and every
+    agent-scoped query then missed the rows attributed to it (audit R3-12).
+
+    The redirect to "system" is logged (once per distinct input), never silent:
+    quietly renaming an identity means memories land attributed to the wrong
+    agent and every later agent-scoped query misses them.
     """
-    if not name:
-        return "system"
-    original = name
-    name = name.strip().lower()
-    if (
-        not _VALID_AGENT_RE.match(name)
-        or name in _AGENT_BLACKLIST
-        or _AGENT_TAG_RE.search(name)
-    ):
-        _warn_identity_redirect(original, "invalid characters or embedded timestamp")
-        return "system"
-    # Reject single-character names (template leaks, parse artifacts, stray symbols)
-    if len(name) < 2:
-        _warn_identity_redirect(original, "single character")
-        return "system"
-    # Reject template variable leaks: system.agent_name, demo.agent_name, etc.
-    if name.endswith(".agent_name"):
-        _warn_identity_redirect(original, "template variable leak")
-        return "system"
-    # Reject names containing template delimiters
-    if "{" in name or "}" in name:
-        _warn_identity_redirect(original, "template delimiter")
-        return "system"
-    # Reject single-CJK-character names (会, 全, 本, etc. — always parse artifacts)
-    cjk_count = sum(1 for c in name if "一" <= c <= "鿿" or "㐀" <= c <= "䶿")
-    if cjk_count >= 1 and len(name) == cjk_count:
-        # Pure CJK names: require at least 2 CJK characters
-        if cjk_count < 2:
-            _warn_identity_redirect(original, "single CJK character")
-            return "system"
-    return name
+    from memall.core.agent_names import normalize_agent_name as _normalize
+
+    return _normalize(name)
 
 
 # Distinct inputs warned about, bounded so a spammy producer cannot grow it.

@@ -1,3 +1,45 @@
+## [v0.1.71] - 2026-11-01
+
+关闭 10-31 红蓝审查的最后四项 P1。每一项都先复现、后修、再固化成守卫。
+
+### Security（R3-8 权限无授权门）
+
+- **任意 agent 可自提权或给他人设权限**：`memall_system action=security sub_action=permit` 用 `agent_name` 同时表示"目标"和"调用者"，而 adapter 每次都会把会话身份写进这个字段——于是 `permit` 实际只能操作调用者自己，且**没有任何授权判断**。实测：`eve` 一条调用把自己的 `permission_level` 从 `private` 放宽到 `public`，返回 `status=ok`。
+- 修法：新增独立的 `target_agent` 字段（`agent_name` 只表示调用者）；`permit` 要求调用者身份；**supervisor 或人类 owner** 可配置任何人，普通 agent 只能让**自己更严格**（`public → trusted → private` 方向）。
+- 修过程中发现自己踩了一次方向错误：`permission_level` 是**可见性要求**而非权力等级，`private` 最严格、`public` 最宽松。最初把"降权"判断写反，导致"自我放宽"仍被放行——已用四格矩阵（自我放宽/自我收紧/越权/owner 授权）逐一验证后才定稿。
+
+### Security（R3-9 契约字段可被改写）
+
+- **可以把 decision 改写成 goal，凭空造目标卡**：`update()` 的 `_ALLOWED_UPDATE_FIELDS` 允许 `level`/`category`，而管线各步（classify/reflect/event_processor/identity/procedure）都遵守 `memall.core.pins.is_field_pinned` 契约，**唯独用户写入路径没有**。实测：`writer` 把自己一条 `category='decision'` 改成了 `category='goal'`，从而绕过目标卡的"双证删除"保护。
+- 修法：`handle_update` 在写库前检查契约类目（`CONTRACT_CATEGORIES`），命中即拒绝并说明原因；非契约类目（如 `general → testing`）仍可正常修改。
+
+### Security（R3-10 网关 loopback 免鉴权面过大）
+
+- **任何本机进程都能 vacuum / import / scan 整库**：loopback 白名单放行了 `/db/vacuum`、`/db/optimize`、`/memories/import`、`/memories/smart-store`、`/debt/scan`——这些会重写或压缩整个数据库，却不需要任何凭据。
+- 修法：新增 `_DESTRUCTIVE_PATH_PREFIXES`，破坏性操作**即使来自 loopback** 也要求 Bearer token 或 `X-MemAll-CSRF` 证明；SPA 的读取与单条 `POST /memories` 保持免 token（并继续受 CSRF/Origin 保护）。
+- 验收：`POST /db/vacuum` 无凭据 → **403**，带 Bearer → **200**；`GET /api/graph/center` 仍 200。
+
+### Security（R3-12 两套身份归一化）
+
+- **读路径接受写入路径会拒绝的身份**：`normalize_agent_name`（写：校验 + 兜底 `system`）与 `canonical_agent`（读：只折叠大小写）规则不同，而读路径只跑后者。于是带时间戳的 `dsh_20261031` 这类身份可以**以另一种形态**成为 viewer，与它写入行的署名不一致，agent 作用域查询全部落空——与最初的 F3 是同一类失败。
+- 顺带修正：`_AGENT_TAG_RE` 的数字阈值是 10 位，而 `20261031`（YYYYMMDD）只有 8 位，正是探针身份的典型形态，长期漏网。
+- 修法：抽出 `memall/core/agent_names.py` 作为唯一规则源，两个函数都调它；`validate_agent_name` 返回 `""` 表示拒绝（可拒绝的调用方应当拒绝），`normalize_agent_name` 保留写路径兜底但日志告警。
+
+### Fixed（我上一轮修复引入的回归：表态归属错误）
+
+- **讨论永远无法收敛**：把 `"explicit wins"` 改成 `"session wins"` 后，`discussion_respond` 不在 dispatch 白名单里，于是**多方在同一宿主会话里表态时，每张表态都被记成编排者的身份**。实测：gw1/gw2/gvr 三条表态全部记为 `gpm`，`missing_agents` 恒含三人，`goal_finalize` 永远 blocked。这是 `goal_lifecycle_end_to_end` 守卫从 PASS 变 FAIL 的直接原因。
+- 修法：`discussion_respond` / 裸 `respond` 加入 `DISPATCH_ACTIONS`——表态势必属于表态者本人，与会话宿主无关。
+- 这是本版最值得记的一条：**安全收紧把一条正常工作流弄坏了，而守卫把它抓住了**。
+
+### Added（守卫固化）
+
+- 新增 duel：`permission_grants_are_authorised`、`pinned_contract_fields_are_immutable`。`src/red_blue_checks.py` 现为 **7/7 全绿**。
+
+### 已知未修
+
+- **`claim_task` 并发双认领**（无状态谓词、无行锁）仍未处理。
+- **写入侧署名不受限**：按既定「写入放行、读取锁定」策略保留。
+
 ## [v0.1.70] - 2026-11-01
 
 本版把 10-31 红蓝审查里**仍然存在的跨 agent 读路径漏洞**全部关闭，并把这些攻击固化成可重复的红蓝守卫。0.1.69 是在身份漏洞修复**之前**构建的，故安全修复需要单独发版。

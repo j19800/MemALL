@@ -159,6 +159,44 @@ def handle_update(arguments: dict) -> str:
                         "memory_id": mem_id,
                     }, ensure_ascii=False)
 
+    # ── Pinned classification fields (R3-9) ─────────────────────────────
+    # ``level`` and ``category`` are contracts with downstream consumers, not
+    # free-form labels: notify_pending_tasks() selects category='task', the
+    # goal driver selects category='goal', L10 reports are selected by
+    # level='L10'.  The pipeline classifiers already honour
+    # memall.core.pins.is_field_pinned, but this USER path did not — so a
+    # caller could rewrite its own row from category='decision' to
+    # category='goal' and thereby mint a goal card that bypasses the
+    # double-proof delete guard, or reclassify a task out of the reminder
+    # chain.  The same contract now applies here.
+    if any(f in fields for f in ("level", "category")):
+        from memall.core.pins import CONTRACT_CATEGORIES
+
+        conn = get_conn()
+        try:
+            row = conn.execute(
+                "SELECT category, level, metadata FROM memories WHERE id = ?", (mem_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is not None:
+            current_cat = row["category"] or ""
+            new_cat = fields.get("category")
+            protected = current_cat in CONTRACT_CATEGORIES or (
+                isinstance(new_cat, str) and new_cat in CONTRACT_CATEGORIES)
+            if protected:
+                return json.dumps({
+                    "error": "pinned field",
+                    "message": (
+                        f"memory {mem_id} has category '{current_cat}': level and "
+                        "category are contracts with downstream consumers and "
+                        "cannot be rewritten through update(). Create a new row "
+                        "instead, or use the pipeline's own transition."
+                    ),
+                    "memory_id": mem_id,
+                    "fields": sorted(f for f in ("level", "category") if f in fields),
+                }, ensure_ascii=False)
+
     # Ownership is not a casual field: ``agent_name`` identifies the *caller*
     # (used by the gate above) and must never be written through this path,
     # otherwise any agent could re-assign a memory to itself.  ``confirm``/

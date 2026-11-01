@@ -65,6 +65,26 @@ _STATIC_PATH_PREFIXES = ("/static",)
 _CSRF_REQUIRED_PATHS = frozenset({"/pipeline/run", "/migrations/run"})
 
 
+# Destructive or expensive operations (audit R3-10).
+#
+# The loopback carve-out below is meant for the SPA reading and writing its own
+# memories.  It also used to wave through `/db/vacuum`, `/db/optimize`,
+# `/memories/import` and `/debt/scan` — so ANY process able to reach localhost
+# (a poisoned npm postinstall, a browser page via DNS rebinding, another user's
+# session) could rewrite or compact the whole database without a credential.
+# These now always require a Bearer token or the CSRF proof, loopback or not.
+_DESTRUCTIVE_PATH_PREFIXES = (
+    "/db/",          # vacuum / optimize / archive_vacuum
+    "/migrations/",  # run / rollback
+    "/pipeline/",    # run
+    "/debt/scan",
+    "/memories/import",
+    "/memories/smart-store",  # bulk write, not a single explicit capture
+    "/security/",
+    "/federation/",
+)
+
+
 # Web-UI page/data routes that skip the token check — but only for loopback
 # peers (see ``security.open_api_loopback_only``) and only from trusted origins.
 # NOTE: state-changing routes are intentionally absent here; they are gated by
@@ -273,6 +293,25 @@ class MemAllGateway(HtmlHandlersMixin, RestHandlersMixin,
             if csrf_err is not None:
                 return csrf_err
             return await handler(request)
+        # 4b. Destructive operations are never part of the loopback SPA
+        #     carve-out (R3-10): vacuum/optimize/import/scan can rewrite or
+        #     compact the whole database, so they need a credential even from
+        #     localhost.  Bearer OR the per-instance CSRF proof both count.
+        if (request.method in ("POST", "PUT", "DELETE")
+                and any(path.startswith(p) for p in _DESTRUCTIVE_PATH_PREFIXES)):
+            if _auth_ok(request, self._auth_token):
+                return await handler(request)
+            csrf_err = _require_csrf(request, self._csrf_token)
+            if csrf_err is not None:
+                return web.json_response({
+                    "error": "forbidden",
+                    "message": (
+                        f"{request.method} {path} changes or destroys stored data "
+                        "and requires a Bearer token or the X-MemAll-CSRF proof, "
+                        "even from loopback."
+                    ),
+                }, status=csrf_err.status)
+            return await handler(request)
         # 5. Non-loopback peers must authenticate.
         if self._open_api_loopback_only() and not is_loopback_request(request):
             err = _require_auth(request, self._auth_token)
@@ -285,8 +324,10 @@ class MemAllGateway(HtmlHandlersMixin, RestHandlersMixin,
         # SPA read-only endpoints: GET /memories and GET /api/* and GET /persona/* and GET /graph/*
         if request.method == "GET" and (path.startswith("/memories") or path.startswith("/api/") or path.startswith("/persona/") or path.startswith("/sessions/") or path.startswith("/federation/") or path.startswith("/graph/") or path.startswith("/api/intelligence")):
             return await handler(request)
-        # SPA write endpoints: POST/PUT to known paths
-        if request.method in ("POST", "PUT") and (path in ("/memories", "/memories/smart-store", "/memories/import", "/db/optimize", "/db/vacuum", "/debt/scan")):
+        # SPA write endpoints: a single explicit capture/update is harmless to
+        # the machine it runs on; the bulk and self-diagnostic routes moved to
+        # _DESTRUCTIVE_PATH_PREFIXES above.
+        if request.method in ("POST", "PUT") and path in ("/memories",):
             return await handler(request)
         if request.method == "PUT" and path.startswith("/memories/"):
             return await handler(request)

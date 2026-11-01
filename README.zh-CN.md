@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/MCP-2025--03--26-purple" alt="MCP">
-  <img src="https://img.shields.io/badge/version-0.1.70-green" alt="Version 0.1.69">
+  <img src="https://img.shields.io/badge/version-0.1.71-green" alt="Version 0.1.69">
   <img src="https://img.shields.io/github/stars/j19800/MemALL?style=social" alt="GitHub stars">
 </p>
 
@@ -200,7 +200,9 @@ src/memall/
 
 - [x] **v0.1.0** — 核心 MCP 服务器、7 个合并工具、CLI、PyPI 包
 - [x] **v0.1.69** — 仓库恢复可克隆（`task_identity` + 迁移 038/040 此前已上线但未入库）、目标 `triage` 门现在会派出动作、技能层事务修好并发、策略拒绝返回 403 而非 500
-- [x] **v0.1.70** — 关闭剩余全部跨 Agent 读路径泄露：esources/read、ed_publish 洗白与署名伪造、	raverse/	imeline/	race 均执行信任过滤；amily.db 跟随 MEMALL_DB_PATH。五个红蓝 duel 持续守护。
+- [x] **v0.1.70** — 关闭剩余全部跨 Agent 读路径泄露：
+esources/read、ed_publish 洗白与署名伪造、	raverse/	imeline/	race 均执行信任过滤；amily.db 跟随 MEMALL_DB_PATH。五个红蓝 duel 持续守护。
+- [x] **v0.1.71** — 关闭最后四项 P1：security permit 加授权门（禁止自我放宽）、契约 level/category 不再能经 update() 改写、网关破坏性路由即便来自 loopback 也要凭据、两套身份归一化合并为一。七个红蓝 duel 持续守护。并修复了我自己那轮身份改动引入的讨论收敛回归。
 - [ ] **v0.2.0** — Web 仪表盘、用户系统、Pro 版
 - [ ] **v0.3.0** — 云同步、团队协作、API 网关
 
@@ -209,8 +211,9 @@ src/memall/
 - **`claim_task` 不是跨进程原子的**：`mcp/tasks.py` 走"读 → 改 → `UPDATE ... WHERE id = ?`"，既无状态谓词也无行锁，并发双认领会 last-writer-wins，`claimed_by` 被静默覆盖。计划：加状态谓词或 `(task_id, status)` 唯一索引。
 - **目标层的阻塞原因不可观测**：卡片层已有两值 `last_block_reason` 枚举，但目标卡住时 `next_action()` 仍 `return None`，"这个目标为什么不动"看不见。
 - **守卫全量跑一轮以小时计**：每个守卫都经 `init_db()` 重放全部迁移。某一组守卫变绿只能证明那一组，不能代表整个仓库。
-- **check_fixes.py 会留下 scratch 目录**（mkdtemp 未配 mtree，目前 %TEMP% 下已积累数千个）。
-- **2026-10-31 红蓝审查里的若干 P1 仍未处理**：security permit 无授权门、core.update() 未强制 pinned 字段、网关 loopback 免鉴权面过大、两套身份归一化（
+- **check_fixes.py 会留下 scratch 目录**（mkdtemp 未配 
+mtree，目前 %TEMP% 下已积累数千个）。
+- **2026-10-31 红蓝审查的 P1 已关闭，仍有两项例外**：`security permit` 现需授权、契约 `level`/`category` 经 `update()` 不可改写、网关破坏性路由即便来自 loopback 也要凭据、两套身份归一化已合并进 `core/agent_names.py`。仍开着的：网关 loopback 白名单虽已收窄但未消失（SPA 读取按设计仍免 token）、`claim_task` 跨进程仍非原子。
 ormalize_agent_name vs canonical_agent）仍并存。读路径与署名已收口，这些没有。
 - **写入侧署名不被拒绝**：按既定策略「写入放行、读取锁定」，capture 时显式 gent_name 仍可为他人建卡；冒名通过 wake_audit/ops_log 可观测，而非被拒。
 

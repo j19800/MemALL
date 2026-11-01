@@ -96,15 +96,75 @@ def handle_security(arguments: dict) -> str:
     if not action:
         return json.dumps({"error": "sub_action is required (audit|permit|check|score|list)"})
 
+    # The caller's identity.  The adapter re-attaches it to every call, so an
+    # empty value means the request never handshook.  ``permit`` needs it
+    # because granting a permission level is a privilege operation — see that
+    # branch.  ``target_agent`` is the row being configured; it must be a
+    # SEPARATE field, because using ``agent_name`` for both made "permit
+    # myself" and "permit someone else" indistinguishable (R3-8: an agent
+    # could raise its own level, or another's).
+    caller = (arguments.get("agent_name") or "").strip()
+
     if action == "audit":
-        agent = arguments.get("agent_name", None) or None
+        agent = arguments.get("target_agent") or caller or None
         result = audit_sensitive(agent_name=agent)
     elif action == "permit":
-        agent_name = arguments.get("agent_name")
+        target = (arguments.get("target_agent") or arguments.get("target") or "").strip()
         level = arguments.get("level")
-        if not agent_name or not level:
-            return json.dumps({"error": "agent_name and level are required for permit action"})
-        result = set_permission(agent_name, level)
+        if not target or not level:
+            return json.dumps({"error": (
+                "target_agent and level are required for permit; target_agent "
+                "names the identity being configured (agent_name carries the "
+                "caller's own identity)"
+            )}, ensure_ascii=False)
+        if not caller:
+            return json.dumps({"error": (
+                "permit requires an agent identity: send agent_name in the MCP "
+                "handshake so the grant can be attributed"
+            )}, ensure_ascii=False)
+        # Authorisation: a supervisor may configure anyone; everyone else may
+        # only LOWER their own level.  Raising your own permission is exactly
+        # the privilege escalation this gate exists to stop.
+        #
+        # The deployment's human owner counts as a supervisor here even when
+        # not listed in ``security.supervisor_agents``: that list names the
+        # AGENT orchestrators, and the human who owns the machine must not be
+        # locked out of configuring the agents they supervise.
+        from memall.config import get_config
+        from memall.core.task_identity import is_supervisor
+
+        human_owner = (get_config("identity.human_owner", "") or "").strip().lower()
+        is_human_owner = bool(human_owner) and caller.lower() == human_owner
+        supervisor = is_supervisor(caller) or is_human_owner
+
+        same_agent = target.lower() == caller.lower()
+        if not supervisor and not same_agent:
+            return json.dumps({
+                "error": "forbidden",
+                "message": (
+                    f"'{caller}' may not configure '{target}': only a member of "
+                    "security.supervisor_agents can change another agent's "
+                    "permission level."
+                ),
+                "caller": caller,
+                "target_agent": target,
+            }, ensure_ascii=False)
+        if same_agent and not supervisor:
+            current = _current_permission_level(target)
+            if current and not _is_lower_permission(level, current):
+                return json.dumps({
+                    "error": "forbidden",
+                    "message": (
+                        f"'{caller}' may not raise its own permission from "
+                        f"'{current}' to '{level}': self-escalation requires a "
+                        "supervisor."
+                    ),
+                    "caller": caller,
+                    "target_agent": target,
+                    "current": current,
+                    "requested": level,
+                }, ensure_ascii=False)
+        result = set_permission(target, level)
     elif action == "check":
         requester = arguments.get("requester")
         target = arguments.get("target")
@@ -119,6 +179,50 @@ def handle_security(arguments: dict) -> str:
     else:
         return json.dumps({"error": f"unknown action: {action}"})
     return json.dumps(result, ensure_ascii=False, default=str)
+
+
+# Ordered least → most privileged.  ``private`` is the MOST restrictive
+# permission level (it is the top of VISIBILITY_RANK in core.thin_waist),
+# so indexing it last is what makes the escalation check read correctly:
+# moving from ``private`` down to ``public`` relaxes access and must not be
+# something an agent can do to itself.
+_PERMISSION_ORDER = ("public", "trusted", "private")
+
+
+def _current_permission_level(agent_name: str) -> str:
+    """Current permission_level of *agent_name*, or "" when unknown."""
+    from memall.core.db import get_conn
+
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT permission_level FROM identities WHERE agent_name = ?",
+            (agent_name,),
+        ).fetchone()
+        return (row["permission_level"] if row else "") or ""
+    except Exception:
+        return ""
+    finally:
+        conn.close()
+
+
+def _is_lower_permission(requested: str, current: str) -> bool:
+    """True when *requested* is LESS privileged than *current*.
+
+    ``permission_level`` is a VISIBILITY requirement, not a rank of power:
+    ``private`` = only the agent itself may read its rows (most restrictive),
+    ``trusted`` = family circle, ``public`` = anyone (most permissive).
+
+    So "less privileged" means "harder to read" — a HIGHER index in
+    ``_PERMISSION_ORDER``.  Relaxing ``private`` into ``public`` widens who
+    can read, which is the escalation this gate exists to stop; tightening
+    ``public`` into ``private`` is a safe self-service action.
+    """
+    try:
+        return _PERMISSION_ORDER.index(requested) > _PERMISSION_ORDER.index(current)
+    except ValueError:
+        return False
+
 
 
 def handle_ops(arguments: dict) -> str:

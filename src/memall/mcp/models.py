@@ -584,6 +584,12 @@ class SecurityInput(BaseModel):
     level: Optional[str] = Field(None, pattern=r"^(public|trusted|private)$")
     requester: Optional[str] = Field(None, max_length=200)
     target: Optional[str] = Field(None, max_length=200)
+    # ``permit`` configures somebody else's permission level.  This must be a
+    # field of its own: ``agent_name`` carries the CALLER's identity (the
+    # adapter re-attaches it on every call), so reusing it as the target made
+    # "grant myself" and "grant someone else" indistinguishable -- and let any
+    # agent raise its own level.
+    target_agent: Optional[str] = Field(None, max_length=200)
 
 
 # ── Ops (Phase 14) ──
