@@ -17,6 +17,7 @@ memory_id 幂等去重。
 总线是**独立常驻进程**，没起时这两个动作返回清晰报错并附上排查提示，而
 MemALL 主链路（auto_inject 拉模式）完全不受影响。
 """
+import hashlib
 import json
 
 from memall.mcp.bus import BusClient, BusUnavailable
@@ -32,6 +33,20 @@ def _err(msg: str, **extra) -> str:
     return json.dumps(out, ensure_ascii=False)
 
 
+def _dedup_key(agent: str, to: str, mtype: str, payload) -> str:
+    """Stable idempotency key for a logical message.
+
+    Derived from the sender, recipient, type and payload — the same logical
+    send retried after a lost ack maps to the same key, so the bus can drop
+    the duplicate instead of delivering twice.
+    """
+    blob = json.dumps(
+        {"from": agent, "to": to, "type": mtype, "payload": payload},
+        ensure_ascii=False, sort_keys=True, default=str,
+    )
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
+
+
 def handle_send(arguments: dict) -> str:
     to = (arguments.get("to") or "").strip()
     if not to:
@@ -44,17 +59,30 @@ def handle_send(arguments: dict) -> str:
     if not agent:
         return _err("agent_name is required — the bus derives the sender "
                     "from the authenticated connection, not from the payload")
+    # Caller may supply an explicit key (e.g. the task card's memory_id) so an
+    # at-least-once retry collapses to exactly-once delivery.
+    # A3-2 (dsh ruling): default is DERIVED, but an explicit dedup_key=""
+    # disables dedup — two independent sends of the same payload must not be
+    # merged unless the caller opts in.  Presence of the key distinguishes
+    # "caller chose empty" from "caller said nothing".
+    if "dedup_key" in arguments:
+        key = (arguments.get("dedup_key") or "").strip()
+    else:
+        key = _dedup_key(agent, to, mtype, payload)
     try:
         with BusClient() as bus:
             bus.connect(agent)
-            r = bus.publish(to, payload, mtype)
+            r = bus.publish(to, payload, mtype, dedup_key=key)
     except BusUnavailable as exc:
-        return _err(f"bus unavailable: {exc}", delivered=False, to=to)
+        return _err(f"bus unavailable: {exc}", delivered=False, to=to,
+                    dedup_key=key, retryable=True)
     return json.dumps({
         "status": "ok",
         "to": to,
         "message_id": r.get("id"),
         "pushed": r.get("pushed", 0),
+        "dedup_key": key,
+        "deduplicated": bool(r.get("deduplicated")),
         "note": ("pushed=0 表示收件人当前不在线；消息已进 mailbox，"
                  "对方下次上线用 inbox 动作拉取"),
     }, ensure_ascii=False)

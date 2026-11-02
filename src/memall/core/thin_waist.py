@@ -566,14 +566,18 @@ def _score_quality(data: MemoryInput, content_hash_val: str,
     stripped = text.lstrip()
     if stripped.startswith("{") and stripped.endswith("}"):
         scores["clarity"] = min(scores["clarity"], 4)
-    scores["relevance"] = 7
+    scores["relevance"] = 7 if len(text.strip()) >= 40 else max(0, text_len // 10)
     scores["specificity"] = max(1, min(10, len(_SPECIFICITY_RE.findall(text)) * 2))
 
     # "reasoning" — measures whether content contains evidence/analysis language
     reasoning_hits = sum(1 for p in _REASONING_COMPILED if p.search(text))
     scores["reasoning"] = min(10, max(0, reasoning_hits * 2))
 
-    scores["source_traceability"] = 8 if data.agent_name and data.owner else 4
+    scores["relevance"] = 7 if len(text.strip()) >= 40 else max(0, text_len // 10)
+    scores["source_traceability"] = (
+        10 if (data.agent_name and data.owner and getattr(data, "project", ""))
+        else (8 if (data.agent_name and data.owner) else 4)
+    )
     scores["context_stability"] = 8 if "临时" not in text and "暂时" not in text else 3
     scores["sensitivity"] = (
         10
@@ -619,11 +623,14 @@ def _score_quality(data: MemoryInput, content_hash_val: str,
         gate = "rejected"
     # Level-specific gate: L6 reflections MUST have reasoning >= 2
     elif data.level == "L6" and scores["reasoning"] < 2:
-        passed = False
         gate = "rejected"
     elif data.level in ("L4", "L5") and not data.subject:
-        passed = False
         gate = "rejected"
+    # Minimum dimension floor: no single dimension may be critically low.
+    # L5 task cards routinely have low reasoning (they are commitments, not
+    # essays) — exempt them so min_dim<2 doesn't push them into review.
+    elif min_dim < 2 and text_len < 80 and data.level != "L5":
+        gate = "review"
     else:
         passed = avg >= required
         if gate_policy == "strict":

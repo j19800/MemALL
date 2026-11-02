@@ -214,11 +214,17 @@ def classify_step() -> dict:
         if cursor:
             rows = conn.execute(
                 "SELECT id, content, category, summary, level, metadata "
-                "FROM memories WHERE id < ? "
+                "FROM memories WHERE id > ? "
                 "AND COALESCE(memory_status, '') != 'archived' "
-                "ORDER BY id DESC LIMIT 500",
+                "ORDER BY id ASC LIMIT 500",
                 (cursor,),
             ).fetchall()
+            if not rows:
+                rows = conn.execute(
+                    "SELECT id, content, category, summary, level, metadata "
+                    "FROM memories WHERE COALESCE(memory_status, '') != 'archived' "
+                    "ORDER BY id DESC LIMIT 500"
+                ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT id, content, category, summary, level, metadata "
@@ -227,12 +233,12 @@ def classify_step() -> dict:
             ).fetchall()
 
         if rows:
-            min_id = min(r["id"] for r in rows)
+            max_id = max(r["id"] for r in rows)
             now = datetime.now(timezone.utc).isoformat()
             conn.execute(
                 "INSERT INTO pipeline_cursors (step, cursor_id, updated_at) VALUES ('classify', ?, ?) "
                 "ON CONFLICT(step) DO UPDATE SET cursor_id=excluded.cursor_id, updated_at=excluded.updated_at",
-                (min_id, now),
+                (max_id, now),
             )
         else:
             # C6: Don't reset cursor on empty — next run would re-scan the same 500 records infinitely

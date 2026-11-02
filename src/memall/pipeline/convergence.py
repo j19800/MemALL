@@ -74,7 +74,7 @@ def create_discussion(
     recommendation: str = "",
     creator: str = "system",
     participants: list | None = None,
-    timeout_hours: int = 24,
+    timeout_hours: int = 72,
     suggest: bool = False,
     convergence_rule: str = "unanimous",
 ) -> dict:
@@ -499,6 +499,10 @@ def _converge_single(conn, disc: dict) -> dict:
         responded_agents = set()
         for resp in response_dicts:
             rmeta = json.loads(resp.get("metadata") or "{}")
+            # An observer stance (non-participant) is recorded but does not
+            # count toward convergence.
+            if rmeta.get("observer"):
+                continue
             a = rmeta.get("agent_name", resp.get("agent_name", ""))
             if a:
                 responded_agents.add(a)
@@ -561,7 +565,7 @@ def _discussion_deadline_passed(meta: dict, created_at) -> bool:
     try:
         from datetime import datetime, timedelta, timezone
 
-        hours = int(meta.get("timeout_hours") or 24)
+        hours = int(meta.get("timeout_hours") or 72)
         if hours <= 0 or not created_at:
             return False
         started = created_at
@@ -691,10 +695,33 @@ def _confirm_discussion_once(
         disc = dict(row)
 
         disc_meta = json.loads(disc.get("metadata") or "{}")
+        if disc_meta.get("status") == "expired":
+            # A late response revives a timed-out discussion: the deadline parks
+            # zombies, it does not kill the topic. Flip back to active so the
+            # normal convergence path applies to this response.
+            disc_meta["status"] = "active"
+            disc_meta.pop("expired_at", None)
+            # converge_discussion() re-reads the status from *disc*, so the
+            # revival has to be mirrored there or it would still see 'expired'
+            # and refuse to converge.
+            disc["metadata"] = json.dumps(disc_meta, ensure_ascii=False)
+            conn.execute(
+                "UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
+                (disc["metadata"], now, discussion_id),
+            )
         if disc_meta.get("status") != "active":
             return {
                 "warning": f"discussion #{discussion_id} is already {disc_meta.get('status')}"
             }
+
+        # Roster membership. A non-participant may still record a stance, but
+        # it is flagged and does NOT count toward convergence: refusing it
+        # outright discards useful input from a stakeholder, while counting it
+        # would let an agent outside the roster decide the outcome (measured on
+        # #1001746: two decommissioned agents voted).
+        roster = unwrap_meta(disc_meta, "participants") or []
+        roster_set = {p.strip().lower() for p in roster if isinstance(p, str)}
+        is_participant = (not roster) or (agent_name.lower() in roster_set)
 
         # ── P2 response ──
         subject = f"[表态] 讨论#{discussion_id} | {agent_name}: {stance}"
@@ -716,6 +743,10 @@ def _confirm_discussion_once(
                 # 11 of 30 live responses had already drifted (one to L1, one
                 # to L6), which is why discussions never converged.  Pin both.
                 "pinned_fields": ["category", "level"],
+                # Observer stances are recorded for the deliberation record but
+                # excluded from every convergence tally (see _converge_single and
+                # the auto-converge below).
+                "observer": not is_participant,
             }
         )
         cur = conn.execute(
@@ -775,6 +806,10 @@ def _confirm_discussion_once(
             responded_agents = set()
             for resp in response_list:
                 rmeta = json.loads(resp.get("metadata") or "{}")
+                # An observer stance (non-participant) is recorded but does not
+                # count toward convergence.
+                if rmeta.get("observer"):
+                    continue
                 a = rmeta.get("agent_name", resp.get("agent_name", ""))
                 if a:
                     responded_agents.add(a)
@@ -859,6 +894,12 @@ def _analyze_stances(responses: list[dict]) -> dict:
         agent = rmeta.get("agent_name") or resp.get("agent_name") or ""
         stance = (rmeta.get("stance") or "confirm").lower()
         note = (rmeta.get("note") or rmeta.get("arguments") or "")[:200]
+        if rmeta.get("observer"):
+            # Non-participant stance: recorded for the deliberation record,
+            # but excluded from the consensus tally (旁听不算票).
+            if stance in notes and note:
+                notes[stance].append(f"{agent}（旁听）: {note}")
+            continue
         if stance in counts:
             counts[stance] += 1
         else:
@@ -1066,10 +1107,20 @@ def converge_discussion(conn, disc: dict, responses: list[dict], reason: str) ->
     for i, item in enumerate(action_items):
         if isinstance(item, str):
             desc = item
-            assigned_to = participants[i % len(participants)] if participants else ""
+            # A plain-string action item carries NO assignee information.
+            # Index round-robin used to invent one (participants[i % len]),
+            # which silently reassigned work whenever the roster was amended
+            # and produced cards nobody owned deliberately. Leave it empty —
+            # the fallback below attributes it to the discussion creator, who
+            # can re-delegate knowingly.
+            assigned_to = ""
         else:
             assigned_to = item.get("assigned_to", "")
             desc = item.get("description", "")
+        if not assigned_to and participants:
+            # an action item that names nobody is a decision-level commitment
+            # of the creator, not an arbitrary slice of the roster
+            assigned_to = disc.get("agent_name") or ""
         assigned_to = normalize_agent_name(assigned_to)
         task_subject = f"[任务] {title} — {_smart_subject(desc)}"[:200]
         task_content = f"[任务] {title} | {desc}"[:2000]
@@ -1167,6 +1218,7 @@ def resolve_pending_deliberations() -> dict:
             "checked": len(rows),
             "converged": 0,
             "tasks_created": 0,
+            "expired": 0,
         }
 
         for disc in rows:
@@ -1181,6 +1233,23 @@ def resolve_pending_deliberations() -> dict:
                 (disc["id"],),
             ).fetchone()
             if not has_responses:
+                # A discussion nobody ever answered used to stay 'active'
+                # forever — no timeout ever closed it, so the active-topic
+                # list filled with zombie cards. Past its own deadline, park
+                # it as 'expired' so it stops pretending to be in flight; a
+                # late response revives it (see _confirm_discussion_once).
+                if _discussion_deadline_passed(meta, dd.get("created_at")):
+                    meta["status"] = "expired"
+                    meta["expired_at"] = now_iso()
+                    conn.execute(
+                        "UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
+                        (json.dumps(meta, ensure_ascii=False), now_iso(), disc["id"]),
+                    )
+                    # The converge path commits inside converge_discussion(); this
+                    # branch must commit too, or the parked status is rolled back
+                    # when the connection closes and the zombie stays 'active'.
+                    conn.commit()
+                    result["expired"] += 1
                 continue
 
             cr = _converge_single(conn, dd)

@@ -208,12 +208,23 @@ class BusClient:
             # 其它 req_id 的响应：忽略（同步客户端不会并发）
 
     # ── 公开操作 ──────────────────────────────────────────────────────
-    def publish(self, to: str, payload, mtype: str = "msg") -> dict:
-        """发消息。from 由服务端按连接身份判定。"""
+    def publish(self, to: str, payload, mtype: str = "msg",
+                dedup_key: str = "") -> dict:
+        """发消息。from 由服务端按连接身份判定。
+
+        ``dedup_key`` makes the publish idempotent when the server supports it:
+        a socket timeout after the server persisted the message used to make a
+        caller retry, and the retry created a SECOND copy (publish carried no
+        key).  The key is derived from (to, type, payload) by the caller so a
+        retry of the same logical message lands on the same key.
+        """
         self._req_id += 1
         rid = self._req_id
-        self._send({"op": "publish", "to": to, "from": self.agent,
-                    "type": mtype, "payload": payload, "req_id": rid})
+        req = {"op": "publish", "to": to, "from": self.agent,
+               "type": mtype, "payload": payload, "req_id": rid}
+        if dedup_key:
+            req["dedup_key"] = dedup_key
+        self._send(req)
         r = self._await(rid, {"pub_ok"})
         if r.get("op") == "error":
             raise BusUnavailable(f"publish 失败: {r.get('msg')}")

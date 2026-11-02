@@ -20,8 +20,11 @@ from datetime import datetime, timezone
 
 from memall.core.db import get_conn
 from memall.core.status import NOT_ARCHIVED, task_status_of
+from memall.config import get_config
 from memall.pipeline.convergence import check_pending_discussions
-from memall.federation.family import get_family_db_path, init_family_db
+from memall.federation.family import (
+    get_family_db_path, init_family_db, FAMILY_TRUST_LEVELS,
+)
 from memall.federation.conflict import detect_conflicts, list_conflicts
 
 logger = logging.getLogger(__name__)
@@ -58,9 +61,52 @@ def _get_family_conn():
     return conn
 
 
+def _local_db_path():
+    """Path of the local (per-agent) memories database."""
+    from memall.core.db import DB_PATH
+    return DB_PATH
+
+
 def fed_query(query: str = "", agent_name: str = "", category: str = "",
-              trust_level: str = "", project: str = "", limit: int = 20) -> dict:
-    """Query shared_memories across agents."""
+              trust_level: str = "", project: str = "", limit: int = 20,
+              viewer: str = "") -> dict:
+    """Query shared_memories across agents.
+
+    ``viewer`` is the CALLER's identity and drives the trust gate: the shared
+    store is not world-readable.  Without it any local process could read every
+    published family record regardless of visibility — the same hole
+    ``_filter_by_trust`` already closes on the local store.  ``agent_name``
+    remains a CONTENT filter (records authored by that agent).
+
+    A2-2 (dsh ruling): an EMPTY viewer is not a bypass.  Under the transitional
+    ``federation.strict_read=false`` (default for one month) an empty viewer
+    keeps the pre-fix behaviour — the shared store is read without a trust
+    filter — so identity-less callers (CLI, older integrations) do not suddenly
+    see nothing.  Flipping ``strict_read=true`` drops an empty viewer to rank 0
+    (public only), which is the least-privilege end state.  A NAMED viewer always
+    resolves its real clearance, in both modes.
+    """
+    from memall.core.thin_waist import VISIBILITY_RANK, _viewer_rank
+
+    strict_read = bool(get_config("federation.strict_read", False))
+    # End-state rank for an unidentified caller: public only.
+    _EMPTY_RANK = 0
+    # Transitional rank: high enough that no published level is filtered out,
+    # reproducing the pre-A2-2 behaviour exactly.
+    _LENIENT_RANK = max(VISIBILITY_RANK.values())
+    try:
+        local = sqlite3.connect(str(_local_db_path()), timeout=5)
+        local.row_factory = sqlite3.Row
+        try:
+            if viewer:
+                viewer_rank = _viewer_rank(local, viewer)
+            else:
+                viewer_rank = _EMPTY_RANK if strict_read else _LENIENT_RANK
+        finally:
+            local.close()
+    except Exception:
+        viewer_rank = _EMPTY_RANK if strict_read else _LENIENT_RANK
+
     conn = _get_family_conn()
     try:
         where = ["1=1"]
@@ -83,10 +129,14 @@ def fed_query(query: str = "", agent_name: str = "", category: str = "",
             params.append(f"%{query}%")
 
         sql = f"SELECT id, original_id, source_agent, content, category, level, project, trust_level, published_at FROM shared_memories WHERE {' AND '.join(where)} ORDER BY published_at DESC LIMIT ?"
-        params.append(limit)
+        params.append(max(int(limit) * 4, int(limit)))  # over-fetch, filter below
         rows = conn.execute(sql, params).fetchall()
         results = []
         for r in rows:
+            # Trust gate: a record's published trust_level must not exceed the
+            # viewer's clearance.
+            if VISIBILITY_RANK.get(r["trust_level"] or "public", 0) > viewer_rank:
+                continue
             results.append({
                 "id": r["id"],
                 "original_id": r["original_id"],
@@ -98,7 +148,10 @@ def fed_query(query: str = "", agent_name: str = "", category: str = "",
                 "trust_level": r["trust_level"],
                 "published_at": r["published_at"],
             })
-        return {"query": query, "results": results, "total": len(results)}
+            if len(results) >= int(limit):
+                break
+        return {"query": query, "results": results, "total": len(results),
+                "viewer": viewer}
     finally:
         conn.close()
 
@@ -153,6 +206,30 @@ def fed_publish(memory_id: int, source_agent: str = "",
     content = redact_content(mem.content)
     now = datetime.now(timezone.utc).isoformat()
 
+    # A2-3 (dsh ruling): trust_level was written verbatim and unvalidated, so a
+    # 'family'-visible memory could be re-published as 'public' just by asking.
+    # Reject an unknown level, then clamp the published level to the source
+    # memory's own visibility — a record may be republished tighter, never
+    # looser.  A PRIVATE source may not be published at all: clamping it to
+    # 'private' and still writing a shared_memories row leaks the content into
+    # the family DB regardless of its label, so refuse outright.
+    requested = (trust_level or "").strip().lower()
+    if requested and requested not in FAMILY_TRUST_LEVELS:
+        return {"error": f"unknown trust_level {trust_level!r} "
+                         f"(expected one of {sorted(FAMILY_TRUST_LEVELS)})"}
+
+    from memall.core.thin_waist import VISIBILITY_RANK as _VR
+    src_vis = (getattr(mem, "visibility", "") or "private").strip().lower()
+    if src_vis == "private":
+        return {"error": f"memory {memory_id} is private and cannot be "
+                         f"published to shared_memories"}
+    published_trust = requested or "family"
+    if src_vis in _VR and published_trust in _VR:
+        if _VR[published_trust] > _VR[src_vis]:
+            published_trust = src_vis
+    if published_trust not in FAMILY_TRUST_LEVELS:
+        published_trust = "family"
+
     conn = _get_family_conn()
     try:
         cur = conn.execute(
@@ -161,14 +238,15 @@ def fed_publish(memory_id: int, source_agent: str = "",
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (memory_id, viewer, "",
              content, category or mem.category, mem.level,
-             mem.project, mem.owner, now, trust_level),
+             mem.project, mem.owner, now, published_trust),
         )
         conn.commit()
         # Fix Bug-3: 用 cur.rowcount 判断是否真插入，total_changes 是累计值
         # INSERT OR IGNORE 时已存在 rowcount=0，新插入 rowcount=1
         inserted = cur.rowcount > 0
         return {"memory_id": memory_id, "source_agent": viewer,
-                "published": inserted, "was_new": inserted, "published_at": now}
+                "published": inserted, "was_new": inserted, "published_at": now,
+                "trust_level": published_trust}
     finally:
         conn.close()
 

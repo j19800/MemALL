@@ -50,9 +50,9 @@ _COMPILED_PAIRS: list[tuple[re.Pattern, re.Pattern]] = [
 ]
 
 # Jaccard threshold for candidate selection (lower = more candidates)
-_JACCARD_THRESHOLD = 0.15
+_JACCARD_THRESHOLD = 0.25
 # Only flag clear contradictions above this threshold
-_CONTRADICT_JACCARD_MIN = 0.10
+_CONTRADICT_JACCARD_MIN = 0.15
 # Number of recent memories to scan per call
 _DEFAULT_SCAN_WINDOW = 50
 
@@ -206,14 +206,12 @@ def dream_scan(
             "dream: memory #%d contradicts #%d (%s)", new_mem_id, row["id"], verdict
         )
 
-        # Mark both memories with conflict status for agent visibility
+        # Mark only the new memory with conflict status; never overwrite an
+        # existing row's status (which may be archived/dormant/normal) — the
+        # previous behaviour polluted healthy memories with 'conflict'.
         conn.execute(
             "UPDATE memories SET memory_status = 'conflict' WHERE id = ?",
             (new_mem_id,),
-        )
-        conn.execute(
-            "UPDATE memories SET memory_status = 'conflict' WHERE id = ? AND memory_status IS NULL",
-            (row["id"],),
         )
 
         # Limit to 3 conflicts per capture to avoid noise

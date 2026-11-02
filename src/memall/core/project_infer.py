@@ -43,7 +43,7 @@ _CONTENT_PROJECT_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"股票|交易|分析", re.I), "tradingagents"),
 ]
 
-_DEFAULT_PROJECT = "memall"
+_DEFAULT_PROJECT = ""
 
 
 def infer_project(agent_name: str = "", category: str = "",
@@ -61,7 +61,9 @@ def infer_project(agent_name: str = "", category: str = "",
         content:    Memory content (used for keyword heuristics).
 
     Returns:
-        A non-empty project string. Never returns ``""``.
+        A project string (possibly empty when no inference matched). Returning
+        "" lets the caller distinguish "no project" from a real project, instead
+        of silently bucketing everything into 'memall'.
     """
     # 1) Agent-based inference
     agent_lower = (agent_name or "").lower().strip()

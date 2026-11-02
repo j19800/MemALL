@@ -64,11 +64,17 @@ def _migrate_family_db():
 
 
 def _detect_contradiction(text_a: str, text_b: str) -> bool:
-    """Check if two texts contain contradictory keyword pairs."""
+    """Check if two texts take opposing stances on the same keyword pair.
+
+    The pair must be split ACROSS the two texts: one text asserts ``kw_a`` and
+    the other asserts ``kw_b`` (or vice versa).  The previous implementation
+    used ``kw_a in text_a or kw_a in text_b`` for both halves, so a single
+    text containing both halves of a pair ("采用 X，拒绝 Y") flagged itself as a
+    conflict with an unrelated memory — 21 false conflicts were produced this
+    way on the live family DB.
+    """
     for kw_a, kw_b in CONTRADICTION_PAIRS:
-        has_a = kw_a in text_a or kw_a in text_b
-        has_b = kw_b in text_a or kw_b in text_b
-        if has_a and has_b:
+        if (kw_a in text_a and kw_b in text_b) or (kw_b in text_a and kw_a in text_b):
             return True
     return False
 

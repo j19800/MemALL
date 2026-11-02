@@ -58,8 +58,8 @@ def procedure_step() -> dict:
         rows = conn.execute("""
             SELECT id, content, level, metadata
             FROM memories
-            WHERE level IN ('L1', 'L2', 'L3', 'L4', 'P1', 'P2')
-              AND LENGTH(TRIM(content)) > 20
+            WHERE level IN ('L3', 'L4', 'L5', 'L6')
+              AND LENGTH(TRIM(content)) > 40
         """).fetchall()
 
         upgraded = 0

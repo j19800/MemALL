@@ -31,8 +31,9 @@ async def handle_fed_query(request: web.Request, gw) -> web.Response:
     category = request.query.get("category", "")
     trust_level = request.query.get("trust_level", "")
     limit = int(request.query.get("limit", "20"))
-    result = fed_query(query=query, source_agent=agent_name, category=category,
-                       trust_level=trust_level, limit=limit)
+    result = fed_query(query=query, category=category,
+                       trust_level=trust_level, limit=limit,
+                       viewer=agent_name)
     return web.json_response(result)
 
 

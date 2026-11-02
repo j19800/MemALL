@@ -17,6 +17,7 @@ Usage:
 
 import json
 import logging
+import urllib.parse
 import urllib.request
 import urllib.error
 

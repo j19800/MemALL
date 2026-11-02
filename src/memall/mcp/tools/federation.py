@@ -8,10 +8,16 @@ from memall.mcp.federation_tools import (
 def handle_query(arguments: dict) -> str:
     result = fed_query(
         query=arguments.get("query", ""),
-        agent_name=arguments.get("agent_name", ""),
+        # `agent_name` is a CONTENT filter (records authored by that agent);
+        # the caller's own identity travels as `viewer` and is what the trust
+        # gate uses.  Passing the session identity as a content filter was the
+        # "human searching their own memories gets nothing" bug.
+        agent_name=arguments.get("agent_name_filter")
+        or (arguments.get("agent_name") if arguments.get("filter_by_agent") else ""),
         category=arguments.get("category", ""),
         trust_level=arguments.get("trust_level", ""),
         limit=arguments.get("limit", 20),
+        viewer=arguments.get("agent_name", ""),
     )
     return json.dumps(result, ensure_ascii=False, default=str)
 

@@ -1,3 +1,45 @@
+## [v0.1.76] - 2026-11-02
+
+按 dsh 对 E 节 9 条裁决（讨论 #1007956）落地 A 档 14 处改动。**B 档未合入**——见文末「批次边界」。
+
+### Changed（收敛层 `pipeline/convergence.py`）
+
+- **A1-1 非参与者表态改为「旁听记录、不计票」**（裁决①：允许旁听）。原先直接 `return error` 会把利益相关方的有效输入丢掉；现在 stance 照常写入，但打上 `observer: true`，三处计票（`_converge_single`、`confirm_discussion` 自动收敛、`_analyze_stances`）一律跳过。实测：局外人的 `reject` 既不能否决、也不进 `stance_summary`，名册补齐后正常收敛。
+- **A1-2 expired 可被迟到响应翻回 active**，并把回写落库（`disc["metadata"]` 同步 + `UPDATE`）——否则 `converge_discussion()` 重读状态仍看到 `expired` 而拒绝收敛。
+- **A1-3 零响应讨论超期归档，默认超时 24h → 72h**（裁决②：延长到 72h）。`create_discussion(timeout_hours=)` 与 `_discussion_deadline_passed()` 的兜底值同步，二者此前不一致。
+- **A1-4 纯字符串 action item 不再按 `participants[i % n]` 轮询指派**，改为归属讨论创建者。
+
+### Changed（联邦层 `mcp/federation_tools.py`）
+
+- **A2-2 `fed_query` 增加 `viewer` 信任门槛 + `federation.strict_read` 过渡开关**（裁决③：加开关，宽松一个月）。空 viewer 在 `strict_read=false` 下取 `max(VISIBILITY_RANK)`，**精确复现改动前「不过滤」的行为**；置 `true` 才降到 rank 0（仅 public）。命名 viewer 两种模式下都按真实等级过滤。
+  - 过渡档位最初误用 `shared`(rank=1)，实测 34 条只放出 1 条——等于当场收紧，「宽松一个月」形同虚设，已改为不过滤档。
+- **A2-3 `fed_publish`：`trust_level` 枚举校验 + 钳制不松于源可见性 + private 完全禁止发布**（裁决④：完全禁止）。钳制到 `private` 再写库仍会把内容泄进 family DB，所以直接拒绝。
+- **A2-1 `_detect_contradiction` 要求对立词跨两段文本**（HEAD 遗留的 21 条误报根因）。
+- A2-4 `mcp/tools/federation.py`、`gateway_federation.py` 传参修正：`agent_name` 作内容过滤、调用方身份走 `viewer`。
+
+### Changed（总线 / 写入质量）
+
+- **A3-1 `bus.publish(dedup_key=)` 透传**；服务端不认该字段时行为完全不变。
+- **A3-2 幂等键默认派生，`dedup_key=""` 显式禁用**（裁决⑤）。用「参数是否存在」区分「调用方主动传空」与「没传」，避免两次独立同 payload 的发送被误合并。
+- A4-1 `classify` 游标改 `id > cursor ASC` + `max_id`；A4-2 `project_infer` 默认 `""`；A4-3 `dream` 阈值 0.15→0.25 / 0.10→0.15；A4-4 `procedure_step` 限定 L3–L6 且 >40 字；A4-7 `hub_client` 补 `import urllib.parse`。
+- **A4-5 `compute_tfidf` 默认 tokenizer 保持 `tokenize`（裁决⑥，本批风险最高项）**。工作区里它被改成 `tokenize_cjk`，而其自身 docstring 就写着「opt-in，以保证全局行为与已持久化的 TF-IDF/SVD 模型稳定」——语义去重 0.92 / dream 0.25 / integrate 0.85 / conflict 0.85 全是按旧 tokenizer 标定的，换默认等于全部失效。已回退到 HEAD（因此该文件无 diff）；中文增益路径保持显式：`agent_routing.py`、`search/enhancements.py` 传 `tokenizer=tokenize_cjk`。若将来要全局切换，须先 A/B 并重标定阈值。
+- **A4-6 质量门 `min_dim<2` 豁免 L5**（裁决⑦：会误伤短任务卡）。L5 卡片天然 reasoning 分低；同一段文字作为 P2 仍走 review，规则本身没被削弱。
+
+### Fixed（验证过程中发现的真实缺陷，非测试脚本问题）
+
+- **A1-3 归档分支漏 `conn.commit()`**：`resolve_pending_deliberations()` 里 converge 路径的提交藏在 `converge_discussion()` 内部，新增的 expired 分支只 `execute` 未提交，连接关闭即回滚——计数器报 `expired=1` 而卡片仍是 `active`，僵尸讨论一条都没归档成功。
+- `federation_tools.py` 一处 f-string 括号错位（`{health['error']"`) 导致整文件无法编译；该缺陷随 B 档残留一起被清除。
+
+### 批次边界（必须记录）
+
+计划写的是「B 档一律未动手」，但工作区实际已混入 B1/B3/B4/B5 的实现：`discussion.py` 传了 `_rule_satisfied` 不接受的 `rejecting=`（必 `TypeError`）、`task_lifecycle.py` 的依赖通知、`fed_deliver` 改身份、以及 B5 Hub 游标被插进 `hub_sync()` 中部把原函数体截断成 `return` 之后的孤儿代码。为忠实执行「只 merge A 档」，这些已从 A 档文件中剥离；B2（`bus_dlq.py` + `042_bus_dlq.py`）移入 `pending_b_tier/`——它作为未跟踪迁移会在每次开库时报 `No module named 'alembic'`，且 `042` 与 `042_create_skills.py`、`042_create_wake_audit.py` 编号冲突。
+
+### 验证
+
+`tools/verify.py --plan fast` 3/3 绿（import / 红蓝 9 局 9 通过 / pytest-quick 82 通过）；A 档相关 14 条守卫全过（`convergence_rule_respected`、`confirm_path_honours_rule`、`convergence_waits_for_action_items`、`discussion_amend_fixes_stale_roster`、`retrieve_by_id_respects_viewer`、`empty_identity_rejected_everywhere` 等）；另在 `backups/daily/2026-11-02.db` 的一次性副本上跑 22 项功能断言 + 13 项行为/静态断言全通过，未触碰线上库。
+
+---
+
 ## [v0.1.75] - 2026-11-01
 
 把「能不能提交/发布」这件事固化成一条命令，并在做这件事的时候抓到一个**真正的测试隔离缺陷**。
