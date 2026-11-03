@@ -1,8 +1,8 @@
-<p align="center">
+﻿<p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/MCP-2025--03--26-purple" alt="MCP">
-  <img src="https://img.shields.io/badge/version-0.1.75-green" alt="Version 0.1.69">
+  <img src="https://img.shields.io/badge/version-0.1.77-green" alt="Version 0.1.69">
   <img src="https://img.shields.io/github/stars/j19800/MemALL?style=social" alt="GitHub stars">
 </p>
 
@@ -219,8 +219,8 @@ esources/read, ed_publish laundering/attribution forgery, and 	raverse/	imeline
 
 - **Task transitions use an optimistic compare-and-set, not a row lock.** `core/task_cas.py` writes only if the stored status still equals the one the caller read, so a lost update becomes a `conflict` the caller retries. It is not a true pessimistic lock: two writers can still both pass the read and one simply loses the write, which is safe for status but means callers must handle `conflict`.
 - **Goal-level block reasons are not observable.** Cards already carry a two-value `last_block_reason` enum; goals still `return None` when they are stuck, so "why this goal is not moving" is invisible.
-- **The guard suite is slow by design.** Every guard replays all migrations via `init_db()`, so a full run is measured in hours rather than minutes. Treat a green card guard set as evidence for that set, not for the whole repository.
-- **`check_fixes.py` leaves scratch directories** under `%TEMP%` (`mkdtemp` without `rmtree`).
+- **The guard suite is slow by design.** Every guard replays all migrations via `init_db()`, so a full run takes ~29 minutes (measured: 92 guards + 4 bundled suites in 1748s). That is now short enough to run as a gate — see `tools/verify.py` — but the per-guard migration replay is still the reason it cannot be a pre-push hook.
+- **`check_fixes.py` scratch directories are reclaimed.** Every run still creates dozens of ~2.5 MB database copies, but they now live under one PID-tagged run root that is deleted at the end of the run and swept at the start of the next one (a live sibling run is never touched). Measured before the fix: 4,384 leftover directories totalling 10.7 GB. Set `MEMALL_GUARD_KEEP_SCRATCH=1` to keep the directory for debugging.
 - **The 2026-10-31 red/blue P1s are closed, with two exceptions.** `security permit` now requires authorisation, contract `level`/`category` are immutable through `update()`, destructive gateway routes need a credential even from loopback, and the two identity normalisers are unified into `core/agent_names.py`. Still open from that report: the gateway's loopback carve-out is narrower but not gone (SPA reads remain tokenless by design), and `claim_task` is still not atomic across processes.
 - **Write-side attribution is not refused.** By the chosen policy ("writes pass, reads are locked") an explicit `agent_name` can still create work on another agent's behalf; impersonation is made observable via `wake_audit`/`ops_log` rather than rejected.
 

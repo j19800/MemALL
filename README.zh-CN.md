@@ -1,8 +1,8 @@
-<p align="center">
+﻿<p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/MCP-2025--03--26-purple" alt="MCP">
-  <img src="https://img.shields.io/badge/version-0.1.75-green" alt="Version 0.1.69">
+  <img src="https://img.shields.io/badge/version-0.1.77-green" alt="Version 0.1.69">
   <img src="https://img.shields.io/github/stars/j19800/MemALL?style=social" alt="GitHub stars">
 </p>
 
@@ -212,7 +212,7 @@ esources/read、ed_publish 洗白与署名伪造、	raverse/	imeline/	race 均�
 - **`claim_task` 不是跨进程原子的**：`mcp/tasks.py` 走"读 → 改 → `UPDATE ... WHERE id = ?`"，既无状态谓词也无行锁，并发双认领会 last-writer-wins，`claimed_by` 被静默覆盖。计划：加状态谓词或 `(task_id, status)` 唯一索引。
 - **目标层的阻塞原因不可观测**：卡片层已有两值 `last_block_reason` 枚举，但目标卡住时 `next_action()` 仍 `return None`，"这个目标为什么不动"看不见。
 - **守卫全量跑一轮以小时计**：每个守卫都经 `init_db()` 重放全部迁移。某一组守卫变绿只能证明那一组，不能代表整个仓库。
-- **check_fixes.py 会留下 scratch 目录**（mkdtemp 未配 
+- **`check_fixes.py` 的 scratch 目录已回收**：每轮仍会生成几十个约 2.5 MB 的库副本，但现在都放在一个带 PID 的运行根目录下，运行结束即删、下一次运行开始时再清扫一次（不会动同机并行的另一个进程）。修复前实测残留 4,384 个目录、共 10.7 GB。设 `MEMALL_GUARD_KEEP_SCRATCH=1` 可保留现场调试。
 mtree，目前 %TEMP% 下已积累数千个）。
 - **2026-10-31 红蓝审查的 P1 已关闭，仍有两项例外**：`security permit` 现需授权、契约 `level`/`category` 经 `update()` 不可改写、网关破坏性路由即便来自 loopback 也要凭据、两套身份归一化已合并进 `core/agent_names.py`。仍开着的：网关 loopback 白名单虽已收窄但未消失（SPA 读取按设计仍免 token）、`claim_task` 跨进程仍非原子。
 ormalize_agent_name vs canonical_agent）仍并存。读路径与署名已收口，这些没有。

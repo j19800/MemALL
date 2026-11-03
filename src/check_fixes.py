@@ -24,6 +24,231 @@ SRC = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SRC)
 
 
+# ── Scratch directory lifecycle ───────────────────────────────────────────
+# Every guard wants its own throwaway database, and there are 92 guards plus
+# four suites.  Each used to call tempfile.mkdtemp() and never remove it: a
+# measured %TEMP% held 4,382 memall_guard_* / memall_hb_* / skill_export_*
+# directories totalling 10.7 GB.  The cost was not "one directory per run" —
+# each guard's DB is a ~2.5 MB copy and a full run leaves dozens.
+#
+# Now every scratch directory lives under ONE run-level root, and main()
+# removes that root in a finally block.  Set MEMALL_GUARD_KEEP_SCRATCH=1 to
+# keep it for debugging.
+_SCRATCH_ROOT: str = ""
+
+
+_STALE_SWEPT = False
+
+
+def _pid_alive(pid: int) -> bool:
+    """True when process *pid* is still running on this machine."""
+    try:
+        import os as _os
+
+        if _os.name == "nt":
+            # Windows: a query that raises means "no such process".
+            import subprocess as _sp
+
+            out = _sp.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                          capture_output=True, text=True, timeout=5)
+            return str(pid) in (out.stdout or "")
+        _os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _sweep_stale_scratch() -> None:
+    """Delete scratch roots left behind by DEAD processes.
+
+    Deleting a guard's databases from inside the same process is unreliable on
+    Windows: ``get_conn`` opens a fresh sqlite3 connection per call and a guard
+    that forgets to close one keeps the .db (and its -wal/-shm) locked for the
+    life of that process.  ``ConnectionPool.close_all`` only drains IDLE
+    connections and an ``atexit`` hook runs while those objects are still
+    referenced, so neither reliably reclaims them.  Measured: a directory whose
+    files refused deletion throughout a run deletes instantly once that run
+    exits.
+
+    The reliable moment is therefore the NEXT run's start — but "next run"
+    must be identified by LIFENESS, not by an age cutoff: a run that finished a
+    minute ago still owns no handles and should be reclaimed, while a sibling
+    run happening right now must not be touched.  Each root is named
+    ``..._p<PID>`` so the answer is exact.
+    """
+    global _STALE_SWEPT
+    if _STALE_SWEPT:
+        return
+    _STALE_SWEPT = True
+    import glob
+    import re
+    import shutil
+
+    me = os.getpid()
+    pattern = re.compile(r"_p(\d+)$")
+    for path in glob.glob(os.path.join(tempfile.gettempdir(), "memall_guard_run_*")):
+        m = pattern.search(os.path.basename(path))
+        if m and int(m.group(1)) == me:
+            continue                      # our own (should not exist yet)
+        if m and not _pid_alive(int(m.group(1))):
+            try:
+                shutil.rmtree(path)
+            except (OSError, FileNotFoundError):
+                pass
+        elif not m:
+            # Legacy root from before PID naming: reclaim it when it looks
+            # abandoned (not written to recently).
+            try:
+                import time
+
+                if os.path.getmtime(path) < time.time() - 120:
+                    shutil.rmtree(path)
+            except (OSError, FileNotFoundError):
+                pass
+
+
+def _scratch_root() -> str:
+    """The per-run directory that holds every guard's scratch data."""
+    global _SCRATCH_ROOT
+    if not _SCRATCH_ROOT:
+        _sweep_stale_scratch()
+        # PID in the name so a later run can tell "dead owner" from "live".
+        _SCRATCH_ROOT = tempfile.mkdtemp(prefix=f"memall_guard_run_p{os.getpid()}_")
+    return _SCRATCH_ROOT
+
+
+def _scratch_dir(prefix: str) -> str:
+    """Create a uniquely named scratch directory inside the run-level root."""
+    root = _scratch_root()
+    n = 0
+    while True:
+        path = os.path.join(root, f"{prefix}{n}")
+        if not os.path.exists(path):
+            os.makedirs(path)
+            return path
+        n += 1
+
+
+def _cleanup_scratch() -> None:
+    """Remove the run-level scratch root, retrying past Windows file locks.
+
+    ``shutil.rmtree(..., ignore_errors=True)`` is NOT enough here: SQLite
+    connections and background pipeline threads can still hold handles on the
+    guard databases after the guard returns, and on Windows an open handle
+    makes rmtree skip that subtree *silently*.  Measured: a clean 5-guard run
+    left the run root behind containing exactly the guard_2 and guard_4
+    subdirectories.  So: release the pool first, then retry the removal.
+    """
+    global _SCRATCH_ROOT
+    if not _SCRATCH_ROOT:
+        return
+    if os.environ.get("MEMALL_GUARD_KEEP_SCRATCH"):
+        print(f"scratch kept at: {_SCRATCH_ROOT}")
+        return
+
+    # Release anything that could still be holding the DB files open.  The pool
+    # is the obvious owner; sqlite3 connections opened directly by a guard's
+    # handler are not, so on Windows they keep the .db locked even after the
+    # pool is closed.
+    #
+    # A guard may also have scheduled a lightweight pipeline whose worker keeps
+    # writing for a while, so wait for it — with a real budget, because the
+    # whole point is to know when the files are free.
+    try:
+        import memall.core.db as _mdb
+
+        pool = _mdb._global_pool
+        if pool is not None:
+            pool.close_all()
+        _mdb._global_pool = None
+    except Exception:
+        pass
+
+    import shutil
+    import time
+
+    try:
+        from memall.core.bg_registry import wait_for_background
+
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            left = wait_for_background(timeout=2.0)
+            if not left:
+                break
+    except Exception:
+        pass
+    try:
+        import gc
+
+        gc.collect()  # drop any connection object still referenced
+    except Exception:
+        pass
+
+    root = _SCRATCH_ROOT
+
+    def _try_remove(path):
+        """Delete a tree bottom-up, file by file.
+
+        ``shutil.rmtree`` gives up as soon as one entry fails, and on Windows a
+        just-closed SQLite file can still be held for a moment by the OS.  Doing
+        it ourselves means a stubborn file no longer aborts the whole cleanup:
+        we delete everything we can, then sweep again for the rest.  Measured:
+        rmtree failed for 40s on a directory whose files each deleted fine once
+        the process exited, and this loop reclaims them within a retry or two.
+        """
+        if not os.path.isdir(path):
+            return True
+        removed_any = True
+        while removed_any:
+            removed_any = False
+            for dirpath, dirnames, filenames in os.walk(path, topdown=False):
+                for fname in filenames:
+                    full = os.path.join(dirpath, fname)
+                    try:
+                        os.remove(full)
+                        removed_any = True
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        pass
+                for dname in dirnames:
+                    full = os.path.join(dirpath, dname)
+                    try:
+                        os.rmdir(full)
+                        removed_any = True
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        pass
+        try:
+            os.rmdir(path)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+
+    # Retry for up to ~40s.  A partial pass is normal; re-running it later
+    # finishes the rest once the handle closes.  The window is generous on
+    # purpose — giving up early is what leaked directories before.
+    t_end = time.monotonic() + 40.0
+    attempt = 0
+    while time.monotonic() < t_end:
+        if _try_remove(root):
+            _SCRATCH_ROOT = ""
+            return
+        attempt += 1
+        gc.collect()
+        time.sleep(min(0.5 * attempt, 3.0))
+
+    # Still locked: report it instead of leaking silently.
+    if os.path.isdir(root):
+        print(f"warning: guard scratch could not be fully removed: {root}")
+        print("         set MEMALL_GUARD_KEEP_SCRATCH=1 to keep it deliberately")
+    _SCRATCH_ROOT = ""
+
+
+
 def _test_human(name: str = "guard_human") -> str:
     """Register and bind a HUMAN identity so read surfaces are callable.
 
@@ -73,7 +298,7 @@ def _fresh_db() -> str:
     rejected by their own ban list.  The ban lists are neutralised for the
     duration of the guard.
     """
-    tmp = tempfile.mkdtemp(prefix="memall_guard_")
+    tmp = _scratch_dir("guard_")
     path = os.path.join(tmp, "guard.db")
     # Drain capture-spawned background threads BEFORE repointing DB_PATH:
     # a still-running lightweight-pipeline thread calls get_conn() which
@@ -298,7 +523,7 @@ def guard_config_hot_reload() -> Tuple[bool, str]:
     forever in the long-lived MCP server)."""
     import memall.config as mc
 
-    fake_home = tempfile.mkdtemp(prefix="memall_guard_home_")
+    fake_home = _scratch_dir("guard_home_")
     os.makedirs(os.path.join(fake_home, ".memall"), exist_ok=True)
     old_home = os.environ.get("USERPROFILE") or os.environ.get("HOME")
     os.environ["USERPROFILE"] = fake_home
@@ -3065,7 +3290,7 @@ def guard_goal_tick_on_heartbeat_cadence() -> Tuple[bool, str]:
     mc._last_mtime_check = float("inf")
 
     prev_log = S.HEARTBEAT_LOG
-    S.HEARTBEAT_LOG = Path(tempfile.mkdtemp(prefix="memall_hb_")) / "heartbeat.log"
+    S.HEARTBEAT_LOG = Path(_scratch_dir("hb_")) / "heartbeat.log"
     try:
         owner = "gowner"
         created = json.loads(handle_call("memall_write", {
@@ -3593,7 +3818,7 @@ def guard_skill_export_frontmatter_roundtrip() -> Tuple[bool, str]:
                   domain="dsh", agent_name="dsh")
     for _ in range(5):
         record_outcome(goal_id=2, passed=True)
-    tmp = tempfile.mkdtemp(prefix="skill_export_")
+    tmp = _scratch_dir("skill_export_")
     r = export_trusted_skills("dsh", tmp)
     if r.get("status") != "ok" or r.get("exported", 0) < 1:
         return False, f"export failed: {r}"
@@ -3629,7 +3854,7 @@ def guard_skill_export_idempotent() -> Tuple[bool, str]:
                   domain="dsh", agent_name="dsh")
     for _ in range(5):
         record_outcome(goal_id=3, passed=True)
-    tmp = tempfile.mkdtemp(prefix="skill_idem_")
+    tmp = _scratch_dir("skill_idem_")
     r1 = export_trusted_skills("dsh", tmp)
     files1 = {}
     for root, dirs, fnames in os.walk(tmp):
@@ -4847,4 +5072,20 @@ def main(argv: list) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    # Always reclaim the run-level scratch root: a full run creates dozens of
+    # ~2.5 MB database copies, and leaking them is how %TEMP% reached 10.7 GB.
+    #
+    # Two attempts, deliberately: an in-process sweep can lose to a connection
+    # that is still checked out of the pool (``close_all`` only drains IDLE
+    # connections, so one still in use keeps the .db locked until its caller
+    # releases it).  ``atexit`` runs after the interpreter has torn that down,
+    # which is when the handle is finally gone — measured: a directory whose
+    # files refused to delete during the run deletes instantly afterwards.
+    import atexit
+
+    atexit.register(_cleanup_scratch)
+    try:
+        _exit_code = main(sys.argv[1:])
+    finally:
+        _cleanup_scratch()
+    sys.exit(_exit_code)
