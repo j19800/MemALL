@@ -76,14 +76,37 @@ def _test_db(monkeypatch, tmp_path):
     # entry names such as ``gateway_test`` are permanently denylisted on the
     # dev machine, and the suite then failed for a reason unrelated to the
     # code under test.
+    #
+    # The isolation must survive config RESETS inside tests.  The first
+    # implementation cleared the live dict once here — but a test that calls
+    # ``config.reset_config()`` itself (semantic-dedup, thread-inference,
+    # category-hygiene fixtures all do) wiped the gate and the next
+    # ``get_config()`` reloaded the developer's real config file, restoring
+    # the denylist.  capture(agent_name="sem_test") then raised
+    # "agent is disabled" — three test files failed for the deployment's
+    # ambient config, not for the code under test.  Wrapping reset_config
+    # re-sanitises after every reload, so no test can observe the ambient
+    # denylist regardless of what it does with the config module.
     try:
         import memall.config as mc
 
-        if mc._config is not None:
-            sec = mc._config.setdefault("security", {})
-            sec["disabled_agents"] = []
-            sec["disabled_projects"] = []
-            mc._last_mtime_check = float("inf")
+        def _sanitize_live_config():
+            if mc._config is not None:
+                sec = mc._config.setdefault("security", {})
+                sec["disabled_agents"] = []
+                sec["disabled_projects"] = []
+                mc._last_mtime_check = float("inf")
+
+        _sanitize_live_config()
+
+        _orig_reset = mc.reset_config
+
+        def _reset_keep_isolation():
+            _orig_reset()
+            mc.get_config()  # force the disk reload now, inside the test
+            _sanitize_live_config()
+
+        monkeypatch.setattr(mc, "reset_config", _reset_keep_isolation)
     except Exception:
         pass
 

@@ -21,5 +21,8 @@ def test_content_heuristics():
 
 
 def test_default_when_no_signal():
-    assert infer_project(agent_name="unknown_agent", content="随便写点东西") == "memall"
-    assert infer_project() == "memall"
+    # Deliberate behaviour (see project_infer docstring): no match returns
+    # "" rather than silently bucketing everything into "memall".  The old
+    # assertion expected the pre-refactor default.
+    assert infer_project(agent_name="unknown_agent", content="随便写点东西") == ""
+    assert infer_project() == ""

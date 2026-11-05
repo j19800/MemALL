@@ -18,8 +18,8 @@ from tests.test_helpers import init_temp_db, cleanup_temp_db, insert_memory
 def test_analyze_stances_consensus():
     from memall.pipeline.convergence import _analyze_stances
     responses = [
-        {"metadata": json.dumps({"agent_name": "claude", "stance": "confirm", "note": "方案可行"})},
-        {"metadata": json.dumps({"agent_name": "codex", "stance": "confirm", "note": "同意"})},
+        {"metadata": json.dumps({"agent_name": "dsh", "stance": "confirm", "note": "方案可行"})},
+        {"metadata": json.dumps({"agent_name": "opencode", "stance": "confirm", "note": "同意"})},
     ]
     a = _analyze_stances(responses)
     assert a["consensus"] is True
@@ -32,13 +32,13 @@ def test_analyze_stances_consensus():
 def test_analyze_stances_conflict():
     from memall.pipeline.convergence import _analyze_stances
     responses = [
-        {"metadata": json.dumps({"agent_name": "claude", "stance": "confirm", "note": "支持上线"})},
-        {"metadata": json.dumps({"agent_name": "codex", "stance": "reject", "note": "风险太高"})},
+        {"metadata": json.dumps({"agent_name": "dsh", "stance": "confirm", "note": "支持上线"})},
+        {"metadata": json.dumps({"agent_name": "workbuddy", "stance": "reject", "note": "风险太高"})},
     ]
     a = _analyze_stances(responses)
     assert a["consensus"] is False
     assert a["conflict"] is True
-    assert "codex" in a["dissenters"]
+    assert "workbuddy" in a["dissenters"]
     assert "分歧" in a["synthesis"]
     print("  PASS test_analyze_stances_conflict")
 
@@ -49,25 +49,35 @@ def test_converge_derives_conclusion_and_records_meta():
         from memall.pipeline.convergence import create_discussion, confirm_discussion, get_discussion
         from memall.core.db import get_conn
 
+        # Roster uses the live 4-agent roster (AGENTS.md 2026-10-23: claude
+        # exited; codex was never in).  B1 semantics: under majority, a
+        # 1-vs-1 tally is vetoed (rejecting >= agreeing blocks), so the
+        # dissent-converged shape needs 2 confirm + 1 reject on a 3-agent
+        # roster — which also proves the veto gate in the middle step.
         disc = create_discussion(
             title="[TEST] 是否引入 A2A",
             background="讨论是否接入 A2A 协议",
-            participants=["claude", "codex"],
+            participants=["dsh", "opencode", "qoder"],
             creator="workbuddy",
+            convergence_rule="majority",
         )
-        # first response: pending (missing codex)
-        r1 = confirm_discussion(disc["memory_id"], "claude", stance="confirm", note="建议接入")
+        # first response: pending (only 1 of 3 spoken)
+        r1 = confirm_discussion(disc["memory_id"], "dsh", stance="confirm", note="建议接入")
         assert r1["status"] == "pending"
-        # second response: reject -> converge with conflict synthesis
-        r2 = confirm_discussion(disc["memory_id"], "codex", stance="reject", note="暂不接入")
-        assert r2["status"] == "converged"
+        # second: 1 agree vs 1 reject -> B1 veto blocks (not converged
+        # even though 2/3 responded meets the numeric majority bar)
+        r_mid = confirm_discussion(disc["memory_id"], "qoder", stance="reject", note="暂不接入")
+        assert r_mid["status"] != "converged", r_mid
+        # third: 2 agree vs 1 reject -> converged, dissent recorded
+        r2 = confirm_discussion(disc["memory_id"], "opencode", stance="confirm", note="同意")
+        assert r2["status"] == "converged", r2
 
         full = get_discussion(disc["memory_id"])
         meta = full["discussion"]
         assert meta["status"] == "converged"
         assert meta.get("consensus") is False
         assert meta.get("conflict") is True
-        assert "codex" in (meta.get("dissenters") or [])
+        assert "qoder" in (meta.get("dissenters") or [])
         # conclusion should be DERIVED (synthesis) since none was preset
         assert "分歧" in (meta.get("conclusion") or "")
 
@@ -95,7 +105,7 @@ def test_converge_keeps_preset_conclusion():
             title="[TEST] 预设结论",
             background="x",
             recommendation="最终决定：按原计划推进",
-            participants=["claude"],
+            participants=["qoder"],
             creator="workbuddy",
         )
         # inject a preset conclusion into the discussion metadata
@@ -107,7 +117,7 @@ def test_converge_keeps_preset_conclusion():
         conn.execute("UPDATE memories SET metadata=? WHERE id=?", (json.dumps(m), disc["memory_id"]))
         conn.commit(); conn.close()
 
-        r = confirm_discussion(disc["memory_id"], "claude", stance="confirm", note="ok")
+        r = confirm_discussion(disc["memory_id"], "qoder", stance="confirm", note="ok")
         assert r["status"] == "converged"
         full = get_discussion(disc["memory_id"])
         assert full["discussion"]["conclusion"] == "预设的明确结论"
@@ -183,7 +193,7 @@ def test_build_context_includes_active_discussion():
         from memall.core.context_assembler import build_context
         from memall.core.db import get_conn
 
-        agent = "codex"
+        agent = "opencode"
         conn = get_conn()
         meta = json.dumps({
             "status": "active",
@@ -191,11 +201,11 @@ def test_build_context_includes_active_discussion():
             "options": [], "open_questions": [], "action_items": [],
             "conclusion": "", "converged_at": "", "convergence_reason": "",
         })
-        content = "[讨论] [TEST] 待 codex 回应"
+        content = "[讨论] [TEST] 待 opencode 回应"
         ch = hashlib.sha256(content.encode()).hexdigest()
         conn.execute(
             "INSERT INTO memories (content, content_hash, level, owner, agent_name, subject, category, confidence, visibility, metadata, occurred_at, created_at, updated_at) "
-            "VALUES (?,?, 'L5','system','workbuddy','[讨论] [TEST] 待 codex 回应','discussion',0.5,'private',?,?,?,?)",
+            "VALUES (?,?, 'L5','system','workbuddy','[讨论] [TEST] 待 opencode 回应','discussion',0.5,'private',?,?,?,?)",
             (content, ch, meta, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
         )
         conn.commit(); conn.close()

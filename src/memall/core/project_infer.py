@@ -53,7 +53,7 @@ def infer_project(agent_name: str = "", category: str = "",
     Priority (highest first):
       1. Known agent → project mapping
       2. Content keyword hints
-      3. Default project (``memall``)
+      3. No match → "" (empty), NOT a default bucket
 
     Args:
         agent_name: Agent that authored the memory.

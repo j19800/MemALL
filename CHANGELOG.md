@@ -1,3 +1,18 @@
+## [v0.1.79] - 2026-11-05
+
+测试卫生：清除 6 个预先存在的失败测试，全套件转全绿（524 passed / 0 failed）。
+
+### Fixed（测试隔离根因）
+
+- **conftest 的 deny-list 隔离会被测试自身的 config.reset_config() 击穿**。原实现只在 fixture 里清一次内存 dict，而 semantic-dedup / thread-inference / category-hygiene 的 fixture 自己调 reset_config()，下一次 get_config() 重新加载开发者真实配置文件，disabled_agents（30 条含 test* / *test glob）复活——capture(agent_name="sem_test") 抛 "agent is disabled"，3 个文件 5 个测试因环境配置而非被测代码失败。修复：monkeypatch reset_config，reload 后立即重新消毒，任何测试都无法观察到环境 denylist。
+- **test_project_infer 断言与有意行为漂移**：project_infer 重构后（区分"无项目"与真项目）no-match 返回 ""，测试仍断言旧默认 "memall"。断言对齐现状，并修掉 infer_project docstring 里残留的 "Default project (memall)" 一行。
+- **test_multi_agent_collab 使用已退出名册**：claude（2026-10-23 退出）/codex（从未入册）参与者，且默认 unanimous 规则下 1 confirm + 1 reject 会被 B1 立场否决挡住收敛。名册改为在岗 4 agent；收敛测试升级为三段断言，顺带覆盖 B1 语义（1v1 veto 阻塞、2v1 收敛且 dissent 如实记录）。
+
+### Verification
+
+- 全量 pytest：524 passed / 2 skipped / 0 failed（此前 509/6）。
+- 红蓝对抗 9/9 不受影响；conftest 修复不触碰生产代码（仅 project_infer 一行文档）。
+
 ## [v0.1.78] - 2026-11-05
 
 技术债务清偿（P0/P1）+ Phase 3 首批功能（叙事调度 / KG 可视化 / L9 提升）。
