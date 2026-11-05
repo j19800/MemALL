@@ -113,7 +113,16 @@ def narrative_step() -> dict:
                 if cfg.get("phase"):
                     span_start, span_end = _get_span_for_phase(conn, agent, now)
                 else:
-                    span_start = now - timedelta(days=cfg["days"])
+                    # Snap the window start to UTC midnight.  Without this,
+                    # span_start = now - 7d drifts by wall-clock seconds
+                    # between runs, the dedup lookup (agent, type, span_start)
+                    # never matches, and every pipeline pass inserts a
+                    # duplicate narrative row instead of updating the
+                    # existing one (found by the scheduler work: narratives
+                    # accumulate per-run once auto-generation is enabled).
+                    span_start = (now - timedelta(days=cfg["days"])).replace(
+                        hour=0, minute=0, second=0, microsecond=0
+                    )
                     span_end = now
 
                 existing = conn.execute(

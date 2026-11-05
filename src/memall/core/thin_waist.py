@@ -1802,9 +1802,13 @@ def unified_search(arguments: dict) -> str:
         mode = resolve_mode(intent)
 
     if mode in ("direct", "fts5") and wants_enhancements:
+        # P0-4b: viewer 必須回退到 agent_name，否則僅傳 viewer
+        # 而調用方只給了 agent_name 時，信任過濾不會套用，導致
+        # 任意 agent 可讀取他人卡片（見 AGENTS.md §三.4）。
+        _viewer = arguments.get("viewer") or arguments.get("agent_name") or ""
         result = enhanced_search(
             query=query,
-            viewer=arguments.get("viewer"),
+            viewer=_viewer,
             # `agent_name` is the caller's session identity => viewer.
             # `agent_name_filter` is the optional CONTENT filter by author.
             agent_name=arguments.get("agent_name"),

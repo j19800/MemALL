@@ -114,7 +114,8 @@ def handle_goal_verify(args, agent_name=""):
 
 def handle_goal_status(args, agent_name=""):
     from memall.core.db import get_conn
-    from memall.pipeline.goals import _children, _get_goal, _phase_of, goal_tick
+    from memall.pipeline.goals import (
+        _children, _get_goal, _phase_of, goal_tick, next_action)
     raw = args.get("goal_id") or args.get("memory_id")
     gid, err = (None, None) if raw in (None, "") else _as_int(raw, "goal_id")
     if err:
@@ -125,14 +126,25 @@ def handle_goal_status(args, agent_name=""):
             g = _get_goal(conn, gid)
             if not g:
                 return _dumps({"status": "error", "error": f"goal #{gid} not found"})
+            # Include what the driver would do -- including a WAITING state and
+            # its reason.  Without it "why is this goal not moving?" had no
+            # answer anywhere in the system (goal-level block reasons were
+            # unobservable).
+            act = next_action(conn, g) or {}
+            is_waiting = act.get("action") == "waiting"
             return _dumps({"status": "ok", "goal_id": g["id"],
                            "phase": _phase_of(g["meta"]),
                            "objective": g["meta"].get("objective", ""),
                            "owner": g["meta"].get("owner", ""),
                            "verifier": g["meta"].get("verifier", ""),
+                           "accountable": g["meta"].get("accountable", ""),
                            "discussion_id": g["meta"].get("discussion_id", 0),
                            "children": _children(conn, g["id"]),
-                           "verdict": g["meta"].get("verdict")})
+                           "verdict": g["meta"].get("verdict"),
+                           "next_action": act.get("action", ""),
+                           "next_agent": act.get("agent", ""),
+                           "waiting_reason": act.get("reason", "") if is_waiting else "",
+                           "next_message": act.get("message", "")})
         return _dumps(goal_tick(conn))
     finally:
         conn.close()

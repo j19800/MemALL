@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from memall.core.db import pool_conn, init_db
 from memall.pipeline import run_pipeline
 from memall.pipeline.forget import forget_step
+from memall.pipeline.narrative import narrative_step
 from memall.pipeline.security import security_score
 from memall.scheduler.agent_round import agent_round
 from memall.config import get_config
@@ -34,6 +35,12 @@ INTERVAL_DREAM = get_config("scheduler.dream_interval", 86400)
 ENABLE_LIFECYCLE = get_config("scheduler.lifecycle_enabled", False)
 ENABLE_DREAM = get_config("scheduler.dream_enabled", False)
 
+# Narrative auto-generation (Phase 3 / P2 of functional roadmap).
+# Produces weekly/monthly/phase narratives per agent from recent L6/memory data.
+# Opt-in: disabled unless explicitly enabled in config.
+INTERVAL_NARRATIVE = get_config("scheduler.narrative_interval", 86400)
+ENABLE_NARRATIVE = get_config("scheduler.narrative_enabled", False)
+
 
 class Scheduler:
     def __init__(self):
@@ -46,6 +53,7 @@ class Scheduler:
         self._last_agent_round = 0
         self._last_lifecycle = 0
         self._last_dream = 0
+        self._last_narrative = 0
 
     def start(self):
         if self._running:
@@ -153,6 +161,18 @@ class Scheduler:
                 logger.warning(f"dream error: {e}")
             self._last_dream = now
 
+        if ENABLE_NARRATIVE and now - self._last_narrative >= INTERVAL_NARRATIVE:
+            try:
+                result = narrative_step()
+                logger.info(
+                    "narrative: created=%d agents=%d",
+                    result.get("narratives_created", 0),
+                    len(result.get("narratives", {})),
+                )
+            except Exception as e:
+                logger.warning(f"narrative generation error: {e}")
+            self._last_narrative = now
+
     def _heartbeat(self):
         with pool_conn() as conn:
             now_str = datetime.now(timezone.utc).isoformat()
@@ -210,6 +230,7 @@ class Scheduler:
                 "last_forget": self._last_forget,
                 "last_security": self._last_security,
                 "last_agent_round": self._last_agent_round,
+                "last_narrative": self._last_narrative,
                 "agent_interval": INTERVAL_PROXY_SESSION,
                 "proxy_agents": PROXY_AGENTS,
             }

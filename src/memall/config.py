@@ -298,6 +298,13 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "lifecycle_enabled": False,
         "dream_interval": 86400,
         "dream_enabled": False,
+        # Narrative auto-generation: produces weekly/monthly/phase narratives
+        # per agent from recent L6/memory data.  Opt-in: OFF by default.
+        # When enabled, the scheduler daemon runs narrative_step() on this
+        # interval; narratives are upserted (idempotent — re-runs update
+        # existing rows rather than duplicating).
+        "narrative_interval": 86400,
+        "narrative_enabled": False,
     },
     "strategy": {
         "default": "buffer",

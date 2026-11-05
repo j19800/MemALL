@@ -1,3 +1,31 @@
+## [v0.1.78] - 2026-11-05
+
+技术债务清偿（P0/P1）+ Phase 3 首批功能（叙事调度 / KG 可视化 / L9 提升）。
+
+### Fixed（P0）
+
+- **P0-4b 检索面 viewer 透传**：unified_search 的 direct/fts5-enhanced 分支此前只传 rguments.get("viewer")，调用方仅带 gent_name（会话身份）时信任过滤整体失效，任何 agent 可检索到他人私有卡。现统一回退 iewer or agent_name（与 hybrid/vector 分支对齐）。
+- **P0-3 30 分钟冷却短路移除**：ensure_session_started 的 _AUTO_START_COOLDOWN 早退让刚开过会话的 agent 永远拿不到 auto_inject 注入（e2e L3 不生效的根因）。session_start 内部本就有 >2h 闲置会话自动关闭，不存在会话堆积，直接删除短路分支。
+- **叙事幂等 bug**：
+arrative_step 的时间窗 span_start = now - 7d 随运行时刻漂移，查重键 (agent, type, span_start) 永不命中——每轮 pipeline 插一行新叙事而不是更新。窗口起点归一到 UTC 零点后重跑更新原行（tests/test_narrative_schedule.py 实证 3 行不再变 5 行）。
+
+### Feat（P1 运维 + Phase 3）
+
+- **总线自动拉起**：mcp/bus.py 新增 ensure_bus_running()——memall_msg 遇到 BusUnavailable 时自动以子进程启动 memall_bus.py 并轮询至多 10s，启动失败仍走原有清晰报错；主链路（auto_inject 拉模式）不受影响。	ools/msg.py 四个动作经 _bus_op 统一重试。
+- **叙事自动调度**：scheduler 新增 scheduler.narrative_interval（默认 86400s）与 scheduler.narrative_enabled（默认关），开启后守护进程周期性跑 
+arrative_step()。
+- **修正机制强化**：session_start 收尾时自动跑 improve_step(agent) 扫描近期 L6 生成/更新 corrections（修正率长期 0.5% 的根因是 improve 只在手动 pipeline 里跑）。
+- **画像自动更新**：session_start 同时跑 identity_step()，L1/L7 信号 → identities.profile_json 不再依赖手动全量 pipeline。
+- **KG 可视化**：	ools/kg_visualize.py 读 entities+knowledge_triples 生成自包含 HTML 力导向图（原生 JS Verlet，无 CDN；类型/谓词过滤、点击高亮邻居、悬停详情、图例）。实测 2,445 节点 / 1,217 边 → kg_graph.html 351KB。
+- **叙事 → L9 提升链路**：pipeline/narrative_l9.py 扫描含决策/架构信号关键词的叙事，经 capture() 提升为 L9 knowledge 记忆；按 metadata.source_narrative_id 幂等去重。注册为可选 pipeline 步骤 
+arrative_l9（默认关）。
+
+### Verification
+
+- 定向测试：tests/test_narrative_l9.py（4/4，新）、test_narrative_schedule.py（4/4，新）、test_kg_visualize.py（4/4，新）。
+- 全量 pytest：509 passed / 6 failed——6 项经 stash 对照确认全部预先存在（deny-list 误伤 sem_test 等测试身份、project_infer 默认值断言过期），与本次改动无关；test_multi_agent_collab 用已退出名册 claude/codex，同属遗留。
+- memall-bus test_suite.py：16/16 通过（隔离 BUS_HOME）。
+
 ## [v0.1.77] - 2026-11-04
 
 修掉 README「已知缺口」里唯一一条**还在持续放大危害**的项：守卫跑一轮就往 `%TEMP%` 留一堆数据库副本。实测清理前为 **4,384 个目录 / 10.7 GB**。

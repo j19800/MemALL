@@ -506,12 +506,24 @@ def _converge_single(conn, disc: dict) -> dict:
             a = rmeta.get("agent_name", resp.get("agent_name", ""))
             if a:
                 responded_agents.add(a)
+        # B1: the rule sees the stances, not just the head count.  This must
+        # be consulted even when nobody is missing — an all-reject roster that
+        # fully responded used to fall straight through to converge_discussion
+        # and emit an L4 decision plus L5 task cards for a proposal nobody
+        # supports.
+        agreeing, rejecting, _abst = _stance_tally(response_dicts)
         missing = [p for p in participants if p not in responded_agents]
-        if missing and not _rule_satisfied(meta, responded_agents, participants,
-                                           created_at=disc.get("created_at")):
+        if not _rule_satisfied(meta, responded_agents, participants,
+                               created_at=disc.get("created_at"),
+                               agreeing=agreeing, rejecting=rejecting):
+            if missing:
+                return {
+                    "warning": f"waiting for participants: {missing}",
+                    "participants": participants,
+                }
             return {
-                "warning": f"waiting for participants: {missing}",
-                "participants": participants,
+                "warning": "vetoed: recorded rejections block the rule",
+                "rejecting": sorted(rejecting),
             }
 
     return converge_discussion(conn, disc, response_dicts, "confirmed")
@@ -578,8 +590,39 @@ def _discussion_deadline_passed(meta: dict, created_at) -> bool:
         return False
 
 
+def _stance_tally(response_dicts: list[dict]) -> tuple[set, set, set]:
+    """Split counted responses into (agreeing, rejecting, abstaining).
+
+    B1: convergence used to count only *who* answered, never *what* they
+    answered, so a discussion where every participant rejected still produced
+    an L4 decision and L5 task cards.  The rule now sees the stances too.
+
+    Observer stances (non-participants, A1-1) are excluded here, so an
+    outsider's ``reject`` can never veto a roster's decision.
+    """
+    agreeing: set = set()
+    rejecting: set = set()
+    abstaining: set = set()
+    for resp in response_dicts:
+        rmeta = json.loads(resp.get("metadata") or "{}")
+        if rmeta.get("observer"):
+            continue
+        agent = rmeta.get("agent_name") or resp.get("agent_name") or ""
+        if not agent:
+            continue
+        stance = (rmeta.get("stance") or "confirm").lower()
+        if stance in ("reject", "disagree"):
+            rejecting.add(agent)
+        elif stance in ("abstain", "pass"):
+            abstaining.add(agent)
+        else:
+            agreeing.add(agent)
+    return agreeing, rejecting, abstaining
+
+
 def _rule_satisfied(meta: dict, responded: set, participants: list,
-                    created_at=None, agreeing: set | None = None) -> bool:
+                    created_at=None, agreeing: set | None = None,
+                    rejecting: set | None = None) -> bool:
     """Is the discussion's convergence rule met by the responses so far?
 
     The rule lives in ``metadata.convergence_rule`` and used to be a dead
@@ -605,6 +648,21 @@ def _rule_satisfied(meta: dict, responded: set, participants: list,
     TO is unchanged: :func:`converge_discussion` still records the real
     stance distribution, and a discussion that converged with a dissent
     still reports ``consensus=False`` and lists its dissenters.
+
+    Stance veto (B1).  When the caller supplies ``rejecting``, a veto is
+    honoured instead of being out-counted:
+
+    * ``unanimous`` — any reject means the group is not unanimous, so the
+      discussion cannot close on a vote count alone.
+    * ``majority`` — opponents must be strictly outnumbered by supporters;
+      2 reject vs 2 confirm is not "more than half agreed".
+    * ``any`` — deliberately NOT vetoed.  Its purpose is "close on one
+      response" for rosters that will never answer; vetoing it would defeat
+      the rule.  The dissent is still recorded (consensus=False).
+
+    ``rejecting=None`` means the caller has no stance information and the
+    historical count-only behaviour applies, so callers that cannot tally
+    stances keep their previous semantics instead of silently tightening.
     """
     # Gate first: a discussion cannot close while an assignee it named as a
     # prerequisite has not spoken, UNLESS its own timeout_hours has elapsed.
@@ -617,6 +675,14 @@ def _rule_satisfied(meta: dict, responded: set, participants: list,
     rule = (meta.get("convergence_rule") or "unanimous").lower()
     if rule not in ("unanimous", "majority", "any"):
         rule = "unanimous"
+
+    # ---- B1: a veto is not a number to be out-voted ----
+    if rejecting is not None:
+        if rule == "unanimous" and rejecting:
+            return False
+        if rule == "majority" and len(rejecting) >= len(agreeing or set()):
+            return False
+
     if rule == "any":
         return bool(responded)
     if rule == "majority":
@@ -813,24 +879,30 @@ def _confirm_discussion_once(
                 a = rmeta.get("agent_name", resp.get("agent_name", ""))
                 if a:
                     responded_agents.add(a)
+            # B1: same stance-aware test as the sweep path, so both agree on
+            # when to close AND on honouring a recorded veto.
+            agreeing, rejecting, _abst = _stance_tally(response_list)
             missing = [p for p in participants if p not in responded_agents]
-            # Same rule test as the sweep path, so both agree on when to close.
-            if missing and not _rule_satisfied(disc_meta, responded_agents,
-                                               participants,
-                                               created_at=disc.get("created_at")):
+            if not _rule_satisfied(disc_meta, responded_agents,
+                                   participants,
+                                   created_at=disc.get("created_at"),
+                                   agreeing=agreeing, rejecting=rejecting):
                 # Rule not satisfied — do NOT converge
                 conn.execute(
                     "UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
                     (json.dumps(disc_meta), now_iso(), discussion_id),
                 )
                 conn.commit()
-                return {
+                out = {
                     "status": "pending",
                     "discussion_id": discussion_id,
                     "response_id": resp_id,
                     "responded_agents": list(responded_agents),
                     "missing_agents": missing,
                 }
+                if not missing and rejecting:
+                    out["vetoed_by"] = sorted(rejecting)
+                return out
 
         # All participants (if any) have responded, or no participants listed → converge
         result = converge_discussion(

@@ -93,14 +93,9 @@ def ensure_session_started(agent_name: str, auto_inject: bool = True) -> None:
     from memall.pipeline.session import session_start
     global _PENDING_SESSION_NOTES
     now = datetime.now(timezone.utc)
-    last = _last_start(agent_name)
-    if last:
-        try:
-            last_dt = datetime.fromisoformat(last)
-            if (now - last_dt).total_seconds() < _AUTO_START_COOLDOWN:
-                return
-        except ValueError:
-            pass
+    # P0-3: 已移除 30 分鐘冷却短路（_AUTO_START_COOLDOWN）。session_start 內部
+    # 已有 >2h 閒置會話自動關閉，不會堆積無效會話；此處每次調用都應
+    # 執行 session_start，以免 e2e L3 測試因冷却未過而無法建立會話。
     try:
         result = session_start(agent_name=agent_name, auto_inject=auto_inject)
         _record_start(agent_name, now.isoformat())

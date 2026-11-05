@@ -498,6 +498,7 @@ _SKIP_WHEN = {
 _OPTIONAL_STEPS = {
     "persona":  ("persona",  "memall.pipeline.persona.persona_step",            None),
     "narrative":("narrative","memall.pipeline.narrative.narrative_step",        None),
+    "narrative_l9": ("narrative_l9", "memall.pipeline.narrative_l9.promote_narratives_to_l9", None),
     "cluster":  ("cluster",  "memall.pipeline.cluster.cluster_step",            None),
     "suggest":  ("suggest",  "memall.pipeline.suggest.suggest_step",            None),
     "bridge":   ("bridge",   "memall.pipeline.bridge.bridge_analysis_step",      None),
@@ -534,6 +535,7 @@ def run_pipeline(
     include_persona: bool = True,
     include_cluster: bool = False,
     include_narrative: bool = False,
+    include_narrative_l9: bool = False,
     include_suggest: bool = False,
     include_identity: bool = True,
     include_bridge: bool = False,
@@ -602,6 +604,12 @@ def run_pipeline(
                 entries.append(_run_step("narrative", step_fn, results, conn=pipeline_conn))
             except (ImportError, AttributeError) as e:
                 entries.append({"step": "narrative", "status": "failed", "error": str(e)[:200]})
+        if include_narrative_l9:
+            try:
+                step_fn = _load_step_fn("memall.pipeline.narrative_l9", "promote_narratives_to_l9")
+                entries.append(_run_step("narrative_l9", step_fn, results, conn=pipeline_conn))
+            except (ImportError, AttributeError) as e:
+                entries.append({"step": "narrative_l9", "status": "failed", "error": str(e)[:200]})
         if include_suggest:
             try:
                 step_fn = _load_step_fn("memall.pipeline.suggest", "suggest_step")

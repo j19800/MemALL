@@ -24,6 +24,8 @@ MCP 的 handler 是同步的（``mcp/server.py`` 的 ``_read_request`` 读 stdin
 import json
 import os
 import socket
+import subprocess
+import sys
 import time
 
 # 与 memall-bus 的 PROTOCOL_VERSION 一致
@@ -291,3 +293,75 @@ def bus_health(host: str = None, port: int = None) -> dict:
     except Exception as exc:  # 探测失败不是错误，只是不可用
         out["error"] = str(exc)
     return out
+
+
+def _default_bus_script() -> str:
+    """总线主脚本的默认路径。可用 MEMALL_BUS_SCRIPT 覆盖。"""
+    env = os.environ.get("MEMALL_BUS_SCRIPT")
+    if env:
+        return env
+    # 候选位置：memall-bus 仓下的 memall_bus.py
+    candidates = [
+        r"D:\Agent项目\Claw\memall-bus\memall_bus.py",
+        os.path.join(os.path.expanduser("~"), "memall-bus", "memall_bus.py"),
+        "memall_bus.py",
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return candidates[0]  # 返回首选，供错误提示使用
+
+
+def ensure_bus_running(timeout_s: float = 10.0) -> dict:
+    """若總線未運行，嘗試將其作為子進程啟動，並等待可用。
+
+    P0-3/P0-4b 之外的運維補位：total bus 進程未納入任何系統服務，
+    首次調用 memall_msg 時若總線未起，這裡會嘗試啟動它，避免
+    用戶手動啟動的運維門檻。若啟動失敗，返回不可用並附錯誤提示，
+    MemALL 主鏈路（auto_inject 拉模式）完全不受影響。
+
+    返回：{"available": bool, "started": bool, "pid": int|None, "error": str|None}
+    """
+    result = {"available": False, "started": False, "pid": None, "error": None}
+
+    # 先快速探測
+    h = bus_health()
+    if h.get("available"):
+        result["available"] = True
+        return result
+
+    # 嘗試啟動
+    script = _default_bus_script()
+    if not os.path.exists(script):
+        result["error"] = f"總線腳本不存在：{script}"
+        return result
+
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+            if sys.platform == "win32" else 0,
+        )
+        result["pid"] = proc.pid
+    except Exception as exc:
+        result["error"] = f"無法啟動總線進程：{exc}"
+        return result
+
+    # 輪詢等待可用（最多 timeout_s 秒）
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        h = bus_health()
+        if h.get("available"):
+            result["available"] = True
+            result["started"] = True
+            return result
+        # 子進程可能已崩潰
+        if proc.poll() is not None:
+            result["error"] = f"總線進程已退出（exit code {proc.returncode}）"
+            return result
+        time.sleep(0.5)
+
+    result["error"] = f"總線在 {timeout_s} 秒內未可用"
+    return result

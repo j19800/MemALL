@@ -991,6 +991,40 @@ def verify_goal(goal_id: int, agent_name: str, passed: bool,
 
 # ── the driver ──────────────────────────────────────────────────────────
 
+# reason codes for goals that are legitimately NOT actionable right now.
+# Closed enum, same spirit as the task card's ``last_block_reason``: a driver
+# that says nothing is indistinguishable from a driver that has nothing to do.
+WAITING_REASONS = frozenset({
+    "waiting_on_discussion",   # deliberation has not converged yet
+    "waiting_on_children",     # task cards are in flight; the board nudges them
+})
+
+
+def _waiting(gid: int, agent: str, reason: str, message: str,
+             phase: str = "", extra: Optional[dict] = None) -> dict:
+    """A goal that is NOT actionable, with a machine-readable reason.
+
+    ``action="waiting"`` is deliberately distinct from a real action so delivery
+    can skip it (nobody needs to be told "wait"), while ``goal_tick`` and
+    ``goal_status`` can still report *why* the goal is not moving.  Before this
+    these paths returned ``None``, so "this goal is waiting on its own
+    discussion" and "this goal is finished" looked identical from outside
+    (audit item: goal-level block reasons were not observable).
+    """
+    out = {
+        "agent": agent or "",
+        "goal_id": gid,
+        "action": "waiting",
+        "reason": reason,
+        "message": message,
+    }
+    if phase:
+        out["phase"] = phase
+    if extra:
+        out.update(extra)
+    return out
+
+
 def next_action(conn, goal: dict) -> Optional[dict]:
     """The single next thing needed for this goal, and whose turn it is."""
     meta = goal["meta"]
@@ -1039,13 +1073,22 @@ def next_action(conn, goal: dict) -> Optional[dict]:
         drow = conn.execute("SELECT metadata FROM memories WHERE id = ?",
                             (did,)).fetchone()
         dmeta = _meta_of(drow["metadata"]) if drow else {}
-        if _status_of(dmeta.get("status")) == "converged":
+        dstatus = _status_of(dmeta.get("status"))
+        if dstatus == "converged":
             return {"agent": owner, "goal_id": gid, "action": "finalize",
                     "message": f"[目标 #{gid}] 论证已收敛，请落任务卡",
                     "instruction": (
                         f"调用 memall_write，参数：action=goal_finalize, goal_id={gid}。"
                         "它会按已记录的 plan 生成任务卡（含 depends_on 与 acceptance）。")}
-        return None  # discussion nudges are the discussion's own job
+        # Not converged yet.  This is a legitimate wait — the discussion owns
+        # its own nudges — but "waiting" is not the same as "nothing to say".
+        # Returning None made a deliberating goal indistinguishable from a
+        # finished one; report the wait WITH its reason so the goal's state is
+        # observable (R3-C).
+        return _waiting(gid, owner, "waiting_on_discussion",
+                        f"[目标 #{gid}] 等待讨论 #{did} 收敛",
+                        phase=phase,
+                        extra={"discussion_id": did, "discussion_status": dstatus})
     if phase in ("assigned", "executing"):
         kids = _children(conn, gid)
         if not kids:
@@ -1068,7 +1111,17 @@ def next_action(conn, goal: dict) -> Optional[dict]:
                     "instruction": (
                         f"调用 memall_write，参数：action=goal_request_verification, "
                         f"goal_id={gid}。")}
-        return None  # per-task nudges are the task board's job
+        pending = [k for k in kids if k["status"] not in _CHILD_TERMINAL]
+        # Task cards in flight: the board nudges each executor individually, so
+        # the goal does not need its own prompt — but it does need to say it is
+        # waiting and on what, otherwise a stalled goal looks identical to one
+        # that is simply done (R3-C).
+        return _waiting(gid, owner, "waiting_on_children",
+                        f"[目标 #{gid}] 等待 {len(pending)} 张任务卡交付",
+                        phase=phase,
+                        extra={"pending_tasks": [
+                            {"task_id": k.get("id"), "status": k.get("status")}
+                            for k in pending][:12]})
     if phase == "verifying":
         verifier = (meta.get("verifier") or "").strip()
         return {"agent": verifier, "goal_id": gid, "action": "verify",
@@ -1077,7 +1130,10 @@ def next_action(conn, goal: dict) -> Optional[dict]:
                     f"调用 memall_read action=goal_status goal_id={gid} 复核子任务与交付，"
                     f"再调用 memall_write，参数：action=goal_verify, goal_id={gid}, "
                     "passed=true|false, verdict=<你的结论>。生产者不得验收。")}
-    return None
+    # Unknown / terminal phase reaching the driver: report rather than vanish.
+    return _waiting(gid, owner, "no_handler_for_phase",
+                    f"[目标 #{gid}] 相位 '{phase}' 没有可派发的动作",
+                    phase=phase)
 
 
 def goal_tick(conn=None) -> dict:
@@ -1085,6 +1141,13 @@ def goal_tick(conn=None) -> dict:
 
     Idempotent: running it twice with no state change produces the same list.
     The caller decides how to deliver (session note / notification bar).
+
+    ``actions`` holds only goals that need a HUMAN-OR-AGENT prompt.  Goals that
+    are legitimately parked (waiting on their deliberation, or on task cards
+    already being nudged by the board) are reported under ``waiting`` instead,
+    each with a ``reason`` from :data:`WAITING_REASONS`.  Before this split a
+    parked goal and a finished goal both produced nothing at all, so "why is
+    this goal not moving?" had no answer anywhere in the system.
     """
     from memall.core.db import get_conn as _get_conn
 
@@ -1097,6 +1160,7 @@ def goal_tick(conn=None) -> dict:
             "AND json_extract(metadata, '$.status') = 'active' "
             "ORDER BY id", (GOAL_LEVEL, GOAL_CATEGORY)).fetchall()
         actions = []
+        waiting = []
         for r in rows:
             goal = {"id": r["id"], "subject": r["subject"], "content": r["content"],
                     "creator": r["agent_name"], "meta": _meta_of(r["metadata"])}
@@ -1105,10 +1169,14 @@ def goal_tick(conn=None) -> dict:
             except Exception:
                 logger.debug("next_action failed for goal %s", r["id"], exc_info=True)
                 continue
-            if act:
-                act["phase"] = _phase_of(goal["meta"])
+            if not act:
+                continue
+            act["phase"] = _phase_of(goal["meta"])
+            if act.get("action") == "waiting":
+                waiting.append(act)
+            else:
                 actions.append(act)
-        return {"goals": len(rows), "actions": actions}
+        return {"goals": len(rows), "actions": actions, "waiting": waiting}
     finally:
         if own:
             conn.close()

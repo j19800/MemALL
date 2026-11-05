@@ -746,7 +746,7 @@ def session_end(session_id: str, auto_extract: bool = False) -> dict:
         # ── Correction compliance check ──
         # Log whether the session agent has STRONG corrections it should have followed
         try:
-            from .improve import get_active_corrections
+            from .improve import get_active_corrections, improve_step
             strong = [c for c in get_active_corrections(agent_name or "")
                       if c.get("severity", "SUGGEST") == "STRONG"]
             if strong:
@@ -754,6 +754,19 @@ def session_end(session_id: str, auto_extract: bool = False) -> dict:
                     "total_strong": len(strong),
                     "note": f"session had {len(strong)} mandatory correction rules that should have been followed",
                 }
+            # P1-修正机制強化：會話啟動時自動掃描近期 L6 反思，生成/更新修正規則
+            try:
+                imp = improve_step(agent_name=agent_name or "")
+                result["corrections_improve"] = imp
+            except Exception:
+                logger.debug("session.py: improve_step skipped", exc_info=True)
+            # P1-畫像自動更新：會話啟動時掃描該 agent 的 L1/L7 訊號，更新 identities.profile_json
+            try:
+                from .identity import identity_step
+                prof = identity_step()
+                result["profile_update"] = prof
+            except Exception:
+                logger.debug("session.py: identity_step skipped", exc_info=True)
         except (ImportError, sqlite3.Error):
             logger.warning("session.py: silent error", exc_info=True)
 

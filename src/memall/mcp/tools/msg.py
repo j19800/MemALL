@@ -14,13 +14,14 @@ memory_id 幂等去重。
 **from 由服务端按连接身份判定**，客户端自报的值被忽略 —— 否则任何进程都能
 冒充 PM 向执行方派假指令（这是 2026-10-21 安全审计实证过的漏洞）。
 
-总线是**独立常驻进程**，没起时这两个动作返回清晰报错并附上排查提示，而
-MemALL 主链路（auto_inject 拉模式）完全不受影响。
+总线是**独立常驻进程**，沒起時會先嘗試自動啟動（see `ensure_bus_running`）；
+啟動失敗時返回清晰報錯並附上排查提示，而 MemALL 主鏈路（auto_inject 拉模式）
+完全不受影響。
 """
 import hashlib
 import json
 
-from memall.mcp.bus import BusClient, BusUnavailable
+from memall.mcp.bus import BusClient, BusUnavailable, ensure_bus_running
 
 
 def _agent_of(arguments: dict) -> str:
@@ -31,6 +32,20 @@ def _err(msg: str, **extra) -> str:
     out = {"status": "error", "error": msg}
     out.update(extra)
     return json.dumps(out, ensure_ascii=False)
+
+
+def _bus_op(fn, agent: str, *args, **kwargs):
+    """執行總線操作；BusUnavailable 時先嘗試自動啟動總線，再重試一次。
+
+    `fn` 應自行建立 BusClient（用 `with BusClient()`），不應接受 bus 參數。
+    """
+    try:
+        return fn()
+    except BusUnavailable:
+        start = ensure_bus_running()
+        if not start.get("available"):
+            raise
+        return fn()
 
 
 def _dedup_key(agent: str, to: str, mtype: str, payload) -> str:
@@ -69,10 +84,13 @@ def handle_send(arguments: dict) -> str:
         key = (arguments.get("dedup_key") or "").strip()
     else:
         key = _dedup_key(agent, to, mtype, payload)
-    try:
+    def _do_send():
         with BusClient() as bus:
             bus.connect(agent)
-            r = bus.publish(to, payload, mtype, dedup_key=key)
+            return bus.publish(to, payload, mtype, dedup_key=key)
+
+    try:
+        r = _bus_op(_do_send, agent)
     except BusUnavailable as exc:
         return _err(f"bus unavailable: {exc}", delivered=False, to=to,
                     dedup_key=key, retryable=True)
@@ -92,10 +110,13 @@ def handle_inbox(arguments: dict) -> str:
     agent = _agent_of(arguments)
     if not agent:
         return _err("agent_name is required")
-    try:
+    def _do_inbox():
         with BusClient() as bus:
             bus.connect(agent)
-            msgs = bus.inbox()
+            return bus.inbox()
+
+    try:
+        msgs = _bus_op(_do_inbox, agent)
     except BusUnavailable as exc:
         return _err(f"bus unavailable: {exc}", messages=[])
     out = []
@@ -123,10 +144,13 @@ def handle_ack(arguments: dict) -> str:
     ids = arguments.get("ids") or []
     if not isinstance(ids, list) or not ids:
         return _err("ids is required and must be a non-empty list")
-    try:
+    def _do_ack():
         with BusClient() as bus:
             bus.connect(agent)
-            r = bus.ack(ids)
+            return bus.ack(ids)
+
+    try:
+        r = _bus_op(_do_ack, agent)
     except BusUnavailable as exc:
         return _err(f"bus unavailable: {exc}", marked=0)
     return json.dumps({
@@ -137,8 +161,15 @@ def handle_ack(arguments: dict) -> str:
 
 
 def handle_status(arguments: dict) -> str:
-    from memall.mcp.bus import bus_health
+    from memall.mcp.bus import bus_health, ensure_bus_running
     h = bus_health()
+    if not h.get("available"):
+        start = ensure_bus_running()
+        h["started"] = start.get("started", False)
+        h["pid"] = start.get("pid")
+        if start.get("error"):
+            h["start_error"] = start["error"]
+        h = bus_health()  # re-probe
     return json.dumps({"status": "ok" if h.get("available") else "degraded",
                        **h}, ensure_ascii=False)
 
