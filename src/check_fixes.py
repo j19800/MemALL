@@ -1427,6 +1427,132 @@ def guard_confirm_path_honours_rule() -> Tuple[bool, str]:
                 f"(expect pending, converged)")
 
 
+def guard_convergence_honours_stance() -> Tuple[bool, str]:
+    """A recorded rejection must block convergence, not be out-voted by a count.
+
+    Convergence used to count only *who* had answered, never *what* they
+    answered.  An ``unanimous`` discussion whose whole roster rejected still
+    produced an L4 decision and L5 task cards — the group said no and the
+    pipeline recorded "the group decided yes".  ``majority`` had the mirror
+    problem: 2 reject vs 2 confirm satisfied "more than half responded" even
+    though the room was evenly split.
+
+    The fix makes ``_rule_satisfied`` accept the stance tally and honour a
+    veto.  Three things must hold, on BOTH convergence paths (the immediate
+    auto-converge in ``confirm_discussion`` and the background sweep in
+    ``_converge_single``), and one must NOT:
+
+      * unanimous + any reject            → no convergence, no L4/L5;
+      * majority + rejecting >= agreeing  → no convergence;
+      * an observer's reject              → never a veto (A1-1: outsiders
+                                            are recorded but not counted);
+      * ``rejecting=None``                → historical count-only behaviour,
+                                            so callers with no stance data
+                                            do not silently tighten.
+
+    With the veto wired in, a fully-agreeing roster must still converge —
+    otherwise the guard would pass on a rule that simply never closes.
+    """
+    from memall.pipeline.convergence import _rule_satisfied
+
+    P = ["ga", "gb", "gc"]
+
+    # ── unit: the rule itself honours the veto ──
+    all_responded = set(P)
+    u_reject_blocks = _rule_satisfied(
+        {"convergence_rule": "unanimous"}, all_responded, P,
+        agreeing={"ga"}, rejecting={"gb", "gc"}) is False
+    u_all_agree_ok = _rule_satisfied(
+        {"convergence_rule": "unanimous"}, all_responded, P,
+        agreeing=all_responded, rejecting=set()) is True
+    # `rejecting=None` is the "no stance information" path: full roster still
+    # converges, exactly as it did before the veto existed.
+    u_no_stance = _rule_satisfied(
+        {"convergence_rule": "unanimous"}, all_responded, P) is True
+    m_tie_blocks = _rule_satisfied(
+        {"convergence_rule": "majority"}, all_responded, P,
+        agreeing={"ga", "gb"}, rejecting={"gc", "gd"}) is False
+    m_outvoted_ok = _rule_satisfied(
+        {"convergence_rule": "majority"}, all_responded, P,
+        agreeing={"ga", "gb"}, rejecting={"gc"}) is True
+    # `any` is deliberately not vetoed — its job is to close on one response
+    # for rosters that will never answer.
+    any_not_vetoed = _rule_satisfied(
+        {"convergence_rule": "any"}, {"ga"}, P,
+        agreeing={"ga"}, rejecting={"ga"}) is True
+
+    # ── integration: both convergence paths obey it ──
+    _fresh_db()
+    from memall.core.db import get_conn, init_db
+    from memall.pipeline.convergence import (
+        create_discussion, confirm_discussion, get_discussion,
+        resolve_pending_deliberations,
+    )
+
+    init_db()
+    d = create_discussion(
+        title="守卫：立场必须能否决收敛",
+        participants=list(P),
+        convergence_rule="unanimous",
+        creator="guardbot")
+    did = d.get("memory_id") or d.get("discussion_id")
+    if not did:
+        return False, f"create_discussion failed: {d}"
+
+    statuses = []
+    for who in P:
+        r = confirm_discussion(discussion_id=did, agent_name=who,
+                               stance="reject", note="全员反对")
+        statuses.append(r.get("status"))
+    full = get_discussion(did)["discussion"]
+    immediate_blocked = (full["status"] == "active"
+                         and "converged" not in statuses)
+
+    # The background sweep must reach the same verdict on the same rows.
+    resolve_pending_deliberations()
+    sweep_blocked = get_discussion(did)["discussion"]["status"] == "active"
+
+    # No decision / task card may exist for a proposal nobody supported.
+    conn = get_conn()
+    try:
+        leaked = conn.execute(
+            "SELECT COUNT(*) FROM memories WHERE level='L5' AND category='task' "
+            "AND json_extract(metadata, '$.source_discussion') = ?", (did,)
+        ).fetchone()[0]
+        decisions = conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE source_id = ? AND relation_type = 'refines'",
+            (did,)).fetchone()[0]
+    finally:
+        conn.close()
+
+    # ── observer's reject must not veto a roster that actually agrees ──
+    d2 = create_discussion(
+        title="守卫：局外人的反对不否决",
+        participants=["ga", "gb"],
+        convergence_rule="unanimous",
+        creator="guardbot")
+    did2 = d2.get("memory_id") or d2.get("discussion_id")
+    confirm_discussion(discussion_id=did2, agent_name="gz",
+                       stance="reject", note="局外人")
+    confirm_discussion(discussion_id=did2, agent_name="ga", stance="confirm")
+    last = confirm_discussion(discussion_id=did2, agent_name="gb", stance="confirm")
+    observer_ignored = (last.get("status") == "converged"
+                        and get_discussion(did2)["discussion"]["status"] == "converged")
+
+    ok = all([u_reject_blocks, u_all_agree_ok, u_no_stance, m_tie_blocks,
+              m_outvoted_ok, any_not_vetoed, immediate_blocked,
+              sweep_blocked, leaked == 0 and decisions == 0,
+              observer_ignored])
+    return ok, (
+        f"unanimous_veto={u_reject_blocks} unanimous_agree={u_all_agree_ok} "
+        f"no_stance={u_no_stance} majority_tie={m_tie_blocks} "
+        f"majority_outvoted={m_outvoted_ok} any_not_vetoed={any_not_vetoed} "
+        f"immediate_blocked={immediate_blocked} sweep_blocked={sweep_blocked} "
+        f"leaked_tasks={leaked} leaked_decisions={decisions} "
+        f"observer_ignored={observer_ignored}")
+
+
+
 def guard_retrieve_by_id_respects_viewer() -> Tuple[bool, str]:
     """retrieve(<id>) must apply the same trust filter as the list path.
 
@@ -4961,6 +5087,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "notification_bar_lists_only_tasks": guard_notification_bar_lists_only_tasks,
     "notification_bar_uses_session_identity": guard_notification_bar_uses_session_identity,
     "confirm_path_honours_rule": guard_confirm_path_honours_rule,
+    "convergence_honours_stance": guard_convergence_honours_stance,
     "retrieve_by_id_respects_viewer": guard_retrieve_by_id_respects_viewer,
     "fallback_produces_self_evolution": guard_fallback_produces_self_evolution,
     "busy_timeout_survives_concurrency": guard_busy_timeout_survives_concurrency,
