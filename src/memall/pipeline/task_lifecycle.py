@@ -205,6 +205,125 @@ def close_task_reminders(conn, task_id: int) -> int:
         return 0
 
 
+def _find_dependents(conn, task_id: int) -> list[dict]:
+    """Open L5 cards whose ``metadata.depends_on`` names *task_id*.
+
+    ``depends_on`` is stored as a JSON array of memory ids (goals.finalize
+    writes ``"depends_on": deps`` where deps are the ids of earlier children),
+    but older writers stored a bare scalar, so both shapes are accepted here —
+    the same tolerance the claim gate in ``mcp/tasks.py`` applies.
+
+    Only cards still owed work are returned: a dependent that is already done
+    or archived has nothing left to notify.  The dependent's own
+    ``blocked_reason`` is irrelevant — the point of the notification is that
+    the prerequisite is now satisfied, whatever the card last recorded.
+    """
+    rows = conn.execute(
+        "SELECT id, subject, agent_name, metadata FROM memories "
+        "WHERE level = 'L5' AND category IN ('task', 'todo') "
+        f"AND {NOT_ARCHIVED} AND json_type(metadata, '$.depends_on') IS NOT NULL"
+    ).fetchall()
+
+    dependents: list[dict] = []
+    for r in rows:
+        meta = json.loads(r["metadata"] or "{}")
+        deps = meta.get("depends_on")
+        if isinstance(deps, (str, int)):
+            deps = [deps]
+        if not isinstance(deps, list):
+            continue
+        hit = False
+        for d in deps:
+            try:
+                if int(d) == int(task_id):
+                    hit = True
+                    break
+            except (TypeError, ValueError):
+                continue
+        if not hit:
+            continue
+        if task_status_of(meta.get("status")) in (
+                "done", "resolved", "archived", "converged"):
+            continue
+        dependents.append({
+            "task_id": r["id"],
+            "subject": r["subject"] or "",
+            "assignee": (meta.get("assignee") or r["agent_name"] or "").strip(),
+        })
+    return dependents
+
+
+def _notify_task_dependents(task_id: int) -> list[dict]:
+    """Tell each dependent's assignee that its prerequisite just closed.
+
+    ``depends_on`` was enforced at claim time but nothing told the downstream
+    owner when the blocker cleared, so a card could sit untouched until the
+    ``goal_tick`` sweep happened to mention it.  This closes that gap.
+
+    Contract, in order of importance:
+
+    1. Called AFTER the resolve transaction commits.  A note pushed before the
+       commit could be read by an agent whose next ``task_claim`` still sees
+       the prerequisite as active — a notification that is a lie at the moment
+       it arrives.
+    2. Never fails the resolve.  Notification is a courtesy; a broken note
+       store or an absent bus must degrade to "no note", not to "the card is
+       still open" after the caller already believes it closed.
+    3. One note per assignee, not per card.  A resolve can fan out to several
+       dependents owned by the same agent; five near-identical notes is a
+       notification storm the agent then has to wade through.
+    4. Delivery goes through ``push_session_note`` with a stable dedup key, so
+       a retried resolve cannot queue the same notice twice — the same
+       idempotency key discipline the bus-side publish uses (A3-2).
+    """
+    try:
+        conn = get_conn()
+        try:
+            dependents = _find_dependents(conn, task_id)
+        finally:
+            conn.close()
+    except Exception:
+        logger.debug("notify_task_dependents(%s): lookup failed", task_id,
+                     exc_info=True)
+        return []
+
+    if not dependents:
+        return []
+
+    by_agent: dict[str, list[dict]] = {}
+    for dep in dependents:
+        who = dep["assignee"]
+        if not who:
+            # A card with no assignee has nobody to tell.  Do not invent one:
+            # an empty assignee already means "the creator's commitment"
+            # (convergence.py), and guessing here would notify the wrong desk.
+            continue
+        by_agent.setdefault(who, []).append(dep)
+
+    notified = []
+    for who, cards in by_agent.items():
+        lines = "\n".join(
+            f"  - #{c['task_id']} {c['subject'][:80]}" for c in cards)
+        ids = ",".join(str(c["task_id"]) for c in cards)
+        text = (
+            f"[依赖解除] 前置任务 #{task_id} 已完成，你的卡现在可以认领：\n"
+            f"{lines}\n"
+            f"用 memall_write action=task_claim 认领，完成后 action=task_resolve。"
+        )
+        try:
+            from memall.mcp.shared import push_session_note
+
+            pushed = push_session_note(
+                who, text, dedup_key=f"dep-resolved:{task_id}:{ids}")
+        except Exception:
+            logger.debug("notify_task_dependents(%s): note for %s failed",
+                         task_id, who, exc_info=True)
+            continue
+        if pushed:
+            notified.append({"agent": who, "task_ids": [c["task_id"] for c in cards]})
+    return notified
+
+
 def resolve_task(task_id: int, result: str = "", caller=None) -> dict:
     """Mark a task as resolved (done).  Optional result text is stored.
 
@@ -258,8 +377,18 @@ def resolve_task(task_id: int, result: str = "", caller=None) -> dict:
         conn.execute("UPDATE memories SET arc_status='closed' WHERE id=?", (task_id,))
         closed = close_task_reminders(conn, task_id)
         conn.commit()
-        return {"task_id": task_id, "resolved_at": now,
-                "reminders_closed": closed}
+
+        # B3: tell anyone waiting on this card that it just closed.  Deliberately
+        # after the commit — see _notify_task_dependents' contract — and its
+        # internal try/except means a dead note store cannot turn a successful
+        # resolve into an error response.
+        notified = _notify_task_dependents(task_id)
+
+        out = {"task_id": task_id, "resolved_at": now,
+               "reminders_closed": closed}
+        if notified:
+            out["dependents_notified"] = notified
+        return out
     finally:
         conn.close()
 

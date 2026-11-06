@@ -1553,6 +1553,134 @@ def guard_convergence_honours_stance() -> Tuple[bool, str]:
 
 
 
+def guard_task_resolution_notifies_dependents() -> Tuple[bool, str]:
+    """Closing a prerequisite must tell the agents whose cards were waiting.
+
+    ``depends_on`` was enforced at claim time — a downstream card could not be
+    claimed while its prerequisite was open — but nothing announced the moment
+    the prerequisite closed.  The downstream owner only learned about it if
+    ``goal_tick`` happened to sweep the goal, so a dependent card could sit
+    untouched indefinitely after its blocker was already done.
+
+    Four properties, each of which was a plausible way to get this wrong:
+
+    1. the notification happens AFTER the resolve commits — a note that lands
+       before the commit reaches an agent whose next ``task_claim`` still sees
+       the prerequisite as active;
+    2. one note per assignee, not per card — a resolve that frees three cards
+       of the same agent must not queue three near-identical notes;
+    3. a dependent is notified only if it actually depends on THIS task, and
+       only while it still owes work;
+    4. if the note store blows up, the resolve still succeeds — a courtesy
+       notification must never turn a committed close into an error.
+    """
+    _fresh_db()
+    from memall.core.db import get_conn, init_db
+    from memall.core.thin_waist import capture
+    from memall.pipeline import task_lifecycle
+
+    init_db()
+
+    def _card(subject: str, who: str, deps=None) -> int:
+        meta = {"status": "active", "assignee": who}
+        if deps is not None:
+            meta["depends_on"] = deps
+        return capture(
+            f"{subject}：这张卡用于验证完成即通知，正文足够长以通过质量门检查。",
+            level="L5", category="task", agent_name=who,
+            subject=f"[任务] {subject}", metadata=json.dumps(meta, ensure_ascii=False))
+
+    a = _card("前置任务A", "ga")
+    b1 = _card("后继任务B1", "gb", deps=[a])
+    b2 = _card("后继任务B2", "gb", deps=[a])
+    c = _card("无关任务C", "gc", deps=[])
+    done = _card("已完成后继D", "gd", deps=[a])
+    conn = get_conn()
+    try:
+        m = json.loads(conn.execute("SELECT metadata FROM memories WHERE id=?",
+                                    (done,)).fetchone()[0])
+        m["status"] = "done"
+        conn.execute("UPDATE memories SET metadata=? WHERE id=?",
+                     (json.dumps(m, ensure_ascii=False), done))
+        conn.commit()
+    finally:
+        conn.close()
+
+    # ── ordering probe: read the prerequisite's status at push time ──
+    from memall.mcp import shared as note_api
+
+    seen_status = []
+    real_push = note_api.push_session_note
+
+    def _push_probe(agent, text, dedup_key=""):
+        probe = get_conn()
+        try:
+            raw = probe.execute("SELECT metadata FROM memories WHERE id=?",
+                                (a,)).fetchone()[0]
+            seen_status.append(task_lifecycle.task_status_of(
+                json.loads(raw or "{}").get("status")))
+        finally:
+            probe.close()
+        return real_push(agent, text, dedup_key=dedup_key)
+
+    note_api.push_session_note = _push_probe
+    try:
+        res = task_lifecycle.resolve_task(a, result="done")
+    finally:
+        note_api.push_session_note = real_push
+
+    resolved_ok = res.get("resolved_at") is not None
+    notified_after_commit = seen_status and all(s == "resolved" for s in seen_status)
+
+    notes_g = note_api.consume_session_note("gb") or ""
+    notes_c = note_api.consume_session_note("gc") or ""
+    notes_d = note_api.consume_session_note("gd") or ""
+
+    # one note, both cards, one assignee
+    merged_one_note = notes_g.count("[依赖解除]") == 1
+    names_both = (f"#{b1}" in notes_g) and (f"#{b2}" in notes_g)
+    # a non-dependent and an already-finished dependent get nothing
+    no_spurious = (notes_c == "" and notes_d == "")
+
+    # ── silent degradation: a broken note store must not fail the resolve ──
+    e = _card("第二次前置E", "ge")
+    f = _card("后继任务F", "gf", deps=[e])
+
+    def _boom(*a_, **k_):
+        raise RuntimeError("note store down")
+
+    note_api.push_session_note = _boom
+    try:
+        res2 = task_lifecycle.resolve_task(e, result="done")
+    finally:
+        note_api.push_session_note = real_push
+    degrades_quietly = (res2.get("resolved_at") is not None
+                        and "error" not in res2)
+    # Degradation means F is (correctly) NOT notified — the alternative was
+    # failing a committed close, which is the worse outcome.
+    f_notes_degraded = (note_api.consume_session_note("gf") or "") == ""
+
+    # ── idempotency: a repeated resolve must not re-notify ──
+    g = _card("第三次前置G", "gg")
+    h = _card("后继任务H", "gh", deps=[g])
+    task_lifecycle.resolve_task(g, result="done")
+    again = task_lifecycle.resolve_task(g, result="done")
+    no_double = "warning" in again or "error" in again
+    h_notes = (note_api.consume_session_note("gh") or "")
+    h_single = h_notes.count("[依赖解除]") == 1
+
+    ok = all([resolved_ok, notified_after_commit, merged_one_note, names_both,
+              no_spurious, degrades_quietly, f_notes_degraded, no_double,
+              h_single])
+    return ok, (
+        f"resolved={resolved_ok} after_commit={notified_after_commit} "
+        f"(statuses at push: {seen_status}) merged={merged_one_note} "
+        f"both_cards={names_both} no_spurious={no_spurious} "
+        f"degrades={degrades_quietly} degraded_f_silent={f_notes_degraded} "
+        f"no_double={no_double} h_single={h_single} "
+        f"b1={b1} b2={b2} c={c} d={done} e={e} f={f} g={g} h={h}")
+
+
 def guard_retrieve_by_id_respects_viewer() -> Tuple[bool, str]:
     """retrieve(<id>) must apply the same trust filter as the list path.
 
@@ -5088,6 +5216,7 @@ GUARDS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "notification_bar_uses_session_identity": guard_notification_bar_uses_session_identity,
     "confirm_path_honours_rule": guard_confirm_path_honours_rule,
     "convergence_honours_stance": guard_convergence_honours_stance,
+    "task_resolution_notifies_dependents": guard_task_resolution_notifies_dependents,
     "retrieve_by_id_respects_viewer": guard_retrieve_by_id_respects_viewer,
     "fallback_produces_self_evolution": guard_fallback_produces_self_evolution,
     "busy_timeout_survives_concurrency": guard_busy_timeout_survives_concurrency,
