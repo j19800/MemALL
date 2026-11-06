@@ -1,3 +1,25 @@
+## [v0.1.80] - 2026-11-06
+
+B 档续做与交接报告修正。
+
+### Feat（任务生命周期）
+
+- **B3 完成即通知**：resolve_task() 在事务 commit 后通知 depends_on 后继任务的负责人（_notify_task_dependents() / _find_dependents()）。走 push_session_note() 带稳定 dedup_key（dep-resolved:<id>:<ids>），同一 assignee 合并为一条防通知风暴，note store / 总线异常静默降级，不影响 resolve 结果。MCP 层透传 dependents_notified。
+
+### Test（守卫与回归）
+
+- **convergence_honours_stance 守卫**：B1 立场否决（unanimous 有任一 reject 不收敛；majority rejecting >= agreeing 不收敛）落地后仅有 pytest 无守卫，此处补齐，覆盖两条收敛路径（即时自动收敛与后台 sweep）、被否决讨论不泄漏 L4/L5、observer reject 不否决、rejecting=None 保持历史纯计数。三次变异测试均让守卫 FAIL。
+
+### Docs
+
+- **HANDOVER.md**：修正"B 档需从零重做"的过期描述（B1 已由 opencode 9e05809 落地，B3 已本轮落地），新增第九节逐项状态表与沙箱跑门禁实细节（PyPI 不可达、清华镜像、CRLF 假 diff、git add 行尾陷阱），接手第一步改为从 B5 起步。
+
+### Verification
+
+- verify.py --plan fast：import 绿；红蓝 9/9；pytest-quick 82/82；相关守卫（convergence_rule_respected / confirm_path_honours_rule / convergence_waits_for_action_items / convergence_honours_stance / task_resolution_notifies_dependents 等）全部通过。
+
+---
+
 ## [v0.1.79] - 2026-11-05
 
 测试卫生：清除 6 个预先存在的失败测试，全套件转全绿（524 passed / 0 failed）。
