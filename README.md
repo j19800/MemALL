@@ -1,4 +1,4 @@
-﻿<p align="center">
+<p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/MCP-2025--03--26-purple" alt="MCP">
@@ -212,6 +212,7 @@ src/memall/
 esources/read, ed_publish laundering/attribution forgery, and 	raverse/	imeline/	race now apply the trust filter; amily.db follows MEMALL_DB_PATH. Five red/blue duels now guard these.
 - [x] **v0.1.71** — The four remaining P1s: security permit is now authorised (no self-escalation), contract level/category can no longer be rewritten through update(), destructive gateway routes require a credential even from loopback, and the two identity normalisers are unified. Seven red/blue duels guard them. Also fixes a convergence regression my own identity change introduced.
 - [x] **v0.1.72** — Task-card transitions are now a compare-and-set on the observed status instead of a whole-metadata overwrite: a concurrent claim can no longer erase a completion (measured 10/40 lost before, 0/80 after), and a finished card can no longer be re-opened by a claim. Also removed the last known flaky guard.
+- [x] **v0.1.80** — B-tier handover items landed and guarded: B1 convergence stance veto (`convergence_honours_stance` — unanimous with any reject, or majority with rejecting ≥ agreeing, does not converge), and B3 dependency notification (a resolved task now notifies the owners of its `depends_on` dependents via a stable dedup key). CHANGELOG v0.1.80 entry pushed to origin with these changes.
 - [ ] **v0.2.0** — Web dashboard, user system, Pro tier gating
 - [ ] **v0.3.0** — Cloud sync, team collaboration, API gateway
 
