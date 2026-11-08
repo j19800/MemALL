@@ -289,6 +289,7 @@ def run_daemon_with_watchdog():
             WATCHDOG_PID_FILE.unlink(missing_ok=True)
             break
         stderr_handle = open(str(stderr_path), "a", encoding="utf-8")
+        _spawn_ts = time.time()
         try:
             proc = subprocess.Popen(
                 [sys.executable, "-c", scheduler_script],
@@ -301,6 +302,12 @@ def run_daemon_with_watchdog():
                 f.write("[{}] scheduler started (pid={})\n".format(datetime.now(timezone.utc).isoformat(), proc.pid))
             
             exit_code = proc.wait()
+            # A child that survived well past a crash-loop window resets the
+            # budget.  Without this the counter only ever grows, so five
+            # deaths spread over months — not a crash loop — permanently
+            # retires the watchdog (restart_count >= MAX_RESTARTS above).
+            if time.time() - _spawn_ts > 3600:
+                restart_count = 0
             
             with open(str(log_path), "a") as f:
                 f.write("[{}] scheduler exited (pid={}, code={}), restarting in 5s\n".format(
@@ -358,7 +365,14 @@ def daemon_start():
         if _stale_or_running(pf):
             print(f"scheduler already running (pid from {pf.name})")
             return False
-    script = "from memall.scheduler.scheduler import run_daemon; run_daemon()"
+    # Launch the WATCHDOG, not the bare daemon.  run_daemon_with_watchdog()
+    # used to be dead code: its docstring said "intended to be run as a
+    # subprocess by daemon_start()", but daemon_start spawned plain
+    # run_daemon — so nothing supervised the scheduler and every crash left
+    # a silent hole (measured: scheduler dead for 3 days, heartbeat frozen
+    # at 2026-11-05, while the MCP fallback watchdog only covers distill).
+    script = ("from memall.scheduler.scheduler import run_daemon_with_watchdog; "
+              "run_daemon_with_watchdog()")
     err_log = str(PID_FILE.parent / "scheduler_err.log")
     stderr_handle = open(err_log, "a", encoding="utf-8")
     proc = subprocess.Popen(

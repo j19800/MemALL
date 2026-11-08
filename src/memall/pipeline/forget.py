@@ -356,11 +356,19 @@ def forget_l5_archive(days: int = 30, limit: int = None) -> Dict[str, Any]:
             if not isinstance(meta, dict):
                 continue
             status = meta.get("status", "active")
-            if status != "done":
+            if not isinstance(status, str) or status != "done":
+                # status itself may be any JSON value (a dict on hand-built
+                # cards); only a plain "done" string is archivable here.
                 continue
             updated_at = None
             for src in [meta.get("completed_at"), meta.get("_completed_at")]:
-                if src:
+                # A live-row audit found cards whose completed_at is NOT a
+                # timestamp string (nested dict from a hand-built payload),
+                # and `updated_at < cutoff` then raised
+                # "'<' not supported between instances of 'dict' and 'str'"
+                # — which killed the whole daily forget step, so NO expired
+                # rows were archived for days.  Only ISO strings compare.
+                if isinstance(src, str) and src:
                     updated_at = src
                     break
             if not updated_at:
@@ -375,7 +383,15 @@ def forget_l5_archive(days: int = 30, limit: int = None) -> Dict[str, Any]:
         conn.commit()
         return {"archived": archived, "kept_active": len(rows) - archived}
     except Exception:
-        conn.rollback()
+        # The error may have already ended the transaction (e.g. a TypeError
+        # inside the loop is not a DB error — sqlite leaves no active txn),
+        # so a bare rollback() raised "cannot rollback - no transaction is
+        # active" and REPLACED the real failure in the caller's log: for days
+        # the daily forget step reported an error nobody could diagnose.
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            logger.debug("forget: rollback after failed step (no txn)", exc_info=True)
         raise
     finally:
         conn.close()

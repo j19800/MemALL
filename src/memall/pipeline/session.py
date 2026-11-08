@@ -746,7 +746,7 @@ def session_end(session_id: str, auto_extract: bool = False) -> dict:
         # ── Correction compliance check ──
         # Log whether the session agent has STRONG corrections it should have followed
         try:
-            from .improve import get_active_corrections, improve_step
+            from .improve import get_active_corrections
             strong = [c for c in get_active_corrections(agent_name or "")
                       if c.get("severity", "SUGGEST") == "STRONG"]
             if strong:
@@ -754,19 +754,15 @@ def session_end(session_id: str, auto_extract: bool = False) -> dict:
                     "total_strong": len(strong),
                     "note": f"session had {len(strong)} mandatory correction rules that should have been followed",
                 }
-            # P1-修正机制強化：會話啟動時自動掃描近期 L6 反思，生成/更新修正規則
-            try:
-                imp = improve_step(agent_name=agent_name or "")
-                result["corrections_improve"] = imp
-            except Exception:
-                logger.debug("session.py: improve_step skipped", exc_info=True)
-            # P1-畫像自動更新：會話啟動時掃描該 agent 的 L1/L7 訊號，更新 identities.profile_json
-            try:
-                from .identity import identity_step
-                prof = identity_step()
-                result["profile_update"] = prof
-            except Exception:
-                logger.debug("session.py: identity_step skipped", exc_info=True)
+            # 9e05809 originally called improve_step()/identity_step() here,
+            # with a comment claiming "session start".  Both are FULL-STORE
+            # scans, this hook is session_end — a path that almost never
+            # fires (measured: 39 ended vs 99 active sessions in 14 days) —
+            # and both steps already run on the scheduler's 6h full pipeline
+            # (include_improve/include_identity default True).  Net effect
+            # of the wiring was: never runs here, and dead-slow when it did.
+            # Reverted to the read-only compliance check; the refresh now
+            # rides the (resurrected) scheduler.
         except (ImportError, sqlite3.Error):
             logger.warning("session.py: silent error", exc_info=True)
 
@@ -851,22 +847,74 @@ def idle_session_sweep(idle_minutes: int = 0) -> dict:
         ).fetchall()
 
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=idle_minutes)).isoformat()
+        # Supersession rule.  MemALL's model is ONE active session per agent
+        # (session_start auto-closes the single most recent stale one), so
+        # whenever a newer active session exists, every older active session
+        # of that agent is an abandoned sitting by construction — whatever
+        # the agent's global last-activity says.  session_start only closes
+        # ONE stale row per start, so long-lived agents accumulated hundreds
+        # of stacked actives (measured 2026-11-08: claude 94 / workbuddy 85 /
+        # opencode 77 — 386 of 431 stale rows were superseded this way).
+        # The idle rule below can never reach them: the agent keeps working,
+        # so its MAX(created_at) stays fresh and every stacked window looks
+        # "still warm" — while each window counts memories from ITS OWN
+        # started_at, which is exactly the unbounded-window drift this
+        # sweep exists to prevent.
+        latest_active: dict[str, str] = {}
+        for row in active:
+            ag, st = row["agent_name"], row["started_at"]
+            if ag and st and (ag not in latest_active or st > latest_active[ag]):
+                latest_active[ag] = st
+        # Sessions older than 30 days with NO memories are dead weight: the
+        # original rule skipped them ("still warming up"), but a warming-up
+        # window that never produced a row 30 days ago is not warming up —
+        # it was an abandoned handshake.  Measured: of 522 >7d actives, this
+        # class never clears, so the count could not converge to zero.
+        dead_no_mem_cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
         swept = 0
         l4_count = 0
         l6_count = 0
+        closed_empty = 0
         for row in active:
             sid, started_at, agent_name = (
                 row["session_id"], row["started_at"], row["agent_name"]
             )
             # Newest memory for this agent since the session began = last real
             # activity.  A session with no memories is left active (nothing to
-            # consolidate; it may still be warming up).
+            # consolidate; it may still be warming up) UNLESS it is past the
+            # 30-day dead window above.
+            #
+            # Derived rows must NOT count as activity.  _harvest_session writes
+            # an L4 (category='session') and an L6 (category='reflection'),
+            # both created_at=now and metadata.source='pipeline_harvest' —
+            # which sit inside the created_at window of every OLDER
+            # still-active session of the same agent.  Measured with the first
+            # post-resurrection sweep: after closing ~61 sessions the pass
+            # stalled (431 left) because each closed session's fresh rows
+            # reset those agents' last-activity to "now".  A sweep that feeds
+            # on its own output can never converge.  Filter on the provenance
+            # (not the category): an agent's own L6 reflection IS real
+            # activity and must still keep its session warm.
             last = conn.execute(
                 "SELECT MAX(created_at) AS t FROM memories "
-                "WHERE agent_name = ? AND created_at >= ?",
+                "WHERE agent_name = ? AND created_at >= ? "
+                "AND COALESCE(json_extract(metadata, '$.source'), '') != 'pipeline_harvest'",
                 (agent_name, started_at),
             ).fetchone()["t"]
-            if not last or last > cutoff:
+            if not last:
+                if started_at and started_at < dead_no_mem_cutoff:
+                    conn.execute(
+                        "UPDATE sessions SET status='ended', ended_at=?, summary=?, "
+                        "memory_count=0 WHERE session_id=? AND status='active'",
+                        (datetime.now(timezone.utc).isoformat(), "(closed: 30d no memories)", sid),
+                    )
+                    conn.commit()
+                    closed_empty += 1
+                continue
+            if last > cutoff and not (
+                started_at and started_at < latest_active.get(agent_name or "", "")
+            ):
+                # Idle AND not superseded → still a live sitting.
                 continue
             result = _harvest_session(
                 conn, sid, started_at, agent_name, end_session=True

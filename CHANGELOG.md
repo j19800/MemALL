@@ -1,3 +1,22 @@
+## [v0.1.81] - 2026-11-08
+
+技术债巡检后的基础设施批次：scheduler 保活化、死路径接线纠正、会话清扫收敛性、daily forget 止血。
+
+### Fixed
+
+- **scheduler 保活接线**：`daemon_start()` 此前直接 spawn 裸 `run_daemon`，`run_daemon_with_watchdog()`（含 MAX_RESTARTS 重启逻辑）是死代码——实测 scheduler 死亡 3 天无人知（heartbeat 冻结在 11-05，期间凡挂在 `_tick` 的周期任务：全量 pipeline / sweep / forget / backup 全部停摆）。现在 daemon_start 启动看门狗、由看门狗托管调度器；看门狗重启计数器加入存活重置（子进程存活 >1h 计数归零，防止慢性死亡累积成误判 crash-loop 后永久退休）。另注册 `schtasks /ONSTART MemALLScheduler` 开机自启（本机为重启后不自恢复的形态，实测今天 17:53 重启导致链再次断裂）。
+- **9e05809 错误接线回退**：`improve_step`/`identity_step` 被挂在 `session_end` 的合规检查块（注释写"会话启动"但函数是结束），而 session_end 本来就近乎不被调用（14 天 active:ended=99:39，AGENTS.md 已收录教训）；且两个 step 是 O(全库扫描) 级，与 scheduler 6h 全量 pipeline 重复。恢复为只读的 compliance check；修正/画像刷新回归 pipeline 周期执行。
+- **idle_session_sweep 收敛性三连修**（巡检 522 个 >7d 未闭环会话的根因）：
+  1. 自噬停滞——`_harvest_session` 写出的 L4/L6（created_at=now）落在同 agent 更老会话的窗口内，把"最后活动"顶到当下，扫一条冻结一片（实测 61 条后停死在 431）；last-activity 查询现排除 `metadata.source='pipeline_harvest'` 派生行（agent 自己的反思仍算活动）。
+  2. 堆叠会话不可达——MemALL 单活跃会话模型下，被更新 active 会话取代的老会话按定义就是弃座；session_start 每次只关 1 条陈旧行，长活 agent 堆出 claude 94 / workbuddy 85 / opencode 77 条，而 agent 持续产新记忆使 idle 规则永不触发。新增取代即关规则。
+  3. 无记忆僵尸——原规则跳过"还没热起来"的空会话，实测 290 条 >30 天空会话永不清零；补 30 天空会话直接闭合。
+- **daily forget 静默死亡**（scheduler 错误日志实锤 `'<' not supported between instances of 'dict' and 'str'`）：`forget_l5_archive` 对 completed_at 非字符串（手拼 payload 的嵌套 dict）直接 TypeError；且 except 里无条件 `conn.rollback()` 在无活动事务时二次抛错、盖掉真实报错数日。现 completed_at/status 均做类型守卫，rollback 加保护。
+
+### Tests
+
+- 新增 `tests/test_session_sweep.py` 4 项回归（自噬、取代堆叠、空僵尸、forget 类型守卫），全部对生产实测场景建模。
+- 全量 528 passed / 0 failed（524→528）；test_forget/test_session 20 项无回归。
+
 ## [v0.1.80] - 2026-11-06
 
 B 档续做与交接报告修正。
