@@ -316,6 +316,12 @@ def app():
 
     p_start = sub.add_parser("start-gateway", help="Start Gateway (HTTP + MCP) on port 9920")
     p_start.add_argument("--port", type=int, default=9920, help="Port (default 9920)")
+    p_start.add_argument("--host", default="127.0.0.1",
+                         help="Bind address (default 127.0.0.1; use 0.0.0.0 to expose on the LAN — "
+                              "API endpoints then require a Bearer token)")
+    p_start.add_argument("--secret-key", default="",
+                         help="Fixed auth token (else MEMALL_SECRET_KEY env, else a random per-run token). "
+                              "Set this to keep the token stable across restarts so MCP clients can pin it.")
     p_start.set_defaults(func=cmd_start_gateway)
 
     p_qs = sub.add_parser("quickstart", help="One-command setup: init DB + start gateway + configure MCP")

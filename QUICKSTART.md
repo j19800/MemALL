@@ -18,16 +18,35 @@ pip install -e .
 
 ```bash
 memall init    # 创建数据库
-memall start   # 启动服务
+memall start-gateway    # 启动 HTTP + MCP 网关 (端口 9920)
 ```
 
 启动后：
-- MCP 服务就绪于 `http://127.0.0.1:9876/mcp`
-- REST API 就绪于 `http://127.0.0.1:8199`
+- MCP 服务就绪于 `http://127.0.0.1:9920/mcp`
+- REST API 就绪于 `http://127.0.0.1:9920`
+- Web 仪表盘就绪于 `http://127.0.0.1:9920/`
+- 健康检查 `http://127.0.0.1:9920/health`
+
+> 网关默认仅监听 loopback (127.0.0.1)。`/mcp`、`/api` 等 API 端点需要 Bearer
+> token 认证；token 在启动日志中打印（可用 `MEMALL_SECRET_KEY` 固定，见下文）。
 
 ## 连接 MCP 客户端
 
-在 Claude Desktop / Cursor / Cline 的 `mcp.json` 中添加：
+**方式一：HTTP 网关**（推荐，网关需已通过 `memall start-gateway` 启动）。
+先取 token（用固定的 `MEMALL_SECRET_KEY`，见下文）：
+
+```json
+{
+  "mcpServers": {
+    "memall": {
+      "url": "http://127.0.0.1:9920/mcp",
+      "headers": { "Authorization": "Bearer <your-token>" }
+    }
+  }
+}
+```
+
+**方式二：stdio**（每次由客户端拉起子进程）：
 
 ```json
 {
@@ -52,8 +71,8 @@ memall search "FastAPI"
 # 查看记忆详情
 memall get 1
 
-# 启动 Web 仪表盘
-memall server
+# 启动 Web 仪表盘 + HTTP/MCP 网关 (同 9920 端口)
+memall start-gateway
 ```
 
 ## 记忆层级

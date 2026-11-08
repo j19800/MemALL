@@ -139,8 +139,16 @@ class MemAllGateway(HtmlHandlersMixin, RestHandlersMixin,
         self._lock = threading.Lock()
         self._loop_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        # Auth token: use provided key or auto-generate one
-        self._auth_token: str = secret_key or secrets.token_hex(32)
+        # Auth token: explicit key > MEMALL_SECRET_KEY env (persistent across
+        # restarts, so MCP clients can pin it) > auto-generate per instance.
+        # A fresh random token is useless to clients that must configure it out
+        # of band: it is only logged as a redacted prefix...suffix and never
+        # written anywhere, so it cannot be recovered after the process exits.
+        self._auth_token: str = (
+            secret_key
+            or os.environ.get("MEMALL_SECRET_KEY", "").strip()
+            or secrets.token_hex(32)
+        )
         # Per-instance CSRF token for state-changing SPA endpoints.  Handed to
         # the local UI by ``GET /ui/session`` (loopback + trusted origin only).
         self._csrf_token: str = secrets.token_urlsafe(32)

@@ -963,14 +963,22 @@ def _serve_with_watch() -> None:
 
 
 def cmd_start_gateway(args):
-    """Start Gateway (HTTP + MCP) on port 9920. Keep running until Ctrl+C."""
+    """Start Gateway (HTTP + MCP). Keep running until Ctrl+C."""
     import time
     from memall.gateway import MemAllGateway
-    gw = MemAllGateway(host="127.0.0.1", port=args.port)
+    host = getattr(args, "host", "127.0.0.1") or "127.0.0.1"
+    secret_key = getattr(args, "secret_key", "") or ""
+    gw = MemAllGateway(host=host, port=args.port, secret_key=secret_key)
     gw.start()
-    print(f"MemALL Gateway running on http://127.0.0.1:{args.port}")
-    print(f"  MCP endpoint: http://127.0.0.1:{args.port}/mcp")
-    print(f"  Press Ctrl+C to stop")
+    display_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+    print(f"MemALL Gateway running on http://{display_host}:{args.port}"
+          + ("  (bound to all interfaces)" if host in ("0.0.0.0", "::") else ""))
+    print(f"  MCP endpoint: http://{display_host}:{args.port}/mcp")
+    if host in ("0.0.0.0", "::"):
+        print("  Note: bound to all interfaces — API endpoints now require a Bearer token.")
+    if not secret_key:
+        print("  Note: using a per-run random token. Set --secret-key or MEMALL_SECRET_KEY to pin it.")
+    print("  Press Ctrl+C to stop")
     try:
         while True:
             time.sleep(10)
