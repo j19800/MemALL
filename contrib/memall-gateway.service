@@ -1,0 +1,44 @@
+[Unit]
+Description=MemALL memory gateway (HTTP + MCP on port 9920)
+Documentation=https://github.com/j19800/MemALL
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=memall
+Group=memall
+
+# Home for the SQLite store (~/.memall/data.db). Create it and chown to memall.
+Environment=HOME=/var/lib/memall
+
+# Fixed auth token (MEMALL_SECRET_KEY) so the token survives restarts and MCP
+# clients can pin it. File is root:memall 640 — keep it out of world-readable
+# paths. See contrib/README.md.
+EnvironmentFile=/etc/memall/gateway.env
+
+# Loopback-only by default: API/MCP endpoints are reachable from the local
+# machine only. Change --host to 0.0.0.0 to expose on the LAN (API endpoints
+# then require the Bearer token). Adjust the interpreter path if memall is
+# installed in a venv.
+ExecStart=/usr/local/bin/memall start-gateway --host 127.0.0.1 --port 9920
+
+# Restart on crash; stop cleanly on shutdown (start-gateway handles SIGTERM).
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=15
+
+# Hardening: the gateway only needs to read/write its own home and bind a port.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/memall
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

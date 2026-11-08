@@ -979,6 +979,21 @@ def cmd_start_gateway(args):
     if not secret_key:
         print("  Note: using a per-run random token. Set --secret-key or MEMALL_SECRET_KEY to pin it.")
     print("  Press Ctrl+C to stop")
+    # Graceful stop on SIGTERM too, not just Ctrl+C (SIGINT). systemd and most
+    # supervisors send SIGTERM by default; without this the process is killed
+    # outright instead of running gw.stop() to close the listener cleanly.
+    import signal
+
+    def _graceful(signum, frame):
+        gw.stop()
+        print("Gateway stopped")
+        sys.exit(0)
+
+    for _sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(_sig, _graceful)
+        except (ValueError, OSError):
+            pass
     try:
         while True:
             time.sleep(10)
