@@ -907,3 +907,11 @@ class MsgInput(BaseModel):
     payload: Optional[Dict[str, Any]] = None
     type: str = Field("msg", max_length=50)
     ids: Optional[List[int]] = None
+    # M1 idempotency (bus protocol rules D-1/D-2).  MUST be declared here:
+    # validate_tool_input dumps with exclude_unset=True, so an undeclared
+    # field is stripped before the handler runs — the same shape as the old
+    # agent_name/F3 hole.  Three states: ABSENT = server derives the key;
+    # "" = caller disables dedup; a [A-Za-z0-9_.:-]{1,128} string = caller-
+    # named business key (prefer "<memory_id>:<action>", the L5 card is the
+    # source of truth and its id is the natural identity of one logical send).
+    dedup_key: Optional[str] = Field(None, max_length=128)

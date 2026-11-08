@@ -681,6 +681,15 @@ registry.register(ToolDef(
         "type": {"type": "string", "description": "Message type: task | ack | report | verdict | msg"},
         "ids": {"type": "array", "items": {"type": "integer"},
                 "description": "Message ids to mark read (ack action)"},
+        "dedup_key": {"type": "string", "maxLength": 128,
+                      "description": "Idempotency key for send (bus M1). Prefer "
+                                     "\"<memory_id>:<action>\" — the L5 card is the "
+                                     "source of truth. ABSENT = server derives one "
+                                     "from (from,to,type,payload); \"\" = disable "
+                                     "dedup entirely; a named key collapses retries "
+                                     "of one logical send to a single delivery "
+                                     "(unread window; ack releases the key). "
+                                     "Charset [A-Za-z0-9_.:-]{1,128}."},
     }},
     handler=msg.handle,
     annotations={"readOnlyHint": False, "idempotentHint": False},

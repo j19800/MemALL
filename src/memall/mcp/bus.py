@@ -43,6 +43,16 @@ class BusUnavailable(RuntimeError):
     """总线不可用（没起、连不上、鉴权失败、协议不符）。"""
 
 
+class BusRejected(BusUnavailable):
+    """总线**在线并正常工作**，但按协议拒绝了这个请求（op:error 回包）。
+
+    与 BusUnavailable 的关键区别：这类失败**重试没有意义**——「auto-start the
+    bus and retry once」那条恢复路径对 "invalid dedup_key" 只会以同样的错误
+    再失败一次，还会让调用方以为总线掉了。所以它仍是 BusUnavailable 的子类
+    （老的 except 分支照常兜住），但 _bus_op 见到它会直接向上抛。
+    """
+
+
 def bus_home() -> str:
     return os.environ.get("MEMALL_BUS_HOME") or os.path.join(
         os.path.expanduser("~"), ".memall")
@@ -211,25 +221,38 @@ class BusClient:
 
     # ── 公开操作 ──────────────────────────────────────────────────────
     def publish(self, to: str, payload, mtype: str = "msg",
-                dedup_key: str = "") -> dict:
-        """发消息。from 由服务端按连接身份判定。
+                dedup_key: str = None) -> dict:
+        """发消息。from 由服务端从连接身份取。
 
-        ``dedup_key`` makes the publish idempotent when the server supports it:
-        a socket timeout after the server persisted the message used to make a
-        caller retry, and the retry created a SECOND copy (publish carried no
-        key).  The key is derived from (to, type, payload) by the caller so a
-        retry of the same logical message lands on the same key.
+        ``dedup_key`` 是三态的（服务端自 M1 起**真的**认这个字段；在此之前
+        服务端整个忽略它，所以幂等能力实际为 0）：
+
+          * ``None``（不传）—— 不发该字段，**由服务端派生**规范化键。派生
+            必须留在服务端：它要用的是连接身份里的 from，而客户端自报的
+            agent_name 与服务端强判的 from 可以不一致（键就会错配）。
+          * ``""``          —— 显式**关闭**去重（同一 payload 连发两次必须
+            都成立 —— 「说了空」与「没说」必须可区分）。
+          * 合法字符串键     —— 服务端在未读窗口内按它去重。
+
+        键字符集 ``[A-Za-z0-9_.:-]{1,128}``，非法服务端直接报错（不静默接受）。
+
+        响应里 ``deduplicated`` 为真表示这条是一次重试的副本：服务端**没有
+        新建行**，返回的是已有行的 id（``echo`` 语义，Stripe 模式）—— 重试方
+        仍能拿到 id 去 ack，否则 mailbox 状态会永久不一致。
         """
         self._req_id += 1
         rid = self._req_id
         req = {"op": "publish", "to": to, "from": self.agent,
                "type": mtype, "payload": payload, "req_id": rid}
-        if dedup_key:
+        # `is not None` 而不是真值判断：空串是「显式关闭去重」，必须真的发给
+        # 服务端；用 `if dedup_key:` 会把空串吞掉，服务端转而派生键 →
+        # 调用方要求「不去重」却得到「去重」。
+        if dedup_key is not None:
             req["dedup_key"] = dedup_key
         self._send(req)
         r = self._await(rid, {"pub_ok"})
         if r.get("op") == "error":
-            raise BusUnavailable(f"publish 失败: {r.get('msg')}")
+            raise BusRejected(f"publish 被服务端拒绝: {r.get('msg')}")
         return r
 
     def inbox(self) -> list:
