@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from datetime import datetime, timezone
 
-from memall.core.db import get_conn, DB_PATH
+from memall.core.db import get_conn, get_db_path
 
 EXPORT_DIR = Path.home() / ".memall" / "exports"
 
@@ -41,25 +41,29 @@ def _get_all_memories(category=None, since=None):
                 "SELECT * FROM memories ORDER BY occurred_at DESC"
             ).fetchall()
 
-        results = []
-        for r in rows:
-            edges = conn.execute(
-                "SELECT e.target_id, e.relation_type, e.weight, m.content "
+        # One batched edges query instead of N per-memory queries (N+1).
+        ids = [r["id"] for r in rows]
+        edges_by_source: dict[int, list] = {}
+        if ids:
+            placeholders = ",".join("?" * len(ids))
+            edge_rows = conn.execute(
+                "SELECT e.source_id, e.target_id, e.relation_type, e.weight, m.content "
                 "FROM edges e JOIN memories m ON e.target_id = m.id "
-                "WHERE e.source_id = ?",
-                (r["id"],),
+                f"WHERE e.source_id IN ({placeholders})",
+                ids,
             ).fetchall()
-
-            mem = dict(r)
-            mem["_edges"] = [
-                {
+            for e in edge_rows:
+                edges_by_source.setdefault(e["source_id"], []).append({
                     "target_id": e["target_id"],
                     "relation": e["relation_type"],
                     "weight": e["weight"],
                     "target_content": e["content"][:80] if e["content"] else "",
-                }
-                for e in edges
-            ]
+                })
+
+        results = []
+        for r in rows:
+            mem = dict(r)
+            mem["_edges"] = edges_by_source.get(r["id"], [])
             results.append(mem)
         return results
     finally:
@@ -106,7 +110,7 @@ def _format_jsonl(memories, output_path):
 def _format_json(memories, output_path):
     payload = {
         "exported_at": datetime.now(timezone.utc).isoformat(),
-        "source_db": str(DB_PATH),
+        "source_db": str(get_db_path()),
         "total_memories": len(memories),
         "memories": [],
     }
@@ -144,7 +148,7 @@ def _format_markdown(memories, output_path):
     lines.append(f"# MemALL Export")
     lines.append(f"")
     lines.append(f"**Exported**: {now_str}")
-    lines.append(f"**Source**: `{DB_PATH}`")
+    lines.append(f"**Source**: `{get_db_path()}`")
     lines.append(f"**Total Memories**: {len(memories)}")
     lines.append(f"")
     lines.append(f"---")
@@ -198,7 +202,7 @@ def _format_yaml(memories, output_path):
 
     payload = {
         "exported_at": datetime.now(timezone.utc).isoformat(),
-        "source_db": str(DB_PATH),
+        "source_db": str(get_db_path()),
         "total_memories": len(memories),
         "memories": [],
     }
@@ -241,14 +245,21 @@ def cmd_export(args):
         return
 
     fmt = args.format
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    # Include time (and a counter) so exporting twice in one day never
+    # silently overwrites the previous file.
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
     if args.output:
         output_path = Path(args.output)
     else:
         ext = {"json": ".json", "jsonl": ".jsonl", "markdown": ".md", "yaml": ".yaml"}.get(fmt, ".json")
-        filename = f"memall-export-{date_str}{ext}"
+        filename = f"memall-export-{stamp}{ext}"
         output_path = EXPORT_DIR / filename
+        if output_path.exists():
+            n = 2
+            while (EXPORT_DIR / f"memall-export-{stamp}-{n}{ext}").exists():
+                n += 1
+            output_path = EXPORT_DIR / f"memall-export-{stamp}-{n}{ext}"
 
     if fmt == "jsonl":
         out = _format_jsonl(memories, output_path)

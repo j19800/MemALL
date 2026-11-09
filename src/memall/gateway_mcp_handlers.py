@@ -15,6 +15,7 @@ from aiohttp import web
 
 from memall.core.status import PENDING_TASKS
 from memall.mcp.shared import ack_session_note
+from memall.gateway_utils import _cors_headers
 
 logger = logging.getLogger("memall.gateway.mcp")
 
@@ -48,21 +49,26 @@ class McpHandlersMixin:
 
         # ── Initialize ──
         if method == "initialize":
-            # Bind the agent identity for the session (design #1000007,
-            # step 1).  Explicit handshake identity wins, then
-            # MEMALL_AGENT_NAME; the client software name is NOT used — it
-            # would attribute every agent to one bucket and break isolation.
+            # HARD REQUIREMENT: every client must declare an agent name.
+            # The client software name is NOT used — it would attribute every
+            # agent to one bucket and break isolation.  A missing/invalid
+            # declaration is refused instead of silently becoming "unknown".
+            from memall.mcp_identity import (
+                resolve_agent, register_agent, missing_identity_error,
+            )
+            agent_name, agent_source, agent_error = resolve_agent(request, params)
+            if not agent_name:
+                err = missing_identity_error(agent_error)
+                err["id"] = req_id
+                logger.warning("initialize rejected: %s (source=%s)",
+                               agent_error, agent_source)
+                return web.json_response(err, status=200)
             try:
-                import os as _osid
                 from memall.mcp.session_identity import bind_handshake_agent
-
-                _ci = params.get("clientInfo") or {}
-                _agent = (params.get("agent_name")
-                          or _ci.get("agent_name")
-                          or _osid.environ.get("MEMALL_AGENT_NAME")
-                          or "")
-                if _agent:
-                    bind_handshake_agent(_agent)
+                bind_handshake_agent(agent_name)
+                reg = register_agent(agent_name, agent_source)
+                logger.info("initialize: agent=%s source=%s %s",
+                            agent_name, agent_source, reg["action"])
             except Exception:
                 logger.warning("session identity binding failed", exc_info=True)
             from memall.onboarding import _get_status
@@ -92,7 +98,9 @@ class McpHandlersMixin:
                         "name": "memall",
                         "version": "0.1.0",
                         "user_id": user_id,
-                        "actor_id": actor_id,
+                        "actor_id": agent_name or actor_id,
+                        "agent_name": agent_name,
+                        "agent_source": agent_source,
                     },
                     "protocolVersion": "2025-03-26",
                     "capabilities": {"tools": {"listChanged": True}},
@@ -100,6 +108,7 @@ class McpHandlersMixin:
                         "onboarding_required": not onboarding_completed,
                         "onboarding_step": onboarding_step,
                         "onboarding_user_id": user_id,
+                        "agent_name": agent_name,
                     },
                 },
             })
@@ -220,7 +229,9 @@ class McpHandlersMixin:
                 "Content-Type": "text/event-stream",
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
-                "Access-Control-Allow-Origin": "http://127.0.0.1:9919",
+                # CORS decided centrally by the whitelist, not a hardcoded
+                # port that drifts from the running gateway (was 9919/9876).
+                **_cors_headers(request),
             },
         )
         await response.prepare(request)

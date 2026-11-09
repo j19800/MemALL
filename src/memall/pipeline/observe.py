@@ -345,6 +345,15 @@ def _update_growth_log(conn, report: dict) -> dict:
 
         new_content = today_entry + "\n\n---\n\n" + existing_content[:50000]
         ch = hashlib.sha256(new_content.encode()).hexdigest()
+        # The hash is UNIQUE across all memories.  Another row may already
+        # carry this exact content (e.g. a timeline that got reclassified
+        # away from L6), so an unguarded UPDATE raises IntegrityError.
+        clash = conn.execute(
+            "SELECT id FROM memories WHERE content_hash = ? AND id <> ?",
+            (ch, timeline_id),
+        ).fetchone()
+        if clash:
+            return {"updated": False, "reason": "content_hash collision", "id": clash["id"]}
         conn.execute(
             "UPDATE memories SET content = ?, content_hash = ?, updated_at = ? WHERE id = ?",
             (new_content, ch, now, timeline_id),
@@ -354,6 +363,14 @@ def _update_growth_log(conn, report: dict) -> dict:
         # Create new timeline
         content = today_entry + "\n\n*反思时间线始于 " + today + "*"
         ch = hashlib.sha256(content.encode()).hexdigest()
+        # The L6-only lookup above can miss a timeline that classify()
+        # downgraded to another level; inserting then collides on the
+        # UNIQUE content_hash.  Treat an existing hash as "already logged".
+        existing = conn.execute(
+            "SELECT id FROM memories WHERE content_hash = ?", (ch,)
+        ).fetchone()
+        if existing:
+            return {"updated": False, "reason": "timeline already exists", "id": existing["id"]}
         conn.execute(
             "INSERT INTO memories (content, content_hash, level, agent_name, category, project, subject, summary, occurred_at, created_at, updated_at, metadata) "
             "VALUES (?, ?, 'L6', 'system', 'reflection', ?, ?, ?, ?, ?, ?, ?)",

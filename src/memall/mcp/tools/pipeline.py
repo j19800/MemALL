@@ -17,6 +17,9 @@ def handle(arguments: dict) -> str:
     include_integrate = arguments.get("include_integrate", True)
     include_persona = arguments.get("include_persona", True)
     include_archive = arguments.get("include_archive", True)
+    # Off by default: observation writes self-descriptive "管线观察" rows that
+    # self-propagate.  Opt in explicitly if a snapshot is actually wanted.
+    include_observation = arguments.get("include_observation", False)
     timeout = min(arguments.get("timeout", 300), 3600)
     fut = _POOL.submit(
         run_pipeline,
@@ -25,6 +28,7 @@ def handle(arguments: dict) -> str:
         include_integrate=include_integrate,
         include_persona=include_persona,
         include_archive=include_archive,
+        include_observation=include_observation,
     )
     try:
         result = fut.result(timeout=timeout)

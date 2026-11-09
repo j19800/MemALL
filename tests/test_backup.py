@@ -22,7 +22,10 @@ def test_backup_step_no_db():
 
     nonexistent.unlink()  # Remove it so it doesn't exist
 
-    with patch("memall.pipeline.backup.DB_PATH", nonexistent):
+    # backup_step() reads the LIVE core DB_PATH at call time (gateway/MCP
+    # patch it at startup), not a frozen module attribute.  Patch the source
+    # of truth instead of the old module-level name.
+    with patch("memall.core.db.DB_PATH", nonexistent):
         result = backup_step()
 
     assert isinstance(result, dict), f"Expected dict, got {type(result)}"

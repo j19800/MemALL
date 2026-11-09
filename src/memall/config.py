@@ -21,11 +21,14 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "gateway": {
         "host": "127.0.0.1",
-        "port": 9919,
+        # Single production port for both /mcp and /bus/* (one process).
+        # CLI `serve`/`start-gateway`/`quickstart` and gateway_keepalive.sh
+        # all default to 9920; keep this aligned (was 9919, which drifted).
+        "port": 9920,
         "secret_key": "",  # auto-generated on first start if empty
     },
     "discovery": {
-        "port": 9919,
+        "port": 9920,
     },
     "identity": {
         # The human who owns this MemALL deployment.  Invariant #1 (from design
@@ -271,6 +274,14 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "gate_policy": "lenient",
         # Minimum content length: memories shorter than this are rejected regardless of quality score
         "min_length": 15,
+    },
+    "session": {
+        # Debt patrol 2026-11-08: improve_step / identity_step were wired into
+        # session_end (a dead path) instead of session_start.  They now run at
+        # session start, but OFF by default — enabling them writes to the DB on
+        # every start, so it must be an explicit operator decision.
+        "auto_improve": False,
+        "auto_identity": False,
     },
     "scheduler": {
         "forget_interval": 86400,

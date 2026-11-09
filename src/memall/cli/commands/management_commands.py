@@ -76,7 +76,8 @@ def cmd_status(args):
         if pid_file.exists():
             pid = int(pid_file.read_text().strip())
             try:
-                subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], check=True, capture_output=True)
+                subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
+                               check=True, capture_output=True, timeout=5)
                 pid_alive = True
             except Exception:
                 pid_file.unlink(missing_ok=True)

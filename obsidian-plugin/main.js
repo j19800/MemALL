@@ -4,7 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 
-const { Plugin, Notice, TFile, TFolder, parseYaml, stringifyYaml, moment } = require("obsidian");
+const { Plugin, PluginSettingTab, Setting, Notice, TFile, TFolder, parseYaml, stringifyYaml, moment } = require("obsidian");
 
 // ─── Settings ───────────────────────────────────────────────
 const DEFAULT_SETTINGS = {

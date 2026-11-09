@@ -17,6 +17,7 @@ from pathlib import Path
 from aiohttp import web
 
 from memall.core.status import PENDING_TASKS
+from memall.gateway_utils import _cors_headers
 
 # Thread pool for synchronous tool calls (keeps event loop responsive)
 # Lazily initialized + re-created if shut down after a failed startup.
@@ -137,21 +138,25 @@ async def handle_mcp_post(request: web.Request) -> web.Response:
 
     # ── Initialize ──
     if method == "initialize":
-        # Bind the agent identity for the session (design #1000007, step 1).
-        # Explicit handshake identity wins, then MEMALL_AGENT_NAME; the client
-        # software name is NOT used — it would attribute every agent to one
-        # bucket and break isolation.
+        # HARD REQUIREMENT: every client must declare an agent name.
+        # Resolution: params.agent_name / clientInfo.agent_name /
+        # X-MemAll-Agent header / MEMALL_AGENT_NAME env.  No declaration ->
+        # refuse the handshake (no silent "unknown" actor).
+        from memall.mcp_identity import (
+            resolve_agent, register_agent, missing_identity_error,
+        )
+        agent_name, agent_source, agent_error = resolve_agent(request, params)
+        if not agent_name:
+            err = missing_identity_error(agent_error)
+            err["id"] = req_id
+            _log.warning("initialize rejected: %s (source=%s)", agent_error, agent_source)
+            return web.json_response(err, status=200)
         try:
-            import os as _osid
             from memall.mcp.session_identity import bind_handshake_agent
-
-            _ci = params.get("clientInfo") or {}
-            _agent = (params.get("agent_name")
-                      or _ci.get("agent_name")
-                      or _osid.environ.get("MEMALL_AGENT_NAME")
-                      or "")
-            if _agent:
-                bind_handshake_agent(_agent)
+            bind_handshake_agent(agent_name)
+            reg = register_agent(agent_name, agent_source)
+            _log.info("initialize: agent=%s source=%s %s",
+                      agent_name, agent_source, reg["action"])
         except Exception:
             logger.warning("session identity binding failed", exc_info=True)
         from memall.onboarding import _get_status
@@ -186,7 +191,9 @@ async def handle_mcp_post(request: web.Request) -> web.Response:
                     "name": "memall",
                     "version": "0.1.0",
                     "user_id": user_id,
-                    "actor_id": actor_id,
+                    "actor_id": agent_name or actor_id,
+                    "agent_name": agent_name,
+                    "agent_source": agent_source,
                 },
                 "protocolVersion": "2025-03-26",
                 "capabilities": {"tools": {"listChanged": True}},
@@ -194,6 +201,7 @@ async def handle_mcp_post(request: web.Request) -> web.Response:
                     "onboarding_required": not onboarding_completed,
                     "onboarding_step": onboarding_step,
                     "onboarding_user_id": user_id,
+                    "agent_name": agent_name,
                 },
             },
         })
@@ -448,7 +456,8 @@ async def handle_sse(request: web.Request) -> web.Response:
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "http://127.0.0.1:9876",
+            # CORS decided centrally by the whitelist, not a hardcoded port.
+            **_cors_headers(request),
         },
     )
     await response.prepare(request)
@@ -569,6 +578,10 @@ def create_app() -> web.Application:
 
 def serve_http_forever(port: int = 9876, max_retries: int = 0):
     """Run MCP HTTP server with auto-restart on crash.
+
+    NOTE: 9876 is the standalone MCP-HTTP transport's own port, deliberately
+    different from the unified gateway's 9920 (/mcp + /bus/* in one process).
+    Do not "align" it to 9920 — both may run on the same host.
 
     Args:
         port: TCP port to listen on.

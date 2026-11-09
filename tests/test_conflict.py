@@ -102,7 +102,15 @@ def test_auto_resolve_clears_open_conflicts(family_env):
     _add_shared(family_env, 2, "agent_b", _CONTENT_B)
     conflict.detect_conflicts(mode="keyword")
 
-    out = conflict.auto_resolve()
+    # auto_resolve() defaults to apply=False (dry run) on purpose: silently
+    # superseding one side without human confirmation violates the
+    # independent-acceptance rule.  Exercise the write path explicitly.
+    dry = conflict.auto_resolve()
+    assert dry["total_processed"] >= 1
+    assert dry["applied"] is False
+    assert dry["auto_resolved"] == 0
+
+    out = conflict.auto_resolve(apply=True)
     assert out["total_processed"] >= 1
     assert out["auto_resolved"] >= 1
     assert conflict.list_conflicts(status="open") == []

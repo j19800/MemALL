@@ -15,7 +15,7 @@ def cmd_gateway(args):
     action = getattr(args, "action", None)
 
     if action == "start":
-        port = args.port or 9919
+        port = args.port or 9920
         gw = MemAllGateway(port=port)
         gw.start()
         print(f"Gateway started on http://127.0.0.1:{port}")

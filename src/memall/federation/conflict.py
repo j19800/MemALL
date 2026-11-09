@@ -3,6 +3,7 @@ import numpy as np
 from datetime import datetime, timezone
 from itertools import combinations
 import sqlite3
+from pathlib import Path
 
 from memall.federation.family import get_family_db_path
 from memall.core.nlp import (
@@ -26,19 +27,47 @@ for a, b in CONTRADICTION_PAIRS:
 
 TRIGGER_KEYWORDS = {"but", "however", "actually", "其实", "实际上", "不对", "相反", "而是", "但是", "不过"}
 
-# Module-level guard: migration DDL runs once per process lifetime
+# Guards migration DDL.  Keyed by resolved DB path: a single process-global
+# bool made a path switch (tests / multi-tenant) skip migration on the new
+# file, so queries there crashed with "no such table: conflicts".
+# ``_CONFLICT_DB_MIGRATED`` is kept as a bool for callers/tests that patch it
+# to False to force a re-migration.
 _CONFLICT_DB_MIGRATED = False
+_CONFLICT_MIGRATED_PATHS: set[str] = set()
 
 
 def _migrate_family_db():
     """Add conflict_status to shared_memories, create conflicts table."""
-    global _CONFLICT_DB_MIGRATED
-    if _CONFLICT_DB_MIGRATED:
-        return
+    global _CONFLICT_DB_MIGRATED, _CONFLICT_MIGRATED_PATHS
+    if not _CONFLICT_DB_MIGRATED:
+        _CONFLICT_MIGRATED_PATHS = set()
     db_path = get_family_db_path()
+    path_key = str(Path(db_path).resolve())
+    if path_key in _CONFLICT_MIGRATED_PATHS:
+        return
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     try:
+        # This migration can be the first thing to touch a fresh family.db
+        # (e.g. `federation conflicts --auto` before any publish).  Ensure
+        # the base table exists, otherwise ALTER TABLE fails with
+        # "no such table: shared_memories".
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS shared_memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                original_id INTEGER NOT NULL,
+                source_agent TEXT NOT NULL,
+                source_db TEXT NOT NULL,
+                content TEXT NOT NULL,
+                category TEXT DEFAULT '',
+                level TEXT DEFAULT 'P2',
+                owner TEXT DEFAULT '',
+                published_at TEXT NOT NULL,
+                conflict_status TEXT DEFAULT 'none',
+                UNIQUE(original_id, source_agent)
+            )
+        """)
         cur = conn.execute("PRAGMA table_info(shared_memories)")
         cols = {r[1] for r in cur.fetchall()}
         if "conflict_status" not in cols:
@@ -58,6 +87,7 @@ def _migrate_family_db():
             )
         """)
         conn.commit()
+        _CONFLICT_MIGRATED_PATHS.add(path_key)
         _CONFLICT_DB_MIGRATED = True
     finally:
         conn.close()
@@ -249,7 +279,15 @@ def resolve_conflict(conflict_id: int, winner_memory_id: int) -> dict:
         conn.close()
 
 
-def auto_resolve() -> dict:
+def auto_resolve(apply: bool = False) -> dict:
+    """Score open conflicts and (only when *apply*) resolve them.
+
+    The heuristic (keyword certainty + text length) is a *suggestion*, not a
+    verified decision.  Silently marking one side ``superseded`` without human
+    confirmation contradicts AGENTS.md §五 independent-acceptance rules, so the
+    default is a dry run that returns recommendations and leaves the DB
+    untouched.  Callers that explicitly want the write pass ``apply=True``.
+    """
     _migrate_family_db()
     db_path = get_family_db_path()
     conn = sqlite3.connect(str(db_path), timeout=10)
@@ -263,6 +301,7 @@ def auto_resolve() -> dict:
             "WHERE c.status='open'"
         ).fetchall()
         resolved = 0
+        recommendations = []
         for c in conflicts:
             a_kw = sum(1 for kw in CONTRADICTION_KEYWORDS if kw in c["content_a"])
             b_kw = sum(1 for kw in CONTRADICTION_KEYWORDS if kw in c["content_b"])
@@ -275,9 +314,27 @@ def auto_resolve() -> dict:
             score_a += math.log(len_a + 1) * 0.5
             score_b += math.log(len_b + 1) * 0.5
             winner = c["memory_id_a"] if score_a >= score_b else c["memory_id_b"]
-            result = resolve_conflict(c["id"], winner)
-            if result.get("resolved"):
-                resolved += 1
-        return {"auto_resolved": resolved, "total_processed": len(conflicts)}
+            loser = c["memory_id_b"] if winner == c["memory_id_a"] else c["memory_id_a"]
+            recommendations.append({
+                "conflict_id": c["id"],
+                "recommended_winner": winner,
+                "recommended_loser": loser,
+                "score_a": round(score_a, 3),
+                "score_b": round(score_b, 3),
+                "reason": "keyword_certainty+length heuristic (unverified)",
+            })
+            if apply:
+                result = resolve_conflict(c["id"], winner)
+                if result.get("resolved"):
+                    resolved += 1
+        out = {
+            "auto_resolved": resolved,
+            "total_processed": len(conflicts),
+            "applied": apply,
+            "recommendations": recommendations,
+        }
+        if not apply:
+            out["hint"] = "Dry run only. Re-run with --apply (or apply=True) to commit resolutions."
+        return out
     finally:
         conn.close()

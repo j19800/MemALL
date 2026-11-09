@@ -4,7 +4,7 @@ import sqlite3
 from collections import Counter
 from datetime import datetime, timezone
 
-from memall.federation.family import get_family_db_path
+from memall.federation.family import get_family_db_path, init_family_db
 from memall.core.nlp import cosine_sim, compute_tfidf
 
 
@@ -34,6 +34,18 @@ def _snapshot_metrics(conn, stats: dict):
 
 
 def federation_health(detail: bool = False) -> dict:
+    # A fresh / never-published family.db has no shared_memories or conflicts
+    # tables yet.  ``init_family_db`` creates shared_memories/family_circle;
+    # the conflicts table + conflict_status column live in the conflict
+    # module's migration.  Ensure both before reading so `family health` (and
+    # the visualizer which calls this) degrade to an empty report instead of
+    # crashing with "no such table".
+    init_family_db()
+    try:
+        from memall.federation.conflict import _migrate_family_db
+        _migrate_family_db()
+    except Exception as e:  # numpy/nlp deps may be absent in minimal installs
+        logger.warning("conflict schema migration skipped: %s", e)
     db_path = get_family_db_path()
     conn = sqlite3.connect(str(db_path), timeout=10)
     conn.row_factory = sqlite3.Row

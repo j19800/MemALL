@@ -68,7 +68,8 @@ def test_get_config_default():
     assert ".memall" in str(db_path), f"db.path should contain .memall: {db_path}"
 
     gateway_port = get_config("gateway.port")
-    assert gateway_port == 9919, f"Expected default port 9919, got {gateway_port}"
+    # Unified single port for /mcp + /bus/* (DEEP_AUDIT_REPORT §8-4).
+    assert gateway_port == 9920, f"Expected default port 9920, got {gateway_port}"
 
     print("  PASS test_get_config_default")
 

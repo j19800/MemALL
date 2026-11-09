@@ -51,7 +51,7 @@ def handle(arguments: dict) -> str:
         }, default=str)
 
     if action == "start":
-        port = arguments.get("port", 9919)
+        port = arguments.get("port", 9920)
         gw = MemAllGateway(port=port)
         gw.start()
         _active_gateway = gw
@@ -59,7 +59,7 @@ def handle(arguments: dict) -> str:
 
     elif action == "stop":
         if _active_gateway is None:
-            gw = MemAllGateway(port=arguments.get("port", 9919))
+            gw = MemAllGateway(port=arguments.get("port", 9920))
             gw.stop()
             return json.dumps({"status": "ok", "message": "gateway stopped (cleanup)"})
         _active_gateway.stop()

@@ -7,28 +7,39 @@ Data-never-leaves-you principle:
 """
 
 import logging
-import shutil
 import sys
 from pathlib import Path
 from datetime import datetime
 
-from memall.core.db import DB_PATH
+# Import the MODULE, not the value: gateway.py / mcp/http_transport.py /
+# api/start_server.py patch ``memall.core.db.DB_PATH`` at startup, and
+# ``get_db_path()`` re-resolves from config/env (so it cannot see that patch).
+# Backup/restore must follow the same live DB path the connections use.
+from memall.core import db as _core_db
 
 logger = logging.getLogger(__name__)
 
-BACKUP_DIR = DB_PATH.parent / "backups"
-DAILY_DIR = BACKUP_DIR / "daily"
-WEEKLY_DIR = BACKUP_DIR / "weekly"
+
+def _get_db_path() -> Path:
+    """Return the LIVE database path (honours runtime DB_PATH patches)."""
+    return Path(_core_db.DB_PATH)
+
+
+def _backup_dir() -> Path:
+    return _get_db_path().parent / "backups"
+
+
+def _daily_dir() -> Path:
+    return _backup_dir() / "daily"
+
+
+def _weekly_dir() -> Path:
+    return _backup_dir() / "weekly"
 
 
 def _ensure_dirs():
-    DAILY_DIR.mkdir(parents=True, exist_ok=True)
-    WEEKLY_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _get_db_path() -> Path:
-    """Get the current SQLite database path."""
-    return DB_PATH
+    _daily_dir().mkdir(parents=True, exist_ok=True)
+    _weekly_dir().mkdir(parents=True, exist_ok=True)
 
 
 def _vacuum_backup(source: Path, dest: Path) -> bool:
@@ -40,11 +51,12 @@ def _vacuum_backup(source: Path, dest: Path) -> bool:
         conn.close()
         return True
     except sqlite3.OperationalError:
-        # Fallback: file copy
+        # Fallback: consistent online backup (NOT a raw file copy, which can
+        # tear a live WAL database).
         try:
-            shutil.copy2(source, dest)
+            _sqlite_backup(source, dest)
             return True
-        except OSError:
+        except Exception:
             return False
     except Exception:
         return False
@@ -57,6 +69,29 @@ def _ensure_relative_within(base: Path, p: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _sqlite_backup(source: Path, dest: Path) -> None:
+    """Copy a SQLite database consistently using the online backup API.
+
+    Unlike ``shutil.copy2`` this checkpoints WAL content and never leaves a
+    torn main-file-without-sidecars.  ``dest`` is overwritten atomically by
+    writing to a sibling temp file first.
+    """
+    import sqlite3
+
+    if dest.exists():
+        dest.unlink()
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.unlink(missing_ok=True)
+    src = sqlite3.connect(str(source), timeout=10)
+    dst = sqlite3.connect(str(tmp), timeout=10)
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    tmp.rename(dest)
 
 
 def backup_db(output_path: str = None) -> dict:
@@ -77,12 +112,12 @@ def backup_db(output_path: str = None) -> dict:
     if output_path:
         dest = Path(output_path)
         if not dest.is_absolute():
-            dest = DAILY_DIR / output_path
-            if not _ensure_relative_within(DAILY_DIR, dest):
+            dest = _daily_dir() / output_path
+            if not _ensure_relative_within(_daily_dir(), dest):
                 return {"status": "error", "reason": "output_path escapes backup directory"}
     else:
         today = datetime.now().strftime("%Y-%m-%d")
-        dest = DAILY_DIR / f"{today}.db"
+        dest = _daily_dir() / f"{today}.db"
 
     dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -120,13 +155,13 @@ def restore_db(backup_path: str, auto: bool = False) -> dict:
             # Handle "daily/YYYY-MM-DD.db" or "weekly/YYYY-MM-DD.db" prefix
             bp = str(backup_path).replace("\\", "/")
             if bp.startswith("daily/"):
-                source = DAILY_DIR / bp[len("daily/"):]
+                source = _daily_dir() / bp[len("daily/"):]
             elif bp.startswith("weekly/"):
-                source = WEEKLY_DIR / bp[len("weekly/"):]
+                source = _weekly_dir() / bp[len("weekly/"):]
             else:
                 # Try daily then weekly with just the filename
-                source_daily = DAILY_DIR / backup_path
-                source_weekly = WEEKLY_DIR / backup_path
+                source_daily = _daily_dir() / backup_path
+                source_weekly = _weekly_dir() / backup_path
                 if source_daily.exists():
                     source = source_daily
                 elif source_weekly.exists():
@@ -141,7 +176,7 @@ def restore_db(backup_path: str, auto: bool = False) -> dict:
 
     # Block path traversal outside the backup directory for relative inputs
     if not auto and not source.is_absolute():
-        if not _ensure_relative_within(BACKUP_DIR, source):
+        if not _ensure_relative_within(_backup_dir(), source):
             return {"status": "error",
                     "reason": "backup path escapes the backup directory"}
 
@@ -155,15 +190,18 @@ def restore_db(backup_path: str, auto: bool = False) -> dict:
 
     db_path = _get_db_path()
 
-    # Pre-restore backup
+    # Pre-restore backup through the SQLite backup API: a raw file copy of a
+    # live WAL database can produce a torn/incomplete snapshot (and ignores
+    # -wal/-shm sidecars entirely).
     pre_restore_bak = None
     if db_path.exists():
         pre_restore_bak = db_path.with_name("data.before-restore.db")
-        shutil.copy2(db_path, pre_restore_bak)
+        _sqlite_backup(db_path, pre_restore_bak)
 
-    # Perform restore
+    # Restore through the SQLite backup API so WAL state is applied and the
+    # destination is a consistent database, not a torn file copy.
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, db_path)
+    _sqlite_backup(source, db_path)
 
     return {
         "status": "ok",
@@ -176,7 +214,7 @@ def restore_db(backup_path: str, auto: bool = False) -> dict:
 def _find_latest_backup() -> Path | None:
     """Find the latest backup file across daily and weekly directories."""
     candidates = []
-    for d in [DAILY_DIR, WEEKLY_DIR]:
+    for d in [_daily_dir(), _weekly_dir()]:
         if d.exists():
             for f in d.glob("*.db"):
                 candidates.append((f.stat().st_mtime, f))
@@ -199,29 +237,31 @@ def clean_backups(keep_daily: int = 7, keep_weekly: int = 4) -> dict:
     """
     deleted = []
 
+    daily_dir, weekly_dir = _daily_dir(), _weekly_dir()
+
     # Clean daily
-    if DAILY_DIR.exists():
-        dailies = sorted(DAILY_DIR.glob("*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if daily_dir.exists():
+        dailies = sorted(daily_dir.glob("*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
         for f in dailies[keep_daily:]:
             try:
                 f.unlink()
                 deleted.append(str(f))
             except OSError:
-                logger.warning("backup_restore.py: silent error", exc_info=True)
+                logger.warning("backup_restore.py: failed to delete %s", f, exc_info=True)
 
     # Clean weekly
-    if WEEKLY_DIR.exists():
-        weeklies = sorted(WEEKLY_DIR.glob("*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if weekly_dir.exists():
+        weeklies = sorted(weekly_dir.glob("*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
         for f in weeklies[keep_weekly:]:
             try:
                 f.unlink()
                 deleted.append(str(f))
             except OSError:
-                logger.warning("backup_restore.py: silent error", exc_info=True)
+                logger.warning("backup_restore.py: failed to delete %s", f, exc_info=True)
 
     # Count remaining
-    kept_daily = len(list(DAILY_DIR.glob("*.db"))) if DAILY_DIR.exists() else 0
-    kept_weekly = len(list(WEEKLY_DIR.glob("*.db"))) if WEEKLY_DIR.exists() else 0
+    kept_daily = len(list(daily_dir.glob("*.db"))) if daily_dir.exists() else 0
+    kept_weekly = len(list(weekly_dir.glob("*.db"))) if weekly_dir.exists() else 0
 
     return {
         "status": "ok",
@@ -234,7 +274,7 @@ def clean_backups(keep_daily: int = 7, keep_weekly: int = 4) -> dict:
 def list_backups() -> list[dict]:
     """List all available backups."""
     result = []
-    for label, d in [("daily", DAILY_DIR), ("weekly", WEEKLY_DIR)]:
+    for label, d in [("daily", _daily_dir()), ("weekly", _weekly_dir())]:
         if d.exists():
             for f in sorted(d.glob("*.db"), key=lambda p: p.stat().st_mtime, reverse=True):
                 result.append({

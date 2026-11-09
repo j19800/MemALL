@@ -34,20 +34,33 @@ from pathlib import Path
 
 # Allow running both as a module and as a standalone script.
 try:
-    from memall.core.db import get_conn
+    from memall.core.db import get_conn, get_db_path
 except ImportError:  # pragma: no cover - standalone fallback
     get_conn = None  # type: ignore[assignment]
+    get_db_path = None  # type: ignore[assignment]
 
-DEFAULT_DB = r"C:\Users\Administrator\.memall\data.db"
-DEFAULT_OUT = r"E:\MemALL\kg_graph.html"
+
+def _default_db() -> str:
+    if get_db_path is not None:
+        return str(get_db_path())
+    return str(Path.home() / ".memall" / "data.db")
+
+
+# Cross-platform defaults (the old hard-coded C:/E: Windows paths broke on
+# Linux/macOS and ignored MEMALL_DB_PATH / configured db.path entirely).
+DEFAULT_DB = _default_db()
+DEFAULT_OUT = str(Path.cwd() / "kg_graph.html")
 
 
 # --------------------------------------------------------------------------- #
 # Data access
 # --------------------------------------------------------------------------- #
-def load_graph(db_path: str | None = None) -> dict:
+def load_graph(db_path: str | None = None, max_nodes: int = 5000,
+               max_links: int = 20000) -> dict:
     """Load entities + triples from the MemALL DB.
 
+    Bounded by ``max_nodes`` / ``max_links`` so a large production database
+    cannot OOM the browser page (the graph is a visualisation, not a dump).
     Returns a dict with ``nodes`` and ``links`` lists ready for JSON
     embedding into the HTML page.
     """
@@ -58,7 +71,7 @@ def load_graph(db_path: str | None = None) -> dict:
     elif get_conn is not None:
         conn = get_conn()
     else:
-        conn = sqlite3.connect(DEFAULT_DB)
+        conn = sqlite3.connect(_default_db())
     try:
         conn.row_factory = sqlite3.Row
 
@@ -68,7 +81,9 @@ def load_graph(db_path: str | None = None) -> dict:
             SELECT id, name, entity_type, description
             FROM entities
             ORDER BY id
-            """
+            LIMIT ?
+            """,
+            (max_nodes,),
         ).fetchall()
         nodes = [
             {
@@ -92,7 +107,9 @@ def load_graph(db_path: str | None = None) -> dict:
                 FROM knowledge_triples t
                 JOIN entities s ON s.id = t.subject_id
                 JOIN entities o ON o.id = t.object_id
-                """
+                LIMIT ?
+                """,
+                (max_links,),
             ).fetchall()
             links = [
                 {
@@ -823,7 +840,8 @@ def save_html(html_content: str, output_path: str) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="MemALL knowledge graph visualizer")
-    parser.add_argument("--db", default=DEFAULT_DB, help="Path to MemALL SQLite DB")
+    parser.add_argument("--db", default=None,
+                        help="Path to MemALL SQLite DB (default: configured/live DB path)")
     parser.add_argument("--out", default=DEFAULT_OUT, help="Output HTML path")
     parser.add_argument("--title", default="MemALL Knowledge Graph", help="Page title")
     args = parser.parse_args()

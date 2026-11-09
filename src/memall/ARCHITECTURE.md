@@ -1,6 +1,6 @@
 # MemALL Architecture
 
-This document describes the internal architecture of MemALL (v0.1.66). It is intended for
+This document describes the internal architecture of MemALL (v0.1.80). It is intended for
 contributors and operators who need to understand how data flows through the system.
 
 ## 1. High-Level Layering

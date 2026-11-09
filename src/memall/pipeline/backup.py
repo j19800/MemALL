@@ -1,13 +1,17 @@
-from memall.core.db import DB_PATH, get_conn
+from memall.core import db as _core_db
+from memall.core.db import get_conn
 from pathlib import Path
 from datetime import datetime
 
 
 def backup_step() -> dict:
-    if not DB_PATH.exists():
+    # Follow the LIVE DB_PATH (gateway / MCP patch it at startup); a frozen
+    # import-time value would back up the wrong file in those processes.
+    db_path = Path(_core_db.DB_PATH)
+    if not db_path.exists():
         return {"status": "no_db", "path": None}
 
-    backup_dir = DB_PATH.parent / "backups"
+    backup_dir = db_path.parent / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     backup_path = backup_dir / f"data_{stamp}.db"

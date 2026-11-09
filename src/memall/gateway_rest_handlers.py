@@ -824,7 +824,7 @@ class RestHandlersMixin:
         fn = actions.get(action)
         if fn:
             return web.json_response(fn(),)
-        port = data.get("port", 9919)
+        port = data.get("port", 9920)
         return web.json_response(
             {"error": f"gateway action '{action}' available via aiohttp server on port {port}"},
             )

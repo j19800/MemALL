@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -239,7 +240,9 @@ class BotPoller:
         self.agent = agent
         self.bot_open_id = creds.get("open_id", "")
         self.sessions = SessionStore()
-        self._seen: set[str] = set()
+        # Insertion-ordered (set iteration order is undefined, so the old
+        # ``set(list(_seen)[-1000:])`` trim kept an arbitrary subset).
+        self._seen: OrderedDict[str, None] = OrderedDict()
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._recv_app_id = creds["app_id"]
@@ -272,7 +275,7 @@ class BotPoller:
             for m in msgs:
                 mid = m.get("message_id", "")
                 if mid:
-                    self._seen.add(mid)
+                    self._seen[mid] = None
             logger.info("bot(%s) pre-seeded %d seen message IDs", self.agent, len(msgs))
 
     def _poll_once(self) -> None:
@@ -288,10 +291,13 @@ class BotPoller:
         msg_id = msg.get("message_id", "")
         if not msg_id or msg_id in self._seen:
             return
-        self._seen.add(msg_id)
-        # Keep seen set bounded
+        self._seen[msg_id] = None
+        # Keep the ordered seen map bounded: drop the OLDEST entries first.
+        # (A plain set + list()[-1000:] kept an arbitrary subset because set
+        # iteration order is not the insertion order.)
         if len(self._seen) > 2000:
-            self._seen = set(list(self._seen)[-1000:])
+            while len(self._seen) > 1000:
+                self._seen.popitem(last=False)
 
         msg_type = msg.get("msg_type", "")
         if msg_type not in ("text", "post"):

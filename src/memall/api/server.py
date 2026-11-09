@@ -1,6 +1,6 @@
 """MemALL REST API handlers — migrated to gateway.py.
 
-All routes are now served by `memall.gateway.MemAllGateway` on port 9919.
+All routes are now served by `memall.gateway.MemAllGateway` on port 9920.
 This file retains handler functions and Pydantic models for reference.
 """
 
@@ -125,7 +125,7 @@ class FedPublishRequest(BaseModel):
 
 class GatewayRequest(BaseModel):
     action: str
-    port: int = 9919
+    port: int = 9920
     agent_name: Optional[str] = None
     file_path: Optional[str] = None
     address: Optional[str] = None

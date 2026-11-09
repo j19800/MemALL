@@ -25,7 +25,7 @@
 | P0-0 content_hash 去重 | opencode | dsh 验收 | **已实现**：去重键由 content_hash 改为 `metadata.task_id` + 迁移 036 + 守卫 `task_reminder_one_per_task`（记忆 #1000209）。原派单的「INSERT OR IGNORE」只兜底并发、单独用会漏掉 level 被 promote 改写那条路径 |
 | P0-1 通知栏落到 agent_name（路线 B） | dsh | （F3 修后自然成立） | 复用现有通知栏，不复活表。**已完成**：通知栏已重构为 `mcp/notify.py` 单一实现，携带 [ID \| 标题 \| 状态] |
 | P0-4a session note 跨 agent 误投 | opencode | dsh 验收 | **已实现**：删除 `consume/ack_session_note` 的 "oldest" 兜底，三处传输层改传 agent_name + 守卫 `session_note_not_shared_across_agents`（记忆 #1000213） |
-| P0-4b 检索面 viewer 透传 | opencode | dsh 验收 | **未做**：`unified_search` 各分支多数不透传 `viewer`，任何 agent 检索都能读到别人的卡。AGENTS.md §三.4 身份锁定在主读路径上是空的；且总线已上线，「只传 memory_id 指针」会放大越权（见 #999964 opencode 表态第三节） |
+| P0-4b 检索面 viewer 透传 | opencode | dsh 验收 | **已实现（2026-11-08 复核更正）**：`thin_waist.py` direct/fts5/vector/hybrid 5 个分支均已 `viewer = arguments.get("viewer") or arguments.get("agent_name") or ""` 透传，`agent_name_filter` 已独立为内容过滤参数。此行原「未做」为过期看板文本，深度审计报告 §1 已撤销该误判，见 `DEEP_AUDIT_REPORT.md` |
 | P0-4c 通知栏只列任务卡 | opencode | dsh 验收 | **已实现**：`mcp/notify.py` 的 `pending_tasks_for` 补 `category='task'` 约束 + 守卫 `notification_bar_lists_only_tasks`（记忆 #1000336）。此前把 discussion/session/L7 教训等非任务行算成待办，实测 opencode 名下 25 条 L5 未归档行中真任务卡 0 条却报 10 条 |
 | MCP 修复 4 批次（第1/2/3/4批） | dsh 总负责 | opencode 实现、qoder 增量 | dsh TODO 已列 |
 | P1-1 总线接回 MCP | — | — | **已完成**（`06e9d28`，MCP 工具 `memall_msg`，动作 send/inbox/ack/status）。原派工行已过期，见 §七 |
@@ -75,7 +75,7 @@ auto_inject 会自动返回分配给自己的 `pending_tasks`（id/content/subje
 2. **会话开始三件套**：session_start（auto_inject 自动注入 pending_tasks/l5_active_global）→ 认领属于自己的任务 → 加载本宪法
 3. **写前先查**：执行任务前必须 memall_search 同 thread_id 历史，禁止重复派工
 4. **身份锁定**：agent_name 一经写入不可冒充（agent_name_locked），test_* 前缀禁止出现在生产任务
-   - ⚠️ **读路径的物理前提当前不成立**：`memall_read` 的 `viewer` 在 `unified_search` 多数分支未透传，实测任何 agent 检索都能读到别人的卡（见 §1.1 P0-4b）。在修好之前，**不要把「agent 只看自己的数据」当作已有保证**——涉及他人项目数据的读取须显式用 `agent_name` 过滤参数，并自行确认该参数在目标路径上确实生效。
+   - ✅ **读路径身份锁定已成立（2026-11-08 复核）**：`unified_search` 5 个分支均已透传 `viewer`（回退到 `agent_name`），`_filter_by_trust` 按 visibility/owner 过滤；`agent_name_filter` 是独立的按作者内容过滤参数，勿与 viewer 混淆。**MCP 握手已强制声明 agent name**（params / `X-MemAll-Agent` header，无声明返回 -32001），见 §七 开头的部署现状更正。
 5. **会审机制**：涉及 ≥2 个 agent 的决策，必须走 memall_discussion 多 agent 表态收敛，禁止单 agent 自说自话
    - **名册必须与真实 roster 一致**：`participants` 写当前实际在册的 agent（见 §一）。名册里留一个已退出的 agent，**讨论在数学上永不收敛**——收敛要求全体参与者已回应，而那个 agent 不会再来。线上实证：#999964 / #999948 的名册含已出局的 codex/marvis，缺 dsh/qoder，两条讨论因此永久卡在 active。
    - **收敛规则**：`metadata.convergence_rule` 决定何时收敛——`unanimous`（默认，全员回应）/ `majority`（过半，4 人需 3）/ `any`（1 人）。规则只决定**何时**收敛，**收敛结论仍如实记录每个人的立场与 dissenters**：有反对票时 `consensus=false`、反对方进 `dissenters`，不会被"多数通过"抹掉。
@@ -84,6 +84,14 @@ auto_inject 会自动返回分配给自己的 `pending_tasks`（id/content/subje
      - 只拦**名册内**的 assignee；名册外的指派属于别人的承诺，不冻结本讨论。
      - **逃生口**：超过 `metadata.timeout_hours`（默认 24h）后不再拦，避免一个人静默就永久卡死（那正是当初引入 `majority` 要解决的失败模式）。`timeout_hours` 此前只传给 Lark 通知、从未入库，现在写入 `metadata` 并作为真正的截止时间。
      - 线上由来：#1000375 在创建后 **9 分钟**就以 3/5 票收敛，而它自己的 action_items 把 dsh 列为「实现前置」的评审人——前置还没交付讨论就关了，那份评审里的四条发现（其中「resolve 后提醒永久静音」是真 bug，已修 92373ee）因此没能进结论，只能走记忆交付。守卫 `convergence_waits_for_action_items`。
+
+6. **改动即提交即推送（铁律，2026-11-09 立）**：任何源码/配置/文档改动完成、并通过编译与相关测试后，**立即** `git add` → `git commit` → `git push`，不得把改动长期留在工作区。理由：2026-11-08 一整天 51 个文件未提交，期间远端被另一条工作线推了 5 个提交，导致 7 个核心文件（含 `mcp/bus.py` 整体重写）出现功能级冲突，交付时无法直接推送。
+   - **推送前必做三查（不可跳过）**：
+     1. `git fetch` 后确认本地不落后 `origin/master`；落后先 rebase/merge 并人工解决冲突，**禁止 `--force` 覆盖他人提交**。
+     2. `git status --porcelain` 逐项核对，敏感文件（`.gateway-token`、`*.pid`、`*.log`、`*.db*`）必须在 `.gitignore` 中且不在提交列表；**禁止 `git add -A` / `git add .`** 一把梭。
+     3. 明确本次提交归属：工作区可能混有其他 agent 的并发改动，**只提交本次自己改的文件**；跨 agent 的合并需会审（§三.5）。
+   - **两个仓库独立，不可混推**：`/vol1/@appshare/fn-deepseek-harness/MemALL`（origin `j19800/MemAll`）与 `/vol1/@apphome/fn-deepseek-harness/MemALL-repo`（origin `j19800/MemALL`，URL 内嵌 PAT）是两个独立 `.git`、历史不同；每次只推当前实际改动的那个仓库，并同步另一份代码副本。
+   - **失败要如实报告**：若因无凭证、non-fast-forward、冲突未决而未能推送，**必须明确告知用户"未推送"及原因**，不得声称已提交/已推送。
 
 ## 四、禁区（Visibility 控制）
 
@@ -114,12 +122,39 @@ auto_inject 会自动返回分配给自己的 `pending_tasks`（id/content/subje
 
 ## 七、实时通讯总线（realtime bus，解决 agent 之间「即时」通讯）
 
-> 背景：原推模式 scheduler 死 4 个月（OpenBLAS/DLL 初始化失败 0xC0000142），agent 间无实时通道，只能靠 session_start 拉取。
+> **⚠️ 2026-11-08 部署现状更正（审计后以本节为准，下方 2026-10 的历史记录仅作背景）**
+>
+> 本机（Linux NAS）部署已把实时总线**合并进 HTTP 网关**，不再有独立进程：
+> - **一个进程、一个端口**：`0.0.0.0:9920` 同时提供 `/mcp` 与 `/bus/*`，局域网可达，
+>   与 MCP 共用同一 Bearer token（`.gateway-token`）。**8770 端口已废弃**，
+>   本机不存在 `memall_bus.py`，也**不需要手工启动任何总线进程**。
+> - **协议改为 HTTP + SSE**：`POST /bus/publish`、`GET /bus/inbox`、
+>   `POST /bus/ack`、`GET /bus/health|/ping`、`GET /bus/subscribe`（实时推送）。
+>   mailbox 落在 `~/.memall/bus.db`（与主库同目录、同一进程持有）。
+> - **幂等已实现**（原报告「dedup 缺口」在本部署已闭环）：`bus_messages` 有
+>   `dedup_key` 列 + partial UNIQUE 索引，`publish()` 重复键返回
+>   `deduplicated:true`；客户端 `memall_msg send` 默认按
+>   `(from,to,type,payload)` 派生稳定 key，也支持显式 `dedup_key`。
+> - **`ensure_bus_running()` 已变为兼容 shim**：不再 spawn 进程；总线不可用时
+>   返回「网关未运行」的明确提示，不存在 DEVNULL 日志黑洞 / 多会话抢端口风险。
+> - **MCP 握手强制身份声明**：`initialize` 必须带
+>   `params.agent_name` / `clientInfo.agent_name` / `X-MemAll-Agent` header，
+>   解析不到返回 `-32001` 拒绝；服务端**不再有 `MEMALL_AGENT_NAME` 兜底**。
+>   详见 `LAN-CLIENT-GUIDE.md`。
+> - 客户端接入、鉴权、速率限制、SSE 用法见 `LAN-CLIENT-GUIDE.md`；运维事实
+>   单独存 `ops_facts` 表（迁移 043），不混入 `memories`。
+>
+> 实现文件：`src/memall/gateway_bus.py`、`src/memall/mcp/bus.py`、
+> `src/memall/mcp/tools/msg.py`、`src/memall/mcp_identity.py`。
+> 下方关于 `D:\...\memall-bus`、TCP 8770、per-agent token、手工启动的描述
+> **均属 2026-10 的历史原型，不适用于本机当前部署**。
+
+> 背景（历史）：原推模式 scheduler 曾死 4 个月（OpenBLAS/DLL 初始化失败 0xC0000142），agent 间无实时通道，只能靠 session_start 拉取。
 > 方案与实证报告（**所有 agent 接手前必读**）：
 > `D:\Agent项目\Claw\memall-bus\技术报告-多Agent即时通讯总线-供Agent调研学习.md`
 > 代码：`D:\Agent项目\Claw\memall-bus\`（纯标准库 asyncio+sqlite3，**零外部依赖**，**16/16 精确测试通过**，协议 v2）。
 
-- **当前状态**：原型已实证可用（在线延迟 p50≈0.75ms/p99≈1.31ms、真并发 1917 msg/s、离线 mailbox 不丢、服务重启不丢、1MB 完整），**已接回主库（`memall_msg` 工具，MemALL 仓 `06e9d28`）**；**总线进程本身尚未纳入任何启动/保活流程**，需手工起 `python memall_bus.py`。
+- **当前状态（历史，2026-10 原型）**：原型已实证可用（在线延迟 p50≈0.75ms/p99≈1.31ms、真并发 1917 msg/s、离线 mailbox 不丢、服务重启不丢、1MB 完整），**已接回主库（`memall_msg` 工具，MemALL 仓 `06e9d28`）**；当时总线进程本身尚未纳入任何启动/保活流程、需手工起 `python memall_bus.py`。**本机现状见本节开头的 2026-11-08 更正：已合并进网关、无需手工启动。**
 - **协议**：TCP 行分隔 JSON（127.0.0.1:8770）；op 含 hello/publish/inbox/ack/ping；响应用 req_id 三队列路由（实时推送 / inbox 历史 / 请求回包）；hello 回包带 `proto` 版本号（当前 v2），客户端校验不匹配即失败。
 - **六条修复底线（改代码前必跑 test_suite.py）**：① 单连接禁止多协程抢读 reader；② inbox 响应必须带 req_id 与实时推送区分；③ asyncio readline 默认 64KB 行限制，大 payload 须设 limit=16MB；④ **实时推送必须带 mailbox 行 id**（否则收到即无法 ack → read 永不置位 → L2/L3 必然双投）；⑤ **publish 的 from 必须由服务端从连接身份取，inbox 只能读自己的**（v1 无鉴权，实证可越权读 + 冒充 agent）；⑥ **重置 bus.db 必须连 -wal/-shm 一起删**（WAL 残留会让已清空的邮箱冒出旧消息）。
 - **鉴权模型（v2）**：`~/.memall/bus_token` 是 installation token（安装级共享密钥），`~/.memall/bus_agents/<agent>.token` 是 per-agent token（绑定身份，防 agent 间冒充）。生产环境须用 `python bus_admin.py enroll <agent>...` **预登记**，消除首次登记的抢占窗口。边界：installation token 挡不住同 OS 用户的其他进程，与 MemALL HTTP gateway token 同一信任级别。
@@ -130,7 +165,7 @@ auto_inject 会自动返回分配给自己的 `pending_tasks`（id/content/subje
   - **总线不可用时给清晰报错**（含启动提示），且 **auto_inject 拉模式主链路完全不受影响**。
   - **实测**：`memall-bus/e2e_collaboration.py` 真 MCP stdio 协议 + 总线 + 三 agent **13/13 通过**（含「MCP 工具派单 → 总线 → 收件方实时收到，pushed=1」与「MCP 工具收单 + ack，ack 后再拉为 0」）；守卫 `msg_tool_wired`。
 - **⚠️ 部署形态更正**：v1 报告写的「塞进 MemALL MCP server 作为 asyncio 协程」**前提是错的**——stdio MCP server 是**同步** stdin JSON-RPC 循环，且由每个客户端会话**各 spawn 一个**（短命、正是孤儿进程问题的来源）。推荐**独立常驻进程**；若要复用进程，宿主应是 aiohttp 的 HTTP gateway 而非 stdio server。
-- **开放调研项**：同用户恶意进程的信任模型（需 OS 级隔离，待老陈拍板）、**总线进程的启动/保活与 token 预登记的运维流程**（当前需手工起）、跨机后端（Redis/NATS）、去重幂等精确规则、A2A 互通桥接——详见报告第 8 节。
+- **开放调研项（历史清单，本机已闭环的标注如下）**：同用户恶意进程的信任模型（需 OS 级隔离，待老陈拍板）、~~总线进程的启动/保活~~（本机已由 `gateway_keepalive.sh` 覆盖）、跨机后端（Redis/NATS）、~~去重幂等精确规则~~（本机 `dedup_key` + UNIQUE 索引已实现，见本节开头）、A2A 互通桥接——详见报告第 8 节。
 
 ### 7.1 使用总线（agent 侧）
 

@@ -320,8 +320,25 @@ def run_daemon_with_watchdog():
         time.sleep(delay)
 
 def _validate_our_pid(pid: int) -> bool:
-    """Check that *pid* is our scheduler process, not an injected foreign PID."""
+    """Check that *pid* is our scheduler process, not an injected foreign PID.
+
+    Cross-platform: uses /proc on Linux (this NAS deployment) and falls back
+    to Windows ``tasklist``.  A PID file is untrusted input — never kill a
+    process just because a file named it.
+    """
     import subprocess
+    # --- Linux / POSIX: read /proc/<pid>/cmdline directly ---
+    proc_cmdline = Path(f"/proc/{pid}/cmdline")
+    if proc_cmdline.exists():
+        try:
+            cmd = proc_cmdline.read_bytes().replace(b"\x00", b" ").decode(
+                "utf-8", "replace").lower()
+            # Our daemons are spawned as: python -c "from memall.scheduler..."
+            return ("memall.scheduler" in cmd
+                    or ("scheduler" in cmd and "python" in cmd))
+        except (OSError, ValueError):
+            return False
+    # --- Windows fallback ---
     try:
         result = subprocess.run(
             ["tasklist", "/FO", "CSV", "/NH", "/FI", f"PID eq {pid}"],
@@ -329,7 +346,6 @@ def _validate_our_pid(pid: int) -> bool:
         )
         if result.returncode != 0:
             return False
-        # tasklist CSV output: "python.exe","1234","Console","1","...","Running"
         parts = result.stdout.strip().split(",")
         if len(parts) < 2:
             return False
@@ -400,11 +416,27 @@ def daemon_stop():
         except (ValueError, TypeError):
             pf.unlink(missing_ok=True)
             return False
-        try:
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], check=True, capture_output=True)
-            print(f"killed pid {pid} from {pf.name}")
-        except subprocess.CalledProcessError:
-            print(f"pid {pid} not found, cleaning up")
+        if sys.platform == "win32":
+            try:
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                               check=True, capture_output=True, timeout=10)
+                print(f"killed pid {pid} from {pf.name}")
+            except subprocess.CalledProcessError:
+                print(f"pid {pid} not found, cleaning up")
+        else:
+            # POSIX (this NAS): terminate the process group so the watchdog's
+            # child scheduler dies too; fall back to SIGTERM/SIGKILL by pid.
+            import signal
+            import os as _os
+            try:
+                _os.killpg(_os.getpgid(pid), signal.SIGTERM)
+                print(f"sent SIGTERM to process group of {pid} from {pf.name}")
+            except (ProcessLookupError, PermissionError, OSError):
+                try:
+                    _os.kill(pid, signal.SIGTERM)
+                    print(f"sent SIGTERM to pid {pid} from {pf.name}")
+                except ProcessLookupError:
+                    print(f"pid {pid} not found, cleaning up")
         pf.unlink(missing_ok=True)
         return True
 

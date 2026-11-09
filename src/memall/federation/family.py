@@ -16,7 +16,13 @@ from memall.core.db import get_db_path
 
 logger = logging.getLogger("memall.federation.family")
 
+# Guards schema creation.  A plain process-global bool was unsafe: when the
+# active DB path changed inside one process (tests, multi-tenant runs) the new
+# file was skipped as "already initialised" and queries hit missing tables.
+# Track resolved paths instead.  ``_FAMILY_DB_INITIALIZED`` is kept as a bool
+# for backwards compatibility with callers/tests that patch it to False.
 _FAMILY_DB_INITIALIZED = False
+_FAMILY_INIT_PATHS: set[str] = set()
 
 _SQLI_PATTERNS = [
     re.compile(r"'.*--", re.IGNORECASE),
@@ -78,10 +84,18 @@ def get_family_db_path() -> Path:
 
 def init_family_db(force: bool = False):
     """Initialize family database with shared_memories and family_circle tables."""
-    global _FAMILY_DB_INITIALIZED
-    if _FAMILY_DB_INITIALIZED and not force:
-        return
+    global _FAMILY_DB_INITIALIZED, _FAMILY_INIT_PATHS
+    if not _FAMILY_DB_INITIALIZED:
+        # Callers/tests reset the legacy bool to force a rebuild; honour that
+        # by dropping the per-path cache too.
+        _FAMILY_INIT_PATHS = set()
     db_path = get_family_db_path()
+    path_key = str(db_path.resolve())
+    if path_key in _FAMILY_INIT_PATHS and not force:
+        return
+    # A configured/patched family.db may sit in a directory that does not
+    # exist yet (fresh install, sandboxed path).  SQLite will not create it.
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -142,6 +156,7 @@ def init_family_db(force: bool = False):
 
     conn.commit()
     conn.close()
+    _FAMILY_INIT_PATHS.add(path_key)
     _FAMILY_DB_INITIALIZED = True
 
 
@@ -311,10 +326,19 @@ def publish_memory(memory_id: int, scope: str = "family",
     conn = sqlite3.connect(str(db_path), timeout=10)
     try:
         now = datetime.now(timezone.utc).isoformat()
+        # UPSERT, not INSERT OR REPLACE: the latter DELETEs the existing row
+        # and inserts a new one, which changes ``id`` (breaking conflicts that
+        # reference it) and silently resets ``conflict_status`` back to the
+        # default 'none'.  On conflict we only refresh mutable columns.
         conn.execute(
-            "INSERT OR REPLACE INTO shared_memories "
+            "INSERT INTO shared_memories "
             "(original_id, source_agent, source_db, content, category, level, owner, trust_level, published_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(original_id, source_agent) DO UPDATE SET "
+            "source_db=excluded.source_db, content=excluded.content, "
+            "category=excluded.category, level=excluded.level, "
+            "owner=excluded.owner, trust_level=excluded.trust_level, "
+            "published_at=excluded.published_at",
             (memory_id, mem.agent_name, str(get_db_path()), _log_sql_warning(mem.content),
              _log_sql_warning(mem.category), mem.level, _log_sql_warning(mem.owner),
              effective_trust, now),

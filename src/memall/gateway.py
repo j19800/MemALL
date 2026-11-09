@@ -32,6 +32,9 @@ from memall.gateway_utils import (
 from memall.gateway_html_handlers import HtmlHandlersMixin
 from memall.gateway_rest_handlers import RestHandlersMixin
 from memall.gateway_mcp_handlers import McpHandlersMixin, _MCP_TOOL_EXECUTOR, _MCP_TOOL_HEAVY
+from memall.gateway_bus import BusHandlersMixin, BUS as _GATEWAY_BUS
+from memall.gateway_ops_facts import OpsFactsHandlersMixin
+from memall.gateway_join import JoinHandlersMixin
 from memall.gateway_routes import RoutesMixin
 from memall.core.db import pool_conn, init_db
 from memall.core.rate_limiter import get_rate_limiter
@@ -48,7 +51,7 @@ logger = logging.getLogger("memall.gateway")
 # Endpoints reachable with no token and no Origin restriction: liveness,
 # the pairing handshake and pure static assets.
 _ALWAYS_PUBLIC_PATHS = frozenset({
-    "/", "/health", "/pair", "/favicon.ico", "/static",
+    "/", "/health", "/pair", "/favicon.ico", "/static", "/join",
 })
 
 
@@ -118,15 +121,16 @@ async def _cors_middleware(request: web.Request, handler) -> web.Response:
 
 
 class MemAllGateway(HtmlHandlersMixin, RestHandlersMixin,
-                    McpHandlersMixin, RoutesMixin):
+                    McpHandlersMixin, BusHandlersMixin,
+                    OpsFactsHandlersMixin, JoinHandlersMixin, RoutesMixin):
     """Local HTTP gateway exposing MemALL operations over REST.
 
     Launches an ``aiohttp`` web server on a background thread.
     Listens only on localhost for security.
 
     Attributes:
-        host (str): Bind address, always ``127.0.0.1``.
-        port (int): TCP port.  Default 9919.
+        host (str): Bind address; ``0.0.0.0`` for LAN deployments.
+        port (int): TCP port.  Default 9920 (single port for /mcp + /bus/*).
     """
 
     def __init__(self, host: str = "127.0.0.1", port: int = 9920,
@@ -212,6 +216,14 @@ class MemAllGateway(HtmlHandlersMixin, RestHandlersMixin,
         _correct_path = os.path.join(_user_home, ".memall", "data.db")
         _memall_db.DB_PATH = Path(_correct_path)
         init_db()
+        # Realtime message bus now lives inside this gateway (no separate
+        # 8770 TCP process).  Initialise its mailbox and bind the event loop
+        # for SSE pushes before the first request can arrive.
+        try:
+            _GATEWAY_BUS.bind_loop(self._loop)
+            _GATEWAY_BUS.init_db()
+        except Exception:
+            logger.exception("gateway bus init failed")
         self._setup_routes(self._app)
         self._runner = web.AppRunner(self._app)
         self._loop.run_until_complete(self._runner.setup())
@@ -239,14 +251,16 @@ class MemAllGateway(HtmlHandlersMixin, RestHandlersMixin,
     def _check_rate_limit(self, request: web.Request) -> Optional[web.Response]:
         """Return a 429 Response if *request* exceeds its per-IP budget, else None.
 
-        POST gets 30/min (``/mcp`` 60/min), everything else 100/min.  Runs
-        before the SPA carve-out so unauthenticated endpoints are covered too.
+        POST gets 30/min (``/mcp`` and ``/bus/*`` 60/min), everything else
+        100/min.  Runs before the SPA carve-out so unauthenticated endpoints
+        are covered too.  The bus shares MCP's budget because the two are the
+        same service now.
         """
         client_ip = request.remote or "unknown"
         rl = get_rate_limiter()
         if request.method == "POST":
             limit = (getattr(self, "_rate_limit_mcp", 60)
-                     if request.path == "/mcp"
+                     if request.path == "/mcp" or request.path.startswith("/bus/")
                      else getattr(self, "_rate_limit_post", 30))
         else:
             limit = getattr(self, "_rate_limit_get", 100)
@@ -266,6 +280,10 @@ class MemAllGateway(HtmlHandlersMixin, RestHandlersMixin,
           0. OPTIONS short-circuits (CORS preflight).
           1. Rate limit **first** — covers the unauthenticated public and SPA
              endpoints that previously slipped past it.
+          1b. ``/bus/*`` (realtime messaging merged into this gateway) always
+              requires a valid Bearer token — same credential as ``/mcp``,
+              from loopback AND from LAN peers.  It must not fall through to
+              the loopback SPA carve-out below.
           2. Always public: ``/``, ``/health``, ``/pair``, ``/favicon.ico``,
              ``/static``.
           3. Any request carrying an ``Origin`` that is not an explicitly trusted
@@ -285,14 +303,24 @@ class MemAllGateway(HtmlHandlersMixin, RestHandlersMixin,
             rl_err = self._check_rate_limit(request)
             if rl_err is not None:
                 return rl_err
-        # 2. Always-public endpoints.
-        if path in _ALWAYS_PUBLIC_PATHS:
-            return await handler(request)
-        # 3. CSRF / DNS-rebinding defense: untrusted Origin is rejected outright.
+        # 3. CSRF / DNS-rebinding defense: untrusted Origin is rejected
+        #    outright — must also apply to /bus/* so the bus and /mcp share
+        #    the exact same cross-origin policy.
         if not origin_allowed(request):
             return web.json_response(
                 {"error": "forbidden", "message": "cross-origin request blocked"}, status=403
             )
+        # 3b. Bus and ops-facts routes: always authenticated (Bearer token ==
+        #    MCP token).  Both are state-changing/state-exposing and must not
+        #    fall through to the loopback SPA carve-out.
+        if path.startswith("/bus/") or path.startswith("/ops/facts"):
+            err = _require_auth(request, self._auth_token)
+            if err is not None:
+                return err
+            return await handler(request)
+        # 2. Always-public endpoints.
+        if path in _ALWAYS_PUBLIC_PATHS:
+            return await handler(request)
         # 4. State-changing SPA endpoints need a token (Bearer) or CSRF proof.
         if path in _CSRF_REQUIRED_PATHS and request.method in ("POST", "PUT", "DELETE"):
             if _auth_ok(request, self._auth_token):

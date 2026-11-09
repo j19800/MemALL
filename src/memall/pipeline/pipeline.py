@@ -493,6 +493,10 @@ _SKIP_WHEN = {
     "embed_index": "include_embed_index",
     "identity":    "include_identity",
     "archive":     "include_archive",
+    #observation writes a self-descriptive "管线观察" memory on every run and
+    # those stats include the observation itself, so the hash keeps changing
+    # and the rows self-propagate.  Off by default; opt in explicitly.
+    "observation": "include_observation",
 }
 
 _OPTIONAL_STEPS = {
@@ -546,6 +550,7 @@ def run_pipeline(
     include_procedure: bool = True,
     include_embed_index: bool = False,
     include_archive: bool = True,
+    include_observation: bool = False,
     cluster_method: str = "embedding",
 ) -> dict:
     global _pipeline_start_time
@@ -737,8 +742,8 @@ def run_lightweight_pipeline(
         # The core steps from _PIPELINE_STEPS that aren't gated by
         # _SKIP_WHEN always run (classify, convergence, distill_l7,
         # session, event_processor, enrich, cleanup, etc.).
-        # _SKIP_WHEN only gates: reflect, distill, integrate, improve,
-        # embed_index, identity, archive.
+        # _SKIP_WHEN gates: reflect, distill, integrate, improve,
+        # embed_index, identity, archive, observation (off by default).
         # (the async queue and enqueue_pipeline() are appended below)
     )
 

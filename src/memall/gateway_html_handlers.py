@@ -214,7 +214,7 @@ class HtmlHandlersMixin:
 {_NAV_HTML}
 
 <h1>MemALL 功能报告</h1>
-<p style="color:#888;font-size:14px">v0.1.2 · Python + SQLite + aiohttp · 端口 9919(Gateway) / 9876(MCP)</p>
+<p style="color:#888;font-size:14px">v0.1.2 · Python + SQLite + aiohttp · 端口 9920(统一 /mcp + /bus/*)</p>
 
 <div class="section">
 <h2>一、记忆层级体系</h2>
@@ -259,7 +259,7 @@ class HtmlHandlersMixin:
 </div>
 
 <div class="section">
-<h2>三、HTTP 网关（:9919）</h2>
+<h2>三、HTTP 网关（:9920）</h2>
 <div class="two-col">
 <div class="col">
 <h3>HTML 页面（10 个）</h3>

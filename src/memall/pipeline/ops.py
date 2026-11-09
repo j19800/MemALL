@@ -7,7 +7,6 @@ All operations use transactions for atomicity.
 
 import hashlib
 import json
-import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any, Sequence
@@ -15,6 +14,8 @@ from typing import Dict, List, Optional, Any, Sequence
 from memall.core.db import get_conn
 from memall.core.levels import normalize_level
 from memall.core.nlp import compute_tfidf, cosine_sim
+
+logger = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════════════════════════════

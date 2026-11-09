@@ -158,8 +158,16 @@ def cmd_federation(args):
                 sys.exit(1)
             print(f"Resolved conflict #{result['conflict_id']}: winner #{result['winner']}, loser #{result['loser']}")
         elif args.auto:
-            result = auto_resolve()
-            print(f"Auto-resolved {result['auto_resolved']}/{result['total_processed']} conflicts")
+            apply = getattr(args, "apply", False)
+            result = auto_resolve(apply=apply)
+            if apply:
+                print(f"Auto-resolved {result['auto_resolved']}/{result['total_processed']} conflicts")
+            else:
+                print(f"Scored {result['total_processed']} open conflicts (dry run). Recommendations:")
+                for r in result["recommendations"]:
+                    print(f"  #{r['conflict_id']}: winner #{r['recommended_winner']} "
+                          f"(score {r['score_a']} vs {r['score_b']}) — {r['reason']}")
+                print("  No changes written. Add --apply to commit these resolutions.")
         else:
             _ = detect_conflicts(threshold=args.threshold, mode=args.mode)
             conflicts = list_conflicts(status=args.status)

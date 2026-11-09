@@ -376,6 +376,39 @@ def _build_cross_agent_section(conn, agent_name: str) -> list:
     return lines if len(lines) > 1 else []
 
 
+def _run_session_start_maintenance(agent_name: str) -> dict:
+    """Opt-in maintenance that belongs at session START, not session END.
+
+    Debt patrol 2026-11-08: ``improve_step`` (scan recent L6 reflections ->
+    correction rules) and ``identity_step`` (scan L1/L7 signals -> update
+    identities.profile_json) were wired into ``session_end``, a dead path in
+    this deployment (sessions are never marked ended).  They are moved here.
+
+    Both are gated by config flags and default OFF: running them on EVERY
+    session start is a behaviour change (they write to the DB), so operators
+    must opt in explicitly via ``session.auto_improve`` / ``session.auto_identity``.
+    Failures are swallowed and reported — a maintenance step must never break
+    a session start.
+    """
+    from memall.config import get_config
+    out = {}
+    if get_config("session.auto_improve", False):
+        try:
+            from .improve import improve_step
+            out["corrections_improve"] = improve_step(agent_name=agent_name or "")
+        except Exception as e:
+            out["corrections_improve_error"] = str(e)
+            logger.debug("session.py: improve_step skipped", exc_info=True)
+    if get_config("session.auto_identity", False):
+        try:
+            from .identity import identity_step
+            out["profile_update"] = identity_step()
+        except Exception as e:
+            out["profile_update_error"] = str(e)
+            logger.debug("session.py: identity_step skipped", exc_info=True)
+    return out
+
+
 def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
     """Start a new session. Optionally auto-inject Agent Profile + semantic fragments."""
     conn = get_conn()
@@ -647,6 +680,9 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 + volatile_parts
             )
 
+        # Opt-in maintenance moved here from the dead session_end path.
+        result["maintenance"] = _run_session_start_maintenance(agent_name)
+
         return result
     finally:
         conn.close()
@@ -754,15 +790,14 @@ def session_end(session_id: str, auto_extract: bool = False) -> dict:
                     "total_strong": len(strong),
                     "note": f"session had {len(strong)} mandatory correction rules that should have been followed",
                 }
-            # 9e05809 originally called improve_step()/identity_step() here,
-            # with a comment claiming "session start".  Both are FULL-STORE
-            # scans, this hook is session_end — a path that almost never
-            # fires (measured: 39 ended vs 99 active sessions in 14 days) —
-            # and both steps already run on the scheduler's 6h full pipeline
-            # (include_improve/include_identity default True).  Net effect
-            # of the wiring was: never runs here, and dead-slow when it did.
-            # Reverted to the read-only compliance check; the refresh now
-            # rides the (resurrected) scheduler.
+            # improve_step / identity_step must NOT run here: session_end is
+            # a dead path (sessions are rarely ended) and both are full-store
+            # scans.  Two independent fixes agreed on this: the remote branch
+            # reverted the wiring to rely on the scheduler's 6h pipeline, and
+            # this branch additionally moved them to session_start behind the
+            # opt-in flags session.auto_improve / session.auto_identity (see
+            # _run_session_start_maintenance()).  This hook keeps only the
+            # read-only compliance check above.
         except (ImportError, sqlite3.Error):
             logger.warning("session.py: silent error", exc_info=True)
 

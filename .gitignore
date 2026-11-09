@@ -223,3 +223,22 @@ memall_browser.html
 goal_1000871_summary.txt
 tmp_*.py
 tmp_duel.py
+
+# ── Deployment-local secrets & runtime state (never commit) ──
+# The fixed Bearer token for the LAN gateway; committing it would leak a
+# live credential into public history. Each deployment keeps its own copy.
+.gateway-token
+# PID files and logs produced by the keepalive scripts.
+*.pid
+gateway.log
+scheduler.log
+# Local runtime databases / WAL side files (per-deployment, never shared).
+*.db
+*.db-wal
+*.db-shm
+
+# ── One-off audit/dashboard artefacts (A-tier cleanup, 2026-11-09) ──
+.tmp-discussion-*.md
+debt-page-snapshot.yml
+debt-dashboard-v2.png
+*.bak-kilo-chain-*

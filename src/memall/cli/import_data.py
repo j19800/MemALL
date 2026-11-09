@@ -12,12 +12,10 @@ MemALL 记忆导入工具 — 从其他系统迁移数据
   python -m memall.cli.import_data --format csv --file memories.csv
 """
 
-import json, csv, sys, os, logging
+import json, csv, sys, logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 logger = logging.getLogger("memall.import")
 
@@ -56,7 +54,29 @@ def _normalize_level(level: Any) -> str:
     for k, v in _LEVEL_LOOKUP.items():
         if k in key or key in k:
             return v
+    logger.warning("unknown level %r mapped to default P2", level)
     return "P2"
+
+
+def _normalize_metadata(raw) -> str:
+    """Return a JSON string for MemoryInput.metadata, preserving provenance.
+
+    Older versions forced ``{}`` here, silently dropping status / assignee /
+    timestamps / ownership carried by the source system.  capture() accepts
+    both a dict and a JSON string; we normalise to a string so the value is
+    safe to pass through the dataclass unchanged.
+    """
+    if raw is None or raw == "":
+        return "{}"
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return raw if isinstance(parsed, dict) else "{}"
+        except (json.JSONDecodeError, TypeError):
+            return "{}"
+    if isinstance(raw, dict):
+        return json.dumps(raw, ensure_ascii=False, default=str)
+    return "{}"
 
 
 def _normalize_row(row: dict) -> dict:
@@ -73,7 +93,16 @@ def _normalize_row(row: dict) -> dict:
         "subject": (row.get("subject") or row.get("title") or "")[:500],
         "project": (row.get("project") or "")[:500],
         "summary": (row.get("summary") or "")[:2000],
-        "metadata": {},
+        # Preserve provenance / workflow status / timestamps from the source.
+        "metadata": _normalize_metadata(
+            row.get("metadata") if "metadata" in row else {
+                k: row[k] for k in (
+                    "status", "assignee", "thread_id", "occurred_at",
+                    "created_at", "updated_at", "visibility", "confidence",
+                    "owner", "source", "tags", "task_id",
+                ) if k in row
+            }
+        ),
     }
 
 
@@ -202,6 +231,9 @@ def import_mem0(filepath: str, limit: int = 0) -> dict:
                 "subject": (row.get("subject") or row.get("title") or "")[:500],
                 "project": (row.get("project") or meta.get("project") or "")[:500],
                 "summary": (row.get("summary") or "")[:2000],
+                # Preserve Mem0 provenance (status/timestamps/owner) instead
+                # of silently discarding it.
+                "metadata": _normalize_metadata(meta if meta else row.get("metadata")),
             }
             capture(MemoryInput(**normalized))
             counts["imported"] += 1

@@ -166,7 +166,7 @@ def pair_with_peer(address: str, local_token: str = "", code: str = "") -> Dict[
     token the remote returned.
 
     Args:
-        address: ``"IP:PORT"`` string, e.g. ``"192.168.1.5:9919"``.
+        address: ``"IP:PORT"`` string, e.g. ``"192.168.1.5:9920"``.
         local_token: This gateway's auth token (used to authenticate
                      the remote peer's return requests).
         code: The remote gateway's one-time pairing code.  Pairing fails
@@ -209,7 +209,7 @@ def pair_with_peer(address: str, local_token: str = "", code: str = "") -> Dict[
     # ── Persist to peers.json ──
     peers = _load_peers()
     host = address.split(":")[0]
-    port_str = address.split(":")[1] if ":" in address else "9919"
+    port_str = address.split(":")[1] if ":" in address else "9920"
     peer_entry = {
         "device_name": result.get("peer_name", host),
         "address": host,

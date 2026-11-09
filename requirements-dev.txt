@@ -1,0 +1,9 @@
+# Development / test dependencies — mirrors pyproject.toml [project.optional-dependencies].dev
+# Install with:  pip install -e ".[dev]"   (preferred, single source of truth)
+#           or:  pip install -r requirements-dev.txt
+-r requirements.txt
+pytest>=7.0.0
+pytest-cov>=4.0.0
+flake8>=7.0.0
+mypy>=1.0.0
+autoflake>=2.0.0

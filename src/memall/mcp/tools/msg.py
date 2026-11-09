@@ -1,33 +1,29 @@
 """
-memall_msg — 与 memall-bus 实时总线的 MCP 工具
-==============================================
-三个动作：
+memall_msg — 实时消息总线的 MCP 工具
+====================================
+四个动作：
 
-  send   把「有一张新任务卡」的指针实时推给收件人
-  inbox  拉当前 agent 的未读消息（含实时推送）
-  ack    标记已读
+  send    把「有一张新任务卡」的指针实时推给收件人
+  inbox   拉当前 agent 的未读消息
+  ack     标记已读
+  status  探测总线健康
 
 **载荷只带 memory_id 指针，不带任务正文** —— L5 任务卡（memories 表）是唯一
-事实源，总线只是通知层。这样两个库不会各存一份任务状态，重复投递也能按
-memory_id 幂等去重。
+事实源，总线只是通知层。
 
-**from 由服务端按连接身份判定**，客户端自报的值被忽略 —— 否则任何进程都能
-冒充 PM 向执行方派假指令（这是 2026-10-21 安全审计实证过的漏洞）。
+实时消息层已**合并进 MCP 网关**：与 `/mcp` 同一进程、同一端口（默认
+`0.0.0.0:9920`，局域网可达）、同一 Bearer token，路由为 `/bus/*`，mailbox
+落在 `~/.memall/bus.db`。不再有独立的 `memall_bus.py` / 8770 TCP 进程。
+在线收件人通过 `GET /bus/subscribe` 的 SSE 收到实时推送；离线消息进
+mailbox，下次 `inbox` 拉取。
 
-总线是**独立常驻进程**，沒起時會先嘗試自動啟動（see `ensure_bus_running`）；
-啟動失敗時返回清晰報錯並附上排查提示，而 MemALL 主鏈路（auto_inject 拉模式）
-完全不受影響。
+**from 由调用者声明**（`agent_name`），与旧 TCP 总线的 `hello` 语义一致；
+传输层鉴权由网关 Bearer token 统一负责。
 """
 import hashlib
 import json
-import re
 
-from memall.mcp.bus import (
-    BusClient,
-    BusRejected,
-    BusUnavailable,
-    ensure_bus_running,
-)
+from memall.mcp.bus import BusClient, BusUnavailable, ensure_bus_running
 
 
 def _agent_of(arguments: dict) -> str:
@@ -44,14 +40,9 @@ def _bus_op(fn, agent: str, *args, **kwargs):
     """執行總線操作；BusUnavailable 時先嘗試自動啟動總線，再重試一次。
 
     `fn` 應自行建立 BusClient（用 `with BusClient()`），不應接受 bus 參數。
-
-    BusRejected（在線但被協議拒絕，如非法 dedup_key）不屬於「总线没起」，
-    重啟重試只会以同一個錯誤再失敗一次，直接向上拋。
     """
     try:
         return fn()
-    except BusRejected:
-        raise
     except BusUnavailable:
         start = ensure_bus_running()
         if not start.get("available"):
@@ -59,25 +50,12 @@ def _bus_op(fn, agent: str, *args, **kwargs):
         return fn()
 
 
-_DEDUP_KEY_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
-
-
 def _dedup_key(agent: str, to: str, mtype: str, payload) -> str:
-    """Legacy CLIENT-side idempotency key — kept for import compatibility only.
+    """Stable idempotency key for a logical message.
 
-    ``handle_send`` no longer calls it.  Two real defects made the client the
-    wrong place to derive the key (research report §4.5 D-1/D-2):
-
-      1. ``default=str`` serialized unserializable payloads as ``repr()``, so
-         the same logical message hashed differently across processes (and the
-         repr of most objects embeds their id) — dedup silently never fired.
-      2. It mixed in the *caller-supplied* ``agent_name`` while the bus takes
-         ``from`` from the **authenticated connection** — when the two differ
-         the key binds to the wrong sender.
-
-    The server now derives the canonical ``v1:`` key itself when publish omits
-    the field, using the connection identity, with no ``default=str`` (an
-    unserializable payload is an error, not a silent repr).
+    Derived from the sender, recipient, type and payload — the same logical
+    send retried after a lost ack maps to the same key, so the bus can drop
+    the duplicate instead of delivering twice.
     """
     blob = json.dumps(
         {"from": agent, "to": to, "type": mtype, "payload": payload},
@@ -98,60 +76,36 @@ def handle_send(arguments: dict) -> str:
     if not agent:
         return _err("agent_name is required — the bus derives the sender "
                     "from the authenticated connection, not from the payload")
-    # Three states that must stay distinguishable (A3-2 dsh ruling + D-1/D-2):
-    #   * dedup_key ABSENT -> send nothing; the SERVER derives the canonical
-    #     key from (authenticated connection identity, to, type, payload).
-    #     Derivation belongs on the server — only it knows the real sender.
-    #   * dedup_key ""     -> dedup explicitly DISABLED.  Two deliberate sends
-    #     of the same payload must both land.
-    #   * dedup_key "<k>"  -> caller-named business key, e.g. "999766:dispatch".
+    # Caller may supply an explicit key (e.g. the task card's memory_id) so an
+    # at-least-once retry collapses to exactly-once delivery.
+    # A3-2 (dsh ruling): default is DERIVED, but an explicit dedup_key=""
+    # disables dedup — two independent sends of the same payload must not be
+    # merged unless the caller opts in.  Presence of the key distinguishes
+    # "caller chose empty" from "caller said nothing".
     if "dedup_key" in arguments:
-        raw = arguments.get("dedup_key")
-        if raw is not None and not isinstance(raw, str):
-            return _err("dedup_key must be a string, or null/omitted to let the "
-                        "bus derive it", delivered=False, to=to)
-        key = (raw or "").strip()
-        if key and not _DEDUP_KEY_RE.match(key):
-            return _err("invalid dedup_key: must match [A-Za-z0-9_.:-]{1,128}",
-                        delivered=False, to=to)
+        key = (arguments.get("dedup_key") or "").strip()
     else:
-        key = None            # 服务端派生
+        key = _dedup_key(agent, to, mtype, payload)
     def _do_send():
         with BusClient() as bus:
-            welcome = bus.connect(agent)
-            r = bus.publish(to, payload, mtype, dedup_key=key)
-            # welcome 的能力位：服务端是否真的实现了 dedup_key（M1 之前的
-            # 老服务端会静默忽略键 —— 那正是这次要修的「已存在但未声明」缺口）。
-            r["_dedup_supported"] = bool(welcome.get("dedup"))
-            return r
+            bus.connect(agent)
+            return bus.publish(to, payload, mtype, dedup_key=key)
 
     try:
         r = _bus_op(_do_send, agent)
-    except BusRejected as exc:
-        return _err(str(exc), delivered=False, to=to, dedup_key=key,
-                    retryable=False)
     except BusUnavailable as exc:
         return _err(f"bus unavailable: {exc}", delivered=False, to=to,
                     dedup_key=key, retryable=True)
-    deduplicated = bool(r.get("deduplicated"))
-    out = {
+    return json.dumps({
         "status": "ok",
         "to": to,
         "message_id": r.get("id"),
         "pushed": r.get("pushed", 0),
-        "dedup_key": r.get("dedup_key", key),
-        # True 表示服务端**没有新建行**：这是同键重试的副本，返回的是已有行的
-        # id（echo 语义），所以 message_id 依然可直接用于 ack。
-        "deduplicated": deduplicated,
-        "dedup_supported_by_bus": r.get("_dedup_supported", False),
-    }
-    if deduplicated:
-        out["note"] = ("去重命中：与之前同键的未读消息属同一次逻辑发送，"
-                       "服务端未新建行，返回原行 id；等该行被 ack 后同键会重新可用。")
-    else:
-        out["note"] = ("pushed=0 表示收件人当前不在线；消息已进 mailbox，"
-                       "对方下次上线用 inbox 动作拉取")
-    return json.dumps(out, ensure_ascii=False)
+        "dedup_key": key,
+        "deduplicated": bool(r.get("deduplicated")),
+        "note": ("pushed=0 表示收件人当前不在线；消息已进 mailbox，"
+                 "对方下次上线用 inbox 动作拉取"),
+    }, ensure_ascii=False)
 
 
 def handle_inbox(arguments: dict) -> str:
