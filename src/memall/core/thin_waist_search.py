@@ -24,6 +24,8 @@ from memall.core.lifecycle import (
     HOOK_POST_SEARCH,
 )
 
+from memall.core.kb_policy import KB_SOURCE_PIPELINES, is_kb_source_pipeline, source_kind_from_pipeline
+
 logger = logging.getLogger(__name__)
 
 
@@ -308,6 +310,7 @@ def vector_search(
     project: Optional[str] = None,
     agent_name: Optional[str] = None,
     viewer: Optional[str] = None,
+    source_pipeline: Optional[str] = None,
 ) -> dict:
     """Semantic vector search.
 
@@ -360,17 +363,28 @@ def vector_search(
         return result
     from memall.core.thin_waist import _pool_conn
 
-    cols = {"category": category, "level": level, "owner": owner,
-            "project": project, "agent_name": agent_name}
-    where = " AND ".join(f"{c} = ?" for c, v in cols.items() if v)
-    params = [v for v in cols.values() if v]
+    # Standard columns are SQL-prefilterable; metadata columns use json_extract.
+    cols = {k: v for k, v in {"category": category, "level": level,
+                              "owner": owner, "project": project,
+                              "agent_name": agent_name}.items() if v}
+    meta_cols = {"source_pipeline": source_pipeline}
+    std_where_parts = [f"m.{c} = ?" for c, v in cols.items()]
+    std_params = list(cols.values())
+    meta_where_parts = []
+    for mc, mv in meta_cols.items():
+        if mv is not None:
+            meta_where_parts.append(f"json_extract(m.metadata, '$.{mc}') = ?")
+            std_params.append(mv)
+    std_where = (" AND ".join(std_where_parts) +
+                 (" AND " + " AND ".join(meta_where_parts) if meta_where_parts else ""))
     ph = ",".join("?" * len(ids))
+    fetch_sql = (
+        f"SELECT m.id, m.project, m.category, m.level, "
+        f"m.owner, m.agent_name, m.metadata FROM memories m "
+        f"WHERE m.id IN ({ph})" + (f" AND {std_where}" if std_where else "")
+    )
     with _pool_conn() as conn:
-        rows = conn.execute(
-            f"SELECT id, project, category, level, owner, agent_name FROM memories "
-            f"WHERE id IN ({ph})" + (f" AND {where}" if where else ""),
-            ids + params,
-        ).fetchall()
+        rows = conn.execute(fetch_sql, ids + std_params).fetchall()
     keep = {r["id"] for r in rows}
     attrs = {r["id"]: r for r in rows}
     kept = []
@@ -388,7 +402,55 @@ def vector_search(
                         r[col] = row[col] or ""
                     except (IndexError, KeyError):
                         pass
+            # annotate KB vs user-state explicitly (row may be sqlite3.Row)
+            try:
+                if isinstance(row, dict):
+                    md = row.get("metadata") or "{}"
+                else:
+                    md = row["metadata"] if "metadata" in row.keys() else "{}"
+            except Exception:
+                md = "{}"
+            try:
+                sp = (__import__('json').loads(md if isinstance(md, str) else "{}") or {}).get("source_pipeline", "") or ""
+                sp = sp.strip() if isinstance(sp, str) else ""
+            except Exception:
+                sp = ""
+            r["source_kind"] = source_kind_from_pipeline(sp)
+            r.setdefault("metadata_source_pipeline", sp)
         kept.append(r)
+    # Enrich with cognitive fields (additive/compatible; old DBs may lack columns)
+    if kept:
+        try:
+            from memall.core.thin_waist import _cognitive_item_from_meta
+            cog_ph = ",".join("?" * len(kept))
+            cog_ids = [r.get("memory_id") for r in kept]
+            with _pool_conn() as conn2:
+                try:
+                    cog_rows = conn2.execute(
+                        f"SELECT id, metadata, valid_from, invalid_at, memory_status FROM memories WHERE id IN ({cog_ph})",
+                        cog_ids,
+                    ).fetchall()
+                except Exception:
+                    cog_rows = conn2.execute(
+                        f"SELECT id, metadata FROM memories WHERE id IN ({cog_ph})",
+                        cog_ids,
+                    ).fetchall()
+            cog_map = {}
+            for cr in cog_rows:
+                keys = cr.keys() if hasattr(cr, "keys") else []
+                cog_map[cr["id"]] = _cognitive_item_from_meta(
+                    cr["metadata"],
+                    valid_from=cr["valid_from"] if "valid_from" in keys else "",
+                    invalid_at=cr["invalid_at"] if "invalid_at" in keys else "",
+                    memory_status=cr["memory_status"] if "memory_status" in keys else "",
+                )
+            for r in kept:
+                cog = cog_map.get(r.get("memory_id"))
+                if cog:
+                    for k, v in cog.items():
+                        r.setdefault(k, v)
+        except Exception:
+            pass
     # Trust filter: candidates that survived the agent_name filter must
     # still respect the viewer's visibility level (R3-3).
     if kept:
@@ -412,6 +474,7 @@ def hybrid_search(
     agent_name: Optional[str] = None,
     rerank: Optional[bool] = None,
     viewer: Optional[str] = None,
+    source_pipeline: Optional[str] = None,
 ) -> dict:
     """RRF (Reciprocal Rank Fusion) hybrid search combining FTS5 + vec0.
 
@@ -459,6 +522,7 @@ def hybrid_search(
     )
 
     def _apply_meta_filters(rows: list) -> list:
+        import json as _json
         filtered = rows
         if category:
             filtered = [r for r in filtered if r.get("category") == category]
@@ -466,6 +530,13 @@ def hybrid_search(
             filtered = [r for r in filtered if r.get("level") == level]
         if owner:
             filtered = [r for r in filtered if r.get("owner") == owner]
+        if source_pipeline:
+            def _sp(r):
+                m = r.get("metadata") or "{}"
+                try: d = _json.loads(m) if isinstance(m, str) else (m if isinstance(m, dict) else {})
+                except Exception: d = {}
+                return d.get("source_pipeline") == source_pipeline
+            filtered = [r for r in filtered if _sp(r)]
         return filtered
 
     with _pool_conn() as conn:
@@ -478,11 +549,16 @@ def hybrid_search(
             if val:
                 filters.append(f"m.{col} = ?")
                 filter_params.append(val)
+        # source_pipeline uses json_extract on metadata column
+        if source_pipeline:
+            filters.append("json_extract(m.metadata, '$.source_pipeline') = ?")
+            filter_params.append(source_pipeline)
         where_sql = (" AND " + " AND ".join(filters)) if filters else ""
         # With filters the candidate pool is pre-cut, so fetch more of it.
-        fetch = top_k * (8 if filters else 2)
+        fetch = top_k * (8 if filters or source_pipeline else 2)
         sel = ("SELECT m.id, m.content, m.subject, m.category, m.level, "
-               "m.owner, m.agent_name, m.project, m.created_at FROM memories m")
+               "m.owner, m.agent_name, m.project, m.created_at, "
+               "m.metadata, m.valid_from, m.invalid_at, m.memory_status FROM memories m")
 
         # FTS5 results
         fts_q = fts_query(query)
@@ -526,6 +602,35 @@ def hybrid_search(
 
         # RRF merge
         scores: dict[int, dict] = {}
+        def _cog(r):
+            try:
+                from memall.core.thin_waist import _cognitive_item_from_meta
+                return _cognitive_item_from_meta(
+                    r["metadata"] if "metadata" in r.keys() else "{}",
+                    valid_from=r["valid_from"] if "valid_from" in r.keys() else "",
+                    invalid_at=r["invalid_at"] if "invalid_at" in r.keys() else "",
+                    memory_status=r["memory_status"] if "memory_status" in r.keys() else "",
+                )
+            except Exception:
+                return {"slot_key":"","resolve_status":"","resolve":{},"valid_from":"","invalid_at":"","memory_status":""}
+
+        # source_kind: explicit distinction between user-state vs KB evidence
+        def _source_kind(r):
+            try:
+                if isinstance(r, dict):
+                    m = r.get("metadata") or "{}"
+                else:
+                    # sqlite3.Row
+                    m = r["metadata"] if "metadata" in r.keys() else "{}"
+            except Exception:
+                m = "{}"
+            sp = ""
+            try:
+                import json as _j; mdata = _j.loads(m if isinstance(m, str) else "{}") if m else {}
+                sp = (mdata or {}).get("source_pipeline", "") or ""
+            except Exception:
+                pass
+            return source_kind_from_pipeline(sp, mdata if 'mdata' in locals() and isinstance(mdata, dict) else None)
         for rank, r in enumerate(fts_rows):
             scores[r["id"]] = {
                 "memory_id": r["id"],
@@ -537,9 +642,11 @@ def hybrid_search(
                 "agent_name": r["agent_name"] or "",
                 "project": r["project"] or "",
                 "created_at": r["created_at"] or "",
+                "source_kind": _source_kind(r),
                 "rrf_score": 1.0 / (rrf_k + rank + 1),
                 "fts_rank": rank + 1,
                 "vec_rank": None,
+                **_cog(r),
             }
         for rank, r in enumerate(vec_rows):
             if r["id"] in scores:
@@ -556,9 +663,11 @@ def hybrid_search(
                     "agent_name": r["agent_name"] or "",
                     "project": r["project"] or "",
                     "created_at": r["created_at"] or "",
+                    "source_kind": _source_kind(r),
                     "rrf_score": 1.0 / (rrf_k + rank + 1),
                     "fts_rank": None,
                     "vec_rank": rank + 1,
+                    **_cog(r),
                 }
 
         sorted_results = sorted(scores.values(), key=lambda x: -x["rrf_score"])

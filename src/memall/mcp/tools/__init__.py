@@ -36,6 +36,8 @@ def _handle_write(args: dict) -> str:
         return memory_write.handle_store_batch(args)
     elif action == "batch_capture":
         return memory_write.handle_batch_capture(args)
+    elif action in ("kb_ingest", "document_import"):
+        return memory_write.handle_kb_ingest(args)
     elif action == "update":
         return memory_write.handle_update(args)
     elif action == "connect":
@@ -113,9 +115,9 @@ def _handle_write(args: dict) -> str:
 
 registry.register(ToolDef(
     name="memall_write",
-    description="Write/capture/search/update memories, create connections, manage forgetting & ops. Actions: capture | smart_store | store_batch | batch_capture | update | connect | forget | ops | record_interaction | task_claim | task_resolve | task_block | quick (快速记)",
+    description="Write/capture/search/update memories, create connections, manage forgetting & ops. Actions: capture | smart_store | store_batch | batch_capture | kb_ingest | update | connect | forget | ops | record_interaction | task_claim | task_resolve | task_block | quick (快速记)",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["capture", "smart_store", "store_batch", "batch_capture", "update", "connect", "forget", "ops", "record_interaction", "task_claim", "task_resolve", "task_block", "goal_create", "goal_decompose", "goal_deliberate", "goal_finalize", "goal_request_verification", "goal_verify", "quick", "记一下", "快速记", "随手记"]},
+        "action": {"type": "string", "enum": ["capture", "smart_store", "store_batch", "batch_capture", "kb_ingest", "document_import", "update", "connect", "forget", "ops", "record_interaction", "task_claim", "task_resolve", "task_block", "goal_create", "goal_decompose", "goal_deliberate", "goal_finalize", "goal_request_verification", "goal_verify", "quick", "记一下", "快速记", "随手记"]},
         "content": {"type": "string", "description": "Memory content"},
         "owner": {"type": "string"},
         "agent_name": {"type": "string"},
@@ -183,6 +185,14 @@ registry.register(ToolDef(
         "task_id": {"type": "integer", "description": "L5 task card id (task_claim/task_resolve/task_block)"},
         "result": {"type": "string", "description": "Closure evidence stored on resolve (task_resolve)"},
         "reason": {"type": "string", "description": "Why the card is blocked, needs a human (task_block)"},
+        "doc_id": {"type": "string", "description": "kb_ingest: stable document id/path/url"},
+        "title": {"type": "string", "description": "kb_ingest: document title"},
+        "path": {"type": "string", "description": "kb_ingest: source path or URL"},
+        "chunk_size": {"type": "integer", "description": "kb_ingest: target chunk size (chars)"},
+        "chunk_overlap": {"type": "integer", "description": "kb_ingest: chunk overlap (chars)"},
+        "doc_version": {"type": "string", "description": "kb_ingest: document version/hash label"},
+        "updated_at": {"type": "string", "description": "kb_ingest: document update time (ISO 8601)"},
+        "source_pipeline": {"type": "string", "description": "Filter/label source pipeline (e.g., document.import)"},
         "session_id": {"type": "string"},
     }, "required": ["action"]},
     handler=_handle_write,
@@ -226,6 +236,8 @@ def _handle_read(args: dict) -> str:
         return federation.handle_conflicts(args)
     elif action == "recap":
         return retrieve.handle_recap(args)
+    elif action == "continuity_pack":
+        return retrieve.handle_continuity_pack(args)
     elif action == "goal_status":
         from memall.mcp.tools import goals_handlers
         return goals_handlers.handle_goal_status(args, args.get("agent_name", ""))
@@ -238,9 +250,9 @@ def _handle_read(args: dict) -> str:
 
 registry.register(ToolDef(
     name="memall_read",
-    description="Search/retrieve memories, trace provenance, explore graph, timeline, federated queries, natural language chat search, post-compaction recap. Actions: retrieve | search | unified_search | chat | vector_search | hybrid_search | batch_search | trace | traverse | timeline | fed_query | fed_conflicts | recap",
+    description="Search/retrieve memories, trace provenance, explore graph, timeline, federated queries, natural language chat search, post-compaction recap, validity-aware cross-session continuity. Actions: retrieve | search | unified_search | chat | vector_search | hybrid_search | batch_search | trace | traverse | timeline | fed_query | fed_conflicts | recap | continuity_pack",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["retrieve", "search", "unified_search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "batch_search", "trace", "traverse", "timeline", "fed_query", "fed_conflicts", "recap", "task_list", "goal_status"]},
+        "action": {"type": "string", "enum": ["retrieve", "search", "unified_search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "batch_search", "trace", "traverse", "timeline", "fed_query", "fed_conflicts", "recap", "continuity_pack", "task_list", "goal_status"]},
         "query": {"type": "string", "description": "Search query"},
         "queries": {"type": "array", "items": {"type": "string"}, "description": "Queries for batch_search"},
         "mode": {"type": "string", "enum": ["auto", "direct", "fts5", "vector", "hybrid"]},
@@ -252,6 +264,7 @@ registry.register(ToolDef(
         "agent_name": {"type": "string"},
         "viewer": {"type": "string", "description": "Viewer identity for trust filtering / personalisation"},
         "project": {"type": "string"},
+        "source_pipeline": {"type": "string", "description": "Filter by source_pipeline (e.g., document.import, conversation.capture)"},
         "limit": {"type": "integer"},
         "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 32, "description": "Exact-match tag filter (any by default)"},
         "tags_all": {"type": "boolean", "description": "Require every listed tag instead of any"},
@@ -602,6 +615,7 @@ registry.register(ToolDef(
         "auto_inject": {"type": "boolean"},
         "auto_extract": {"type": "boolean"},
         "include_reflect": {"type": "boolean"},
+        "include_conflicts": {"type": "boolean", "description": "continuity_pack: include review/conflict items"},
         "include_distill": {"type": "boolean"},
         "include_integrate": {"type": "boolean"},
         "include_persona": {"type": "boolean"},
@@ -694,3 +708,9 @@ registry.register(ToolDef(
     handler=msg.handle,
     annotations={"readOnlyHint": False, "idempotentHint": False},
 ))
+
+try:
+    from memall.pipeline.kb_enrich import register_default_kb_enrich_hook
+    register_default_kb_enrich_hook()
+except Exception:
+    pass

@@ -29,6 +29,24 @@ from memall.core.lifecycle import (
 
 logger = logging.getLogger(__name__)
 
+class CaptureId(int):
+    """Backward-compatible capture return: behaves as int id, carries quality contract."""
+    def __new__(cls, value, /, **meta):
+        obj = int.__new__(cls, int(value) if value is not None else 0)
+        for k, v in meta.items():
+            setattr(obj, k, v)
+        obj.id = int(obj)
+        return obj
+
+    def to_dict(self):
+        d = {"id": int(self)}
+        for k in ("status", "quality", "readability", "ingest_mode", "source_pipeline", "decision_hint"):
+            v = getattr(self, k, None)
+            if v is not None:
+                d[k] = v
+        return d
+
+
 
 # Valid agent_name pattern: simple identifiers (alphanumeric, underscore, hyphen, dot, @, CJK)
 _VALID_AGENT_RE = re.compile(r"^[a-z0-9_@.\u4e00-\u9fff-]+$")
@@ -429,7 +447,41 @@ def _make_subject(
     return label.strip()
 
 
+def _row_meta_dict(meta_raw) -> dict:
+    if isinstance(meta_raw, dict):
+        return meta_raw
+    if not meta_raw:
+        return {}
+    try:
+        import json as _json
+        d = _json.loads(meta_raw)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+
+def _cognitive_item_from_meta(meta_raw, *, valid_from="", invalid_at="", memory_status="") -> dict:
+    meta = _row_meta_dict(meta_raw)
+    res = meta.get("resolve") if isinstance(meta.get("resolve"), dict) else {}
+    return {
+        "slot_key": meta.get("slot_key") or "",
+        "resolve_status": res.get("decision") or res.get("status") or "",
+        "resolve": res,
+        "valid_from": valid_from or "",
+        "invalid_at": invalid_at or "",
+        "memory_status": memory_status or "",
+    }
+
 def _row_to_memory(row) -> Memory:
+    keys = row.keys() if hasattr(row, "keys") else ()
+    meta_raw = row["metadata"] if "metadata" in keys else "{}"
+    if not isinstance(meta_raw, str):
+        try:
+            import json as _json
+            meta_raw = _json.dumps(meta_raw, ensure_ascii=False)
+        except Exception:
+            meta_raw = "{}"
     return Memory(
         id=row["id"],
         content=row["content"],
@@ -439,7 +491,7 @@ def _row_to_memory(row) -> Memory:
         agent_name=row["agent_name"],
         # creator = the agent that triggered the write (v0.1.61 owner/creator
         # semantics); guarded for pre-migration-025 databases.
-        creator=row["creator"] if "creator" in row.keys() else "",
+        creator=row["creator"] if "creator" in keys else "",
         subject=row["subject"],
         project=row["project"],
         category=row["category"],
@@ -451,10 +503,13 @@ def _row_to_memory(row) -> Memory:
         confidence=row["confidence"],
         visibility=row["visibility"],
         access_count=row["access_count"],
-        metadata=row["metadata"],
+        metadata=meta_raw,
         thread_id=row["thread_id"],
         agent_name_locked=bool(row["agent_name_locked"]),
-        tags=row["tags"] if "tags" in row.keys() else "[]",
+        tags=row["tags"] if "tags" in keys else "[]",
+        valid_from=(row["valid_from"] if "valid_from" in keys else "") or "",
+        invalid_at=(row["invalid_at"] if "invalid_at" in keys else "") or "",
+        memory_status=(row["memory_status"] if "memory_status" in keys else "") or "",
     )
 
 
@@ -587,6 +642,18 @@ def _score_quality(data: MemoryInput, content_hash_val: str,
         else 2
     )
 
+    # Day2: penalize non-substantive content (template markers, JSON dumps,
+    # pure ID lists) so auto-generated junk hits "review" instead of "accepted".
+    if get_config("quality.substance_required", True) and text_len >= 15:
+        try:
+            if not _has_substantive_content(text):
+                scores["clarity"] = min(scores.get("clarity", 10), 4)
+                scores["completeness"] = min(scores.get("completeness", 10), 4)
+                scores["specificity"] = min(scores.get("specificity", 10), 4)
+                scores["reasoning"] = min(scores.get("reasoning", 10), 1)
+        except Exception:
+            pass
+
     for k in _QUALITY_DIMS:
         scores[k] = max(0, min(10, scores[k]))
 
@@ -643,12 +710,32 @@ def _score_quality(data: MemoryInput, content_hash_val: str,
                 "accepted" if passed else ("review" if avg >= required - 2 else "rejected")
             )
 
+    reasons = []
+    for k, v in scores.items():
+        if v <= 2:
+            reasons.append(f"low_{k}:{v}")
+    if text_len < min_length:
+        reasons.append(f"too_short:{text_len}<{min_length}")
+    if data.level == "L6" and scores["reasoning"] < 2:
+        reasons.append("l6_requires_reasoning")
+    if data.level in ("L4", "L5") and not data.subject:
+        reasons.append("missing_subject")
+    if _TEMPLATE_MARKERS_RE.search(text):
+        reasons.append("template_markers")
+    stripped_probe = text.lstrip()
+    if stripped_probe.startswith("{") and stripped_probe.endswith("}"):
+        reasons.append("json_like_body")
     result = {
         "dimensions": scores,
         "avg": round(avg, 2),
         "min": min_dim,
         "gate": gate,
         "level": data.level,
+        "score": round(avg, 2),
+        "reasons": reasons,
+        "text_len": text_len,
+        "required": required,
+        "gate_policy": gate_policy,
     }
     return result
 
@@ -733,6 +820,130 @@ def classify_stream(category: str, source: str = "") -> str:
     if category and category in ledger:
         return "ledger"
     return "knowledge"
+
+
+
+# --- readability helpers (Day1: detect + rewrite + log, no hard reject) ---
+_TEMPLATE_MARKER_RE = re.compile(r'\[(?:NOVEL|FILE|CHUNK|MODULE|PART|VOL|CHAPTER|SECTION):[^\]\n]{0,120}\]', re.I)
+_JSON_WRAPPER_RE = re.compile(r'^\s*(\{[\s\S]*\}|\[[\s\S]*\])\s*$')
+_PURE_ID_TOKEN_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9\-\._/:=@#+]+$')
+# Content that is "substantive" when it contains natural-sentence markers:
+# full stop / question / exclamation, Chinese/English comma/semicolon, or a
+# CJK run of >= 6 characters — enough to read as a sentence rather than a raw
+# identifier list.  Template scaffolding ("[NOVEL:..] [FILE:..]"), raw JSON
+# dumps, and bare id/hash lines miss every one of these.
+_SENTENCE_MARK_RE = re.compile(r'[。．.!?！？]|\[?\d{2,}\]|\n\s*[-•]\s|[\u4e00-\u9fff]{4,}')
+
+
+def _has_substantive_content(content: str) -> bool:
+    """True when the body looks like it contains real (human-readable) content.
+
+    Used as the Day-2 quality-gate hook: auto-ingested records whose body
+    carries no sentence structure are the template/JSON/pure-id dumps that
+    polluted L9/L6 in the audit.
+    """
+    c = (content or "").strip()
+    if len(c) < 20:
+        return False
+    if _TEMPLATE_MARKERS_RE.search(c):
+        return bool(_SENTENCE_MARK_RE.search(c))
+    stripped = c.lstrip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        return False
+    return bool(_SENTENCE_MARK_RE.search(c)) or bool(re.search(r'[。．.!?！？,;，；]', c))
+
+def _extract_readable_from_json(text: str) -> str | None:
+    """Try to humanize a JSON dump into a short natural sentence."""
+    try:
+        obj = json.loads(text)
+    except Exception:
+        return None
+    if isinstance(obj, dict):
+        for k in ("topic", "title", "subject", "name", "summary", "description"):
+            v = obj.get(k)
+            if isinstance(v, str) and v.strip():
+                base = " ".join(v.strip().split())
+                for k2 in ("message", "body", "content", "text", "detail", "conclusion"):
+                    v2 = obj.get(k2)
+                    if isinstance(v2, str) and v2.strip() and v2.strip() != base:
+                        tail = " ".join(v2.strip().split())
+                        return f"{base}：{tail[:100]}"[:140]
+                return base[:140]
+        parts = []
+        for k, v in list(obj.items())[:5]:
+            if k in ("timestamp", "ts", "time", "id", "version", "meta", "metadata"):
+                continue
+            if isinstance(v, str) and v.strip():
+                parts.append(f"{k}={v.strip()[:40]}")
+            elif isinstance(v, (int, float, bool)):
+                parts.append(f"{k}={v}")
+        if parts:
+            return "，".join(parts)[:140]
+    if isinstance(obj, list):
+        texts = []
+        for it in obj[:6]:
+            if isinstance(it, dict):
+                for k in ("text", "content", "message", "title", "name"):
+                    if isinstance(it.get(k), str) and it[k].strip():
+                        texts.append(it[k].strip()); break
+            elif isinstance(it, str) and it.strip():
+                texts.append(it.strip())
+        joined = "；".join(t for t in texts if t).strip()
+        if joined:
+            return joined[:160]
+    return None
+
+def _is_human_readable_content(content: str) -> tuple[bool, str]:
+    c = (content or "").strip()
+    if not c:
+        return False, "empty"
+    if len(c) < 12:
+        return False, "too_short"
+    # pure json wrapper
+    if _JSON_WRAPPER_RE.match(c):
+        if _extract_readable_from_json(c):
+            return False, "json_dump_extractable"
+        return False, "json_dump_unextractable"
+    # template markers without natural sentence
+    if _TEMPLATE_MARKER_RE.search(c):
+        if not re.search(r'[。！？.!?]', c):
+            return False, "template_marker_no_sentence"
+    # pure identifiers / paths / hashes
+    tokens = c.replace('\n', ' ').split()
+    if tokens and len(tokens) >= 3 and all(_PURE_ID_TOKEN_RE.match(t) for t in tokens):
+        if not re.search(r'[\u4e00-\u9fff]', c):
+            alpha_words = [t for t in tokens if re.fullmatch(r"[A-Za-z][A-Za-z'\-]{1,30}[,.!?;:]?", t)]
+            has_sentence = bool(re.search(r'[.!?;:]', c))
+            long_hex = sum(1 for t in tokens if re.fullmatch(r'[A-Fa-f0-9\-]{8,}', t.strip(',.!?;:')))
+            if not (len(alpha_words) >= max(3, int(len(tokens) * 0.7)) and (has_sentence or len(c) >= 40) and long_hex == 0):
+                return False, "pure_identifiers"
+    # need some sentence-like structure or natural language for very short text
+    if not re.search(r'[，。；：！？、\n.!?;:]', c) and len(c) < 35 and not re.search(r'[\u4e00-\u9fff].{4,}', c):
+        return False, "no_sentence_structure"
+    return True, "ok"
+
+def _normalize_content_for_human_readability(content: str) -> tuple[str, bool, str]:
+    c = (content or "").strip()
+    if not c:
+        return c, False, "empty"
+    if not get_config("quality.auto_rewrite_enabled", True):
+        return c, False, "rewrite_disabled"
+    if _JSON_WRAPPER_RE.match(c):
+        s = _extract_readable_from_json(c)
+        if s and len(s.strip()) >= 8:
+            return s, True, "json_to_natural"
+        return c, False, "json_unextractable"
+    # trim template markers; keep substantive body
+    if _TEMPLATE_MARKER_RE.search(c):
+        cleaned = _TEMPLATE_MARKER_RE.sub(' ', c)
+        cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned)
+        cleaned = re.sub(r' *\n *', '\n', cleaned).strip(' -:：')
+        if cleaned != c and cleaned:
+            ok, _reason = _is_human_readable_content(cleaned)
+            if ok or (len(cleaned) >= 20 and re.search(r'[\u4e00-\u9fff]{4,}|[A-Za-z]{4,}.*[.!?]|[。！？]', cleaned)):
+                return cleaned[:3000], True, "template_markers_stripped"
+        return c, False, "template_unextractable"
+    return c, False, "unchanged"
 
 
 def _capture_normalize_and_validate(
@@ -982,23 +1193,134 @@ def _capture_inject_metadata(
     return data
 
 
+
+def _ensure_metadata_dict(data: MemoryInput) -> dict:
+    meta = getattr(data, "metadata", None)
+    if isinstance(meta, dict):
+        return meta
+    if isinstance(meta, str) and meta.strip():
+        try:
+            obj = json.loads(meta)
+            if isinstance(obj, dict):
+                data.metadata = obj
+                return obj
+        except Exception:
+            pass
+    data.metadata = {}
+    return data.metadata
+
+
+
+def _slot_key_for_memory(data: MemoryInput, content: str) -> str | None:
+    """Phase 2 rules-first slot key for state/decision/config-like memories.
+    Returns None when no stable slot can be inferred (avoid noisy conflicts)."""
+    subj = (getattr(data, "subject", "") or "").strip()
+    proj = (getattr(data, "project", "") or "").strip()
+    cat = (getattr(data, "category", "") or "").strip()
+    low = content.lower()
+    # State/config signals
+    if any(k in content for k in ["端口", "port", "地址", "url", "路径", "path", "配置", "config", "密码", "key", "token", "账号", "环境变量", "host", "数据库"]):
+        base = re.sub(r"\s+", "_", subj)[:60] if subj else (re.sub(r"\s+", "_", proj)[:40] if proj else None)
+        if not base:
+            # use first key-like token
+            m = re.search(r"([A-Za-z_][A-Za-z0-9_.:-]{1,40}|[\u4e00-\u9fff]{2,12}(?:配置|端口|地址|路径|账号|密码|key|token))", content)
+            base = re.sub(r"\s+", "_", m.group(1))[:60] if m else None
+        return f"slot:config:{base}" if base else "slot:config:generic"
+    # Decision signals
+    if any(k in content for k in ["决定", "决策", "选型", "采用", "使用", "方案", "architecture", "decision", "choose", "选用"]):
+        base = re.sub(r"\s+", "_", (subj or proj or cat))[:60]
+        if base:
+            return f"slot:decision:{base}"
+    return None
+
+def _extract_machine_hints(data: MemoryInput) -> dict:
+    """Phase 2 machine-lite: cheap rule-based hints for consumption/routing. No LLM."""
+    content = (getattr(data, "content", "") or "").strip()
+    first = re.split(r"[。！？!?\n]", content, maxsplit=1)[0].strip()
+    summary = first[:120] if first else content[:120]
+    slot_key = _slot_key_for_memory(data, content)
+    hints = {
+        "summary_hint": summary,
+        "memory_type_hint": getattr(data, "category", None) or "general",
+        "slot_key_guess": slot_key,  # backward compat
+        "slot_key": slot_key,
+        "entities_hint": [],
+        "topic_hint": getattr(data, "project", None) or getattr(data, "category", None) or "general",
+        "provenance": {
+            "source": (getattr(data, "metadata", {}) or {}).get("source") if isinstance(getattr(data, "metadata", None), dict) else "capture_api",
+            "agent_name": getattr(data, "agent_name", ""),
+            "owner": getattr(data, "owner", ""),
+        },
+        "_meta": {"version": 2, "extractor": "rules_phase2"},
+    }
+    if slot_key and slot_key.startswith("slot:config:"):
+        hints["memory_type_hint"] = "state"
+    elif slot_key and slot_key.startswith("slot:decision:"):
+        hints["memory_type_hint"] = "decision"
+    # naive entity tokens (Chinese/English words, capped)
+    toks = re.findall(r"[A-Za-z][A-Za-z0-9_.:-]{2,}|[\u4e00-\u9fff]{2,6}", content)
+    seen = []
+    for t in toks:
+        if t not in seen:
+            seen.append(t)
+        if len(seen) >= 8:
+            break
+    hints["entities_hint"] = seen
+    return hints
+
+def _build_capture_contract(mem_id: int, data: MemoryInput, quality_result: dict | None = None) -> "CaptureId":
+    meta = _ensure_metadata_dict(data)
+    q = quality_result or {}
+    if not q and isinstance(meta.get("quality"), dict):
+        qv = meta["quality"].get("value") or meta["quality"]
+        if isinstance(qv, dict):
+            q = qv
+    return CaptureId(
+        mem_id,
+        status="ok",
+        quality={
+            "score": q.get("score", q.get("avg")),
+            "gate": q.get("gate"),
+            "reasons": q.get("reasons", []),
+            "dimensions": q.get("dimensions", {}),
+            "avg": q.get("avg"),
+            "min": q.get("min"),
+        },
+        readability=meta.get("readability"),
+        ingest_mode=meta.get("ingest_mode") or "auto",
+        source_pipeline=meta.get("source_pipeline") or meta.get("source") or "capture_api",
+    )
+
 def _capture_inject_quality(
     data: MemoryInput, quality_result: dict, now: str
 ) -> MemoryInput:
-    """Inject quality scoring result into metadata."""
+    """Inject quality scoring result and contract fields into metadata."""
     quality_entry = {
         "value": quality_result,
-        "_meta": {"version": 1, "written_at": now},
+        "score": quality_result.get("score", quality_result.get("avg")),
+        "gate": quality_result.get("gate"),
+        "avg": quality_result.get("avg"),
+        "min": quality_result.get("min"),
+        "dimensions": quality_result.get("dimensions", {}),
+        "reasons": quality_result.get("reasons", []),
+        "_meta": {"version": 2, "written_at": now},
     }
     if isinstance(data.metadata, dict):
-        data.metadata["quality"] = quality_entry
+        meta = data.metadata
     else:
         try:
-            existing_meta = json.loads(data.metadata or "{}")
+            meta = json.loads(data.metadata or "{}")
         except json.JSONDecodeError:
-            existing_meta = {}
-        existing_meta["quality"] = quality_entry
-        data.metadata = existing_meta
+            meta = {}
+        if not isinstance(meta, dict):
+            meta = {}
+    meta["quality"] = quality_entry
+    meta.setdefault("ingest_mode", "auto")
+    # preserve explicit source_pipeline; default from source if absent
+    if not meta.get("source_pipeline"):
+        src = meta.get("source") or "capture_api"
+        meta["source_pipeline"] = src
+    data.metadata = meta
     return data
 
 
@@ -1021,6 +1343,115 @@ def _should_promote_level(
     if new_p and old_p:
         return priority[new] > priority[old]
     return lifecycle.get(new, 0) > lifecycle.get(old, 0)
+
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 MVP: Resolve Engine (rules-first, no LLM, no destructive rewrite)
+# Decisions: NOOP | MERGE | UPDATE | SUPERSEDE | CONFLICT | REVIEW
+# ---------------------------------------------------------------------------
+
+_RESOLVE_DECISIONS = {"NOOP", "MERGE", "UPDATE", "SUPERSEDE", "CONFLICT", "REVIEW"}
+
+def _resolve_slot_key(data: MemoryInput) -> str | None:
+    meta = _ensure_metadata_dict(data)
+    mh = meta.get("machine_hints") or {}
+    sk = mh.get("slot_key") or mh.get("slot_key_guess")
+    if sk:
+        return str(sk)
+    try:
+        hints = _extract_machine_hints(data)
+        meta["machine_hints"] = hints
+        return hints.get("slot_key")
+    except Exception:
+        return None
+
+def _find_active_slot_memory(conn, slot_key: str, agent_name: str, exclude_hash: str | None = None):
+    """Find most recent active memory for the same slot (same agent preferred)."""
+    try:
+        rows = conn.execute(
+            """SELECT id, content, content_hash, metadata, created_at, updated_at, memory_status
+               FROM memories
+               WHERE COALESCE(memory_status,'') != 'archived'
+               ORDER BY updated_at DESC LIMIT 200""",
+        ).fetchall()
+    except Exception:
+        return None
+    for r in rows:
+        try:
+            m = json.loads(r["metadata"] or "{}") if isinstance(r["metadata"], str) else (r["metadata"] or {})
+        except Exception:
+            m = {}
+        mh = m.get("machine_hints") or {}
+        sk = mh.get("slot_key") or mh.get("slot_key_guess") or m.get("slot_key")
+        if sk != slot_key:
+            continue
+        if exclude_hash and r["content_hash"] == exclude_hash:
+            continue
+        # prefer same agent, but allow cross-agent slot conflicts
+        return r
+    return None
+
+def _resolve_decision(conn, data: MemoryInput, h: str, now: str) -> dict:
+    """Rules-first resolver. Returns decision metadata; does not mutate history destructively."""
+    slot_key = _resolve_slot_key(data)
+    result = {
+        "decision": "NOOP",
+        "slot_key": slot_key,
+        "reason": "no_slot",
+        "target_id": None,
+        "version": 1,
+        "valid_from": now,
+        "invalid_at": None,
+    }
+    if not slot_key:
+        return result
+    existing = _find_active_slot_memory(conn, slot_key, data.agent_name or "", exclude_hash=h)
+    if not existing:
+        result.update({"decision": "NOOP", "reason": "new_slot"})
+        return result
+    # Compare content similarity cheaply
+    old = (existing["content"] or "").strip()
+    new = (data.content or "").strip()
+    if old == new:
+        result.update({"decision": "NOOP", "reason": "same_content", "target_id": existing["id"]})
+        return result
+    # Heuristic: if very similar length and high overlap -> MERGE/UPDATE; if contradictory keywords -> CONFLICT
+    try:
+        from difflib import SequenceMatcher
+        sim = SequenceMatcher(None, old[:500], new[:500]).ratio()
+    except Exception:
+        sim = 0.0
+    contradict = any(k in new for k in ["不再", "废弃", "改为", "替换为", "instead", "deprecated", "replaced", "不使用"]) and any(k in old for k in ["使用", "采用", "配置", "是", "为"])
+    if contradict:
+        decision = "SUPERSEDE" if sim < 0.92 else "UPDATE"
+    elif sim >= 0.88:
+        decision = "MERGE"
+    elif sim >= 0.55:
+        decision = "UPDATE"
+    else:
+        # same slot, different meaning: could be conflict; default REVIEW to be safe/non-destructive
+        decision = "CONFLICT" if slot_key.startswith("slot:config:") else "REVIEW"
+    result.update({"decision": decision, "reason": f"slot_match sim={sim:.2f}", "target_id": existing["id"], "similarity": round(sim, 3)})
+    return result
+
+def _apply_resolve_metadata(data: MemoryInput, resolution: dict, now: str) -> MemoryInput:
+    meta = _ensure_metadata_dict(data)
+    meta["resolve"] = {
+        "decision": resolution.get("decision"),
+        "slot_key": resolution.get("slot_key"),
+        "reason": resolution.get("reason"),
+        "target_id": resolution.get("target_id"),
+        "similarity": resolution.get("similarity"),
+        "version": resolution.get("version", 1),
+        "valid_from": resolution.get("valid_from", now),
+        "invalid_at": resolution.get("invalid_at"),
+        "_meta": {"engine": "rules_phase2", "version": 1},
+    }
+    if resolution.get("slot_key"):
+        meta["slot_key"] = resolution["slot_key"]
+    data.metadata = meta
+    return data
 
 
 def _capture_dedup_check(
@@ -1094,7 +1525,13 @@ def _capture_dedup_check(
             (existing["id"],),
         )
         conn.commit()
-        return existing["id"]
+        try:
+            _row = conn.execute("SELECT metadata FROM memories WHERE id=?", (existing["id"],)).fetchone()
+            _m = json.loads((_row["metadata"] if _row else "") or "{}") if _row else {}
+            _q = (_m.get("quality") or {}).get("value") if isinstance(_m.get("quality"), dict) else None
+            return _build_capture_contract(existing["id"], data, _q)
+        except Exception:
+            return CaptureId(existing["id"], status="dedup_hash")
 
     # ── Defect fix: semantic de-duplication (config-gated) ──
     # Exact-hash matching above misses near-duplicate memories that differ in
@@ -1123,7 +1560,13 @@ def _capture_dedup_check(
                     data.agent_name,
                     threshold,
                 )
-                return dup_id
+                try:
+                    _row = conn.execute("SELECT metadata FROM memories WHERE id=?", (dup_id,)).fetchone()
+                    _m = json.loads((_row["metadata"] if _row else "") or "{}") if _row else {}
+                    _q = (_m.get("quality") or {}).get("value") if isinstance(_m.get("quality"), dict) else None
+                    return _build_capture_contract(dup_id, data, _q)
+                except Exception:
+                    return CaptureId(dup_id, status="dedup_semantic")
 
     # L7 accumulate_key: same pattern corrected again → weight++
     if accumulate_key and data.level == "L7":
@@ -1145,7 +1588,13 @@ def _capture_dedup_check(
                 new_weight,
                 dup["id"],
             )
-            return dup["id"]
+            try:
+                _row = conn.execute("SELECT metadata FROM memories WHERE id=?", (dup["id"],)).fetchone()
+                _m = json.loads((_row["metadata"] if _row else "") or "{}") if _row else {}
+                _q = (_m.get("quality") or {}).get("value") if isinstance(_m.get("quality"), dict) else None
+                return _build_capture_contract(dup["id"], data, _q)
+            except Exception:
+                return CaptureId(dup["id"], status="dedup_accumulate")
 
     # L5 duplicate: same agent + subject → merge metadata, don't duplicate.
     # TERMINAL cards are excluded: a closed/cancelled card is history, not a
@@ -1188,7 +1637,13 @@ def _capture_dedup_check(
                     (json.dumps(merged, ensure_ascii=False), now, dup["id"]),
                 )
                 conn.commit()
-                return dup["id"]
+                try:
+                    _row = conn.execute("SELECT metadata FROM memories WHERE id=?", (dup["id"],)).fetchone()
+                    _m = json.loads((_row["metadata"] if _row else "") or "{}") if _row else {}
+                    _q = (_m.get("quality") or {}).get("value") if isinstance(_m.get("quality"), dict) else None
+                    return _build_capture_contract(dup["id"], data, _q)
+                except Exception:
+                    return CaptureId(dup["id"], status="dedup", ingest_mode=(getattr(data,"metadata",{}) or {}).get("ingest_mode") if isinstance(getattr(data,"metadata",None),dict) else "auto")
     return None
 
 
@@ -1483,11 +1938,27 @@ def _capture_post_insert(conn, mem_id: int, data: MemoryInput, h: str) -> None:
 
 
 def _capture_write_once(conn, data: MemoryInput, h: str, now: str,
-                        accumulate_key) -> int:
+                        accumulate_key) -> "CaptureId":
     """One attempt at the write half of capture: dedup → identity → insert."""
     existing_id = _capture_dedup_check(conn, data, h, now, accumulate_key)
     if existing_id is not None:
         return existing_id
+    # Phase 2: resolve slot/state/decision conflicts (rules-first, non-destructive metadata)
+    try:
+        if not get_config("capture.resolve_enabled", True):
+            raise RuntimeError("_resolve_disabled")
+        _resolution = _resolve_decision(conn, data, h, now)
+        data = _apply_resolve_metadata(data, _resolution, now)
+        if _resolution.get("decision") in ("SUPERSEDE","UPDATE","CONFLICT","REVIEW","MERGE") and _resolution.get("target_id"):
+            _m = _ensure_metadata_dict(data)
+            _m.setdefault("_resolve_target_id", _resolution["target_id"])
+            _m.setdefault("_resolve_decision", _resolution.get("decision"))
+            data.metadata = _m
+    except RuntimeError as _e:
+        if str(_e) != "_resolve_disabled":
+            logger.debug("capture: resolve engine skipped: %s", _e)
+    except Exception as _e:
+        logger.debug("capture: resolve engine skipped: %s", _e)
 
     _capture_prepare_identity(conn, data)
 
@@ -1501,6 +1972,41 @@ def _capture_write_once(conn, data: MemoryInput, h: str, now: str,
         data.thread_id = _infer_thread_root(conn, data, now)
 
     mem_id = _capture_insert_row(conn, data, h, now)
+    # Phase 2: apply resolve side effects (non-destructive): edges + validity hints
+    try:
+        _meta_r = data.metadata if isinstance(data.metadata, dict) else (json.loads(data.metadata) if isinstance(data.metadata, str) and data.metadata.strip().startswith('{') else {})
+        _res = (_meta_r or {}).get('resolve') or {}
+        _dec = _res.get('decision')
+        _tid = _res.get('target_id')
+        if _dec and _tid and _dec in ('SUPERSEDE','UPDATE','CONFLICT','MERGE','REVIEW'):
+            _rel = {'SUPERSEDE':'supersedes','UPDATE':'updates','CONFLICT':'contradicts','MERGE':'refines','REVIEW':'refines'}.get(_dec,'refines')
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO edges (source_id,target_id,relation_type,weight,created_at,metadata,valid_from) VALUES (?,?,?,?,?,?,?)",
+                    (mem_id, int(_tid), _rel, 1.0, now, json.dumps({'source':'resolve_engine','decision':_dec}, ensure_ascii=False), now),
+                )
+            except Exception:
+                try:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO edges (source_id,target_id,relation_type,weight,created_at,metadata) VALUES (?,?,?,?,?,?)",
+                        (mem_id, int(_tid), _rel, 1.0, now, json.dumps({'source':'resolve_engine','decision':_dec}, ensure_ascii=False)),
+                    )
+                except Exception:
+                    pass
+            if _dec == 'SUPERSEDE':
+                try:
+                    conn.execute("UPDATE memories SET valid_from=COALESCE(valid_from,?), updated_at=? WHERE id=?", (now, now, mem_id))
+                    conn.execute("UPDATE memories SET invalid_at=?, updated_at=? WHERE id=? AND (invalid_at IS NULL OR invalid_at='')", (now, now, int(_tid)))
+                except Exception:
+                    pass
+            elif _dec == 'CONFLICT':
+                try:
+                    # do not overwrite lifecycle status; mark in metadata only (already done)
+                    conn.execute("UPDATE memories SET updated_at=? WHERE id=?", (now, mem_id))
+                except Exception:
+                    pass
+    except Exception as _e:
+        logger.debug("capture: resolve side effects skipped: %s", _e)
     _capture_post_insert(conn, mem_id, data, h)
 
     # Contextual recall: after storing a memory, check for related high-level
@@ -1511,7 +2017,7 @@ def _capture_write_once(conn, data: MemoryInput, h: str, now: str,
         except Exception as e:
             logger.warning(f"Contextual recall failed: {e}", exc_info=True)
 
-    return mem_id
+    return _build_capture_contract(mem_id, data)
 
 
 def _is_lock_error(exc: BaseException) -> bool:
@@ -1521,7 +2027,7 @@ def _is_lock_error(exc: BaseException) -> bool:
 
 def capture(
     data: MemoryInput | dict | str, accumulate_key: str | None = None, **overrides
-) -> int:
+) -> "CaptureId":
     data = _capture_normalize_and_validate(data, **overrides)
 
     # ── Defect fix: project must never be empty ──
@@ -1539,6 +2045,69 @@ def capture(
     # Write deny-list (security.disabled_projects / disabled_agents).  Runs
     # AFTER project inference so an inferred project can also be blocked.
     _capture_check_disabled(data)
+
+    # --- Day1 readability: detect + rewrite + log (no hard reject yet) ---
+    try:
+        _ingest_mode = "auto"
+        _meta_obj = None
+        if isinstance(getattr(data, "metadata", None), dict):
+            _meta_obj = data.metadata
+            _ingest_mode = _meta_obj.get("ingest_mode") or "auto"
+        elif isinstance(getattr(data, "metadata", None), str):
+            try:
+                _meta_obj = json.loads(data.metadata)
+                if isinstance(_meta_obj, dict):
+                    _ingest_mode = _meta_obj.get("ingest_mode") or "auto"
+            except Exception:
+                _meta_obj = None
+        # Treat capture() calls without explicit manual marker as auto by default
+        # (MCP/pipeline/scheduler are the primary auto paths).
+        _ok_read, _r_reason = _is_human_readable_content(data.content or "")
+        _readability = {"ok": bool(_ok_read), "normalized": False, "reason": _r_reason}
+        if not _ok_read:
+            _ncontent, _changed, _n_reason = _normalize_content_for_human_readability(data.content or "")
+            if _changed and _ncontent and len(_ncontent.strip()) >= 12:
+                _orig_len = len((data.content or ""))
+                data.content = _ncontent
+                _readability = {"ok": True, "normalized": True, "reason": _n_reason, "original_len": _orig_len}
+                logger.info(
+                    "capture: readability normalized reason=%s ingest=%s agent=%s cat=%s orig_len=%d new_len=%d",
+                    _n_reason, _ingest_mode, data.agent_name, data.category, _orig_len, len(_ncontent),
+                )
+            else:
+                logger.warning(
+                    "capture: unreadable content reason=%s ingest=%s agent=%s cat=%s preview=%r",
+                    _r_reason, _ingest_mode, data.agent_name, data.category, (data.content or "")[:100],
+                )
+                # Day1: log-only. Future: reject when quality.auto_reject_unreadable and auto.
+    except Exception as _e:
+        logger.debug("capture: readability precheck skipped: %s", _e)
+        _ingest_mode = "auto"
+    # Ensure ingest_mode/source_pipeline/readability are always persisted for observability.
+    try:
+        _im = locals().get('_ingest_mode') or 'auto'
+        _meta = getattr(data, 'metadata', None)
+        _mobj = None
+        if isinstance(_meta, dict):
+            _mobj = _meta
+        elif isinstance(_meta, str) and _meta.strip():
+            try:
+                _pj = json.loads(_meta)
+                if isinstance(_pj, dict):
+                    _mobj = _pj
+            except Exception:
+                _mobj = None
+        if _mobj is None:
+            _mobj = {}
+        _mobj.setdefault('ingest_mode', _im)
+        _mobj.setdefault('source_pipeline', _mobj.get('source') or 'capture_api')
+        _rb = locals().get('_readability') or ( _meta_obj.get('readability') if isinstance(locals().get('_meta_obj'), dict) else None)
+        if _rb:
+            _mobj.setdefault('readability', _rb)
+        data.metadata = _mobj
+    except Exception as _e:
+        logger.debug('capture: ingest_mode metadata set skipped: %s', _e)
+    # --- end Day1 readability ---
 
     now = datetime.now(timezone.utc).isoformat()
     h = content_hash(data.content)
@@ -1580,6 +2149,23 @@ def capture(
 
     quality_result = _score_quality(data, h, caller_subject=caller_subject)
     quality_gate = quality_result.get("gate", "accepted")
+
+    # Day2: on review, try one rewrite pass (idempotent) and re-score.
+    if quality_gate == "review" and get_config("quality.auto_rewrite_enabled", True):
+        try:
+            _nc2, _ch2, _nr2 = _normalize_content_for_human_readability(data.content or "")
+            if _ch2 and _nc2 and len(_nc2.strip()) >= 12 and _nc2 != (data.content or ""):
+                _orig2 = data.content or ""
+                data.content = _nc2
+                h = content_hash(data.content)
+                quality_result = _score_quality(data, h, caller_subject=caller_subject)
+                quality_gate = quality_result.get("gate", "accepted")
+                logger.info(
+                    "capture: review rewrite -> gate=%s reason=%s agent=%s",
+                    quality_gate, _nr2, data.agent_name,
+                )
+        except Exception as _e:
+            logger.debug("capture: review rewrite skipped: %s", _e)
 
     if quality_gate == "rejected":
         raise ValueError(
@@ -1825,6 +2411,7 @@ def unified_search(arguments: dict) -> str:
             category=arguments.get("category"),
             project=arguments.get("project"),
             level=arguments.get("level"),
+            source_pipeline=arguments.get("source_pipeline"),
             occurred_at=arguments.get("occurred_at"),
             from_occurred_at=arguments.get("from_occurred_at"),
             to_occurred_at=arguments.get("to_occurred_at"),
@@ -1840,6 +2427,7 @@ def unified_search(arguments: dict) -> str:
                 "level": m.level,
                 "owner": m.owner,
                 "agent_name": m.agent_name,
+                **_cognitive_item_from_meta(getattr(m, "metadata", "{}"), valid_from=getattr(m, "valid_from", ""), invalid_at=getattr(m, "invalid_at", ""), memory_status=getattr(m, "memory_status", "")),
             }
             for m in result["results"]
         ]
@@ -1873,6 +2461,7 @@ def unified_search(arguments: dict) -> str:
             "occurred_at": arguments.get("occurred_at"),
             "from_occurred_at": arguments.get("from_occurred_at"),
             "to_occurred_at": arguments.get("to_occurred_at"),
+            "source_pipeline": arguments.get("source_pipeline"),
             "include_content": True,
         }
         retrieve_args = {k: v for k, v in retrieve_args.items() if v is not None}
@@ -1882,11 +2471,13 @@ def unified_search(arguments: dict) -> str:
             return json.dumps({"query": query, "mode": "direct", "results": [], "total": 0})
         if isinstance(result, list):
             items = [{"memory_id": r.id, "content": r.content[:200], "subject": r.subject,
-                      "category": r.category, "level": r.level, "owner": r.owner, "agent_name": r.agent_name}
+                      "category": r.category, "level": r.level, "owner": r.owner, "agent_name": r.agent_name,
+                      **_cognitive_item_from_meta(getattr(r, "metadata", "{}"), valid_from=getattr(r, "valid_from", ""), invalid_at=getattr(r, "invalid_at", ""), memory_status=getattr(r, "memory_status", ""))}
                      for r in result]
         else:
             items = [{"memory_id": result.id, "content": result.content[:200], "subject": result.subject,
-                      "category": result.category, "level": result.level, "owner": result.owner, "agent_name": result.agent_name}]
+                      "category": result.category, "level": result.level, "owner": result.owner, "agent_name": result.agent_name,
+                      **_cognitive_item_from_meta(getattr(result, "metadata", "{}"), valid_from=getattr(result, "valid_from", ""), invalid_at=getattr(result, "invalid_at", ""), memory_status=getattr(result, "memory_status", ""))}]
         items = _seen_postprocess(items, arguments, top_k=top_k)
         return json.dumps({"query": query, "mode": "direct", "results": items, "total": len(items)},
                            ensure_ascii=False)
@@ -1905,6 +2496,7 @@ def unified_search(arguments: dict) -> str:
             "occurred_at": arguments.get("occurred_at"),
             "from_occurred_at": arguments.get("from_occurred_at"),
             "to_occurred_at": arguments.get("to_occurred_at"),
+            "source_pipeline": arguments.get("source_pipeline"),
             "include_content": True,
         }
         retrieve_args = {k: v for k, v in retrieve_args.items() if v is not None}
@@ -1914,11 +2506,13 @@ def unified_search(arguments: dict) -> str:
             return json.dumps({"query": query, "mode": "fts5", "results": [], "total": 0})
         if isinstance(result, list):
             items = [{"memory_id": r.id, "content": r.content[:200], "subject": r.subject,
-                      "category": r.category, "level": r.level, "owner": r.owner, "agent_name": r.agent_name}
+                      "category": r.category, "level": r.level, "owner": r.owner, "agent_name": r.agent_name,
+                      **_cognitive_item_from_meta(getattr(r, "metadata", "{}"), valid_from=getattr(r, "valid_from", ""), invalid_at=getattr(r, "invalid_at", ""), memory_status=getattr(r, "memory_status", ""))}
                      for r in result]
         else:
             items = [{"memory_id": result.id, "content": result.content[:200], "subject": result.subject,
-                      "category": result.category, "level": result.level, "owner": result.owner, "agent_name": result.agent_name}]
+                      "category": result.category, "level": result.level, "owner": result.owner, "agent_name": result.agent_name,
+                      **_cognitive_item_from_meta(getattr(result, "metadata", "{}"), valid_from=getattr(result, "valid_from", ""), invalid_at=getattr(result, "invalid_at", ""), memory_status=getattr(result, "memory_status", ""))}]
         items = _seen_postprocess(items, arguments, top_k=top_k)
         return json.dumps({"query": query, "mode": "fts5", "results": items, "total": len(items)},
                            ensure_ascii=False)
@@ -1937,6 +2531,7 @@ def unified_search(arguments: dict) -> str:
             # Session identity is the viewer; an explicit content filter must
             # come from agent_name_filter (see the hybrid branch below).
             agent_name=arguments.get("agent_name_filter"),
+            source_pipeline=arguments.get("source_pipeline"),
             viewer=arguments.get("viewer") or arguments.get("agent_name"),
         )
         if wants_enhancements:
@@ -1965,6 +2560,7 @@ def unified_search(arguments: dict) -> str:
         # nothing back unless they happened to have authored it themselves.
         # An explicit content filter must come from `agent_name_filter`.
         agent_name=arguments.get("agent_name_filter"),
+        source_pipeline=arguments.get("source_pipeline"),
         rerank=arguments.get("rerank", False),
         viewer=arguments.get("viewer") or arguments.get("agent_name"),
     )
@@ -2305,6 +2901,12 @@ def _build_retrieve_where(conn, query, viewer, filters) -> tuple[list, list, boo
         if val:
             where.append(f"memories.{key} = ?")
             params.append(val)
+
+    # Knowledge Base / source pipeline filter (e.g., document.import vs conversation.capture)
+    source_pipeline = filters.get("source_pipeline")
+    if source_pipeline:
+        where.append("json_extract(memories.metadata, '$.source_pipeline') = ?")
+        params.append(source_pipeline)
 
     # NOTE: ``viewer`` deliberately does NOT become an author filter.
     # It used to: "when a viewer identifies itself but no explicit
@@ -3224,6 +3826,7 @@ def smart_store(
                     project=project,
                     category=category,
                     level=level,
+                    metadata=json.dumps({"ingest_mode": "auto", "source_pipeline": "smart_store"}),
                 )
             )
         except ValueError as e:
@@ -3231,7 +3834,14 @@ def smart_store(
             result = {"id": None, "status": "rejected", "reason": str(e)}
             dispatch_lifecycle(HOOK_POST_STORE, result=result)
             return result
-        result = {"id": mid, "status": "new"}
+        _st = getattr(mid, "status", "new")
+        if _st in ("ok",): _st = "new"
+        result = {"id": int(mid), "status": _st}
+        if hasattr(mid, "to_dict"):
+            d = mid.to_dict()
+            if d.get("quality"): result["quality"] = d["quality"]
+            for k in ("readability","ingest_mode","source_pipeline"):
+                if d.get(k) is not None: result[k] = d[k]
         dispatch_lifecycle(HOOK_POST_STORE, result=result)
         return result
 
@@ -3245,6 +3855,13 @@ def store_batch(items: list) -> dict:
     errors = []
     for item in items:
         try:
+            _meta = item.get("metadata") or {}
+            if isinstance(_meta, str):
+                try: _meta = json.loads(_meta)
+                except Exception: _meta = {}
+            _meta = dict(_meta) if isinstance(_meta, dict) else {}
+            _meta.setdefault("ingest_mode", "batch")
+            _meta.setdefault("source_pipeline", "store_batch")
             mid = capture(
                 MemoryInput(
                     content=item.get("content", ""),
@@ -3254,9 +3871,10 @@ def store_batch(items: list) -> dict:
                     project=item.get("project", ""),
                     category=item.get("category", "general"),
                     level=item.get("level", "P2"),
+                    metadata=json.dumps(_meta, ensure_ascii=False),
                 )
             )
-            ids.append(mid)
+            ids.append(int(mid))
         except ValueError as e:
             logger.warning("store_batch: item skipped — %s", e)
             errors.append({"content": item.get("content", "")[:40], "reason": str(e)})

@@ -8,6 +8,7 @@ ended_at TEXT, memory_count INTEGER, summary TEXT, status TEXT)
 """
 
 import logging
+from memall.core.kb_policy import KB_SOURCE_PIPELINES
 import sqlite3
 
 logger = logging.getLogger(__name__)
@@ -465,6 +466,23 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
         if auto_inject and agent_name:
             from memall.mcp.federation_tools import auto_inject as _auto_inject
             injection = _auto_inject(agent_name)
+            # KB evidence must not enter session continuity/user-state context
+            _kb_sp = set(KB_SOURCE_PIPELINES)
+            def _kb_exclude(lst):
+                out = []
+                for it in (lst or []):
+                    sp = ""
+                    md = it.get("metadata") or {}
+                    if isinstance(md, str):
+                        try: import json as _j; md = _j.loads(md)
+                        except Exception: md = {}
+                    sp = (md.get("source_pipeline") or it.get("source_pipeline") or "").strip()
+                    if sp in _kb_sp: continue
+                    if (it.get("category") or "") == "knowledge" and sp.startswith("document."): continue
+                    out.append(it)
+                return out
+            injection["l4_recent_global"] = _kb_exclude(injection.get("l4_recent_global", []))
+            injection["l5_active_global"] = _kb_exclude(injection.get("l5_active_global", []))
             result["injection"] = injection
 
             result["l4_recent"] = injection.get("l4_recent_global", [])
@@ -481,6 +499,14 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                     (agent_name,),
                 ).fetchone()
                 if last_cat and last_cat["category"]:
+                    try:
+                        from memall.core.kb_policy import kb_sql_exclusion_clauses
+                        _kb_l3 = " AND ".join(kb_sql_exclusion_clauses())
+                    except Exception:
+                        _kb_l3 = (
+                            "COALESCE(json_extract(metadata, '$.source_pipeline'), '') NOT IN ('document.import', 'kb_ingest') "
+                            "AND NOT (COALESCE(category,'')='knowledge' AND COALESCE(json_extract(metadata, '$.source_pipeline'),'') LIKE 'document.%')"
+                        )
                     l3_rows = conn.execute(
                         "SELECT id, subject, summary, content FROM memories "
                         "WHERE level = 'L3' AND category = ? "
@@ -488,6 +514,7 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                         "  json_extract(metadata, '$.scope') IN ('family', 'shared')"
                         "  OR (COALESCE(json_extract(metadata, '$.scope'), 'agent') = 'agent' AND agent_name = ?)"
                         ") "
+                        f"AND {_kb_l3} "
                         "ORDER BY created_at DESC LIMIT 2",
                         (last_cat["category"], agent_name),
                     ).fetchall()
@@ -779,6 +806,37 @@ def session_end(session_id: str, auto_extract: bool = False) -> dict:
             extraction = _auto_extract(session_id)
             result["extraction"] = extraction
 
+        # P1: continuity extraction hook (validity-aware state -> capture/resolve)
+        try:
+            from memall.core.thin_waist import capture, MemoryInput
+            cont = build_continuity_pack(agent_name=agent_name or "", viewer=agent_name or "", project="", limit=8)
+            decisions = cont.get("key_decisions") or []
+            if decisions or cont.get("active_memories"):
+                lines = []
+                for d in decisions[:5]:
+                    sk = d.get("slot_key", "")
+                    pref = d.get("preference", "")
+                    if sk or pref:
+                        lines.append(f"- {sk}: {pref}".strip())
+                summary = f"[continuity] session_end {session_id[:12] if session_id else ''} agent={agent_name or ''}"
+                if lines:
+                    summary += "\n" + "\n".join(lines)
+                try:
+                    capture(MemoryInput(
+                        content=summary[:2000],
+                        category="continuity",
+                        level="L4",
+                        agent_name=agent_name or "",
+                        subject=f"continuity:{agent_name or 'agent'}:{(session_id or '')[:8]}",
+                        metadata='{"source":"session_end","session_id":"' + (session_id or '') + '","continuity_pack":true,"ingest_mode":"continuity_extract","source_pipeline":"session.end","quality_gate":"bypass"}',
+                    ))
+                    result["continuity_captured"] = True
+                except Exception as _ice:
+                    # Quality gate may reject short continuity; non-fatal
+                    result["continuity_capture_skipped"] = str(_ice)[:200]
+        except Exception as _ce:
+            result["continuity_capture_error"] = str(_ce)
+
         # ── Correction compliance check ──
         # Log whether the session agent has STRONG corrections it should have followed
         try:
@@ -1018,5 +1076,167 @@ def session_summary(session_id: str = None, agent_name: str = None, limit: int =
                 "status": r["status"],
             })
         return {"sessions": sessions, "total": len(sessions)}
+    finally:
+        conn.close()
+
+
+# ── Continuity Pack (P1, validity-aware cross-session state) ──────────────
+
+def build_continuity_pack(
+    agent_name: str = "",
+    viewer: str = "",
+    project: str = "",
+    limit: int = 12,
+    include_conflicts: bool = False,
+) -> dict:
+    """Validity-aware cross-session continuity state (read-only, P1).
+
+    Returns a compact "working set" of the agent's recent active state:
+    - active memories (not superseded, not conflict/review by default)
+    - key decisions / preferences extracted from metadata.resolve
+    - project state / scope markers from categorized memories
+
+    Does NOT return raw chat replay. Only validity-aware continuity state.
+    KB entries are not conflated with user state (strong provenance preserved).
+    """
+    from memall.core.db import get_conn
+    from memall.core.thin_waist import _row_meta_dict, _cognitive_item_from_meta
+
+    conn = get_conn()
+    try:
+        now_ts = datetime.now(timezone.utc).isoformat()
+
+        base_where = ["1=1"]
+        base_params = []
+
+        if agent_name:
+            base_where.append("agent_name = ?")
+            base_params.append(agent_name)
+        if project:
+            base_where.append("project = ?")
+            base_params.append(project)
+
+        # Exclude archived/superseded by default; keep CONFLICT/REVIEW out unless requested.
+        # KB entries (document.import/knowledge provenance) are evidence, not user state:
+        # continuity packs must not conflate them with preferences/decisions.
+        base_where.append("(memory_status IS NULL OR memory_status NOT IN ('archived','superseded','deleted'))")
+        try:
+            from memall.core.kb_policy import kb_sql_exclusion_clauses
+            base_where.extend(kb_sql_exclusion_clauses())
+        except Exception:
+            # kb_policy-equivalent fallback (no import): exclude KB source pipelines and document-provenance knowledge
+            _kbm = "COALESCE(json_extract(metadata,'$.source_pipeline'),'')"
+            base_where.append(f"{_kbm} NOT IN ('document.import','kb_ingest')")
+            base_where.append(f"NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')")
+        if not include_conflicts:
+            base_where.append("(memory_status IS NULL OR (memory_status NOT LIKE '%CONFLICT%' AND memory_status NOT LIKE '%REVIEW%'))")
+
+        where = " AND ".join(base_where)
+
+        rows = conn.execute(
+            f"SELECT id, content, subject, category, level, agent_name, project, "
+            f"created_at, metadata, valid_from, invalid_at, memory_status "
+            f"FROM memories WHERE {where} ORDER BY created_at DESC LIMIT ?",
+            base_params + [max(1, min(int(limit), 100))],
+        ).fetchall()
+
+        active_memories = []
+        slot_prefs = {}
+        proj_state = {}
+        unresolved = []
+
+        for r in rows:
+            keys = r.keys() if hasattr(r, "keys") else []
+            def _gv(k, d=""):
+                try: return r[k] if k in keys else d
+                except Exception: return d
+            meta_raw = _gv("metadata", "{}")
+            cog = _cognitive_item_from_meta(
+                meta_raw,
+                valid_from=_gv("valid_from", ""),
+                invalid_at=_gv("invalid_at", ""),
+                memory_status=_gv("memory_status", ""),
+            )
+            mem = {
+                "id": _gv("id"),
+                "content": (_gv("content", "") or "")[:200],
+                "subject": _gv("subject", "") or "",
+                "category": _gv("category", "") or "",
+                "level": _gv("level", "") or "",
+                "agent_name": _gv("agent_name", "") or "",
+                "project": _gv("project", "") or "",
+                "created_at": (_gv("created_at", "") or "")[:19],
+                "memory_status": _gv("memory_status", ""),
+                "slot_key": cog.get("slot_key", ""),
+                "resolve_status": cog.get("resolve_status", ""),
+                "resolve": cog.get("resolve", {}),
+                "valid_from": cog.get("valid_from", ""),
+                "invalid_at": cog.get("invalid_at", ""),
+            }
+            active_memories.append(mem)
+
+            rs = mem.get("resolve_status", "")
+            rw = mem.get("resolve", {}) or {}
+            sk = mem.get("slot_key", "")
+            if rs and rs != "NOOP" and sk and isinstance(rw, dict):
+                slot_prefs[sk] = {
+                    "slot_key": sk,
+                    "status": rs,
+                    "preference": rw.get("preference", rw.get("decision", rw.get("value", ""))),
+                    "evidence": rw.get("evidence", rw.get("reason", "")),
+                    "memory_id": mem["id"],
+                }
+
+            ms = mem.get("memory_status", "") or ""
+            if include_conflicts and ("CONFLICT" in ms or "REVIEW" in ms):
+                unresolved.append({
+                    "id": mem["id"], "subject": mem["subject"],
+                    "memory_status": ms, "slot_key": sk, "created_at": mem["created_at"],
+                })
+
+            cat = mem.get("category", "")
+            subj = mem.get("subject", "")
+            if cat and subj:
+                proj_state.setdefault(cat, []).append({
+                    "subject": subj, "memory_id": mem["id"], "created_at": mem["created_at"],
+                })
+
+        _active = active_memories
+        _decisions = list(slot_prefs.values())
+        _conflicts = unresolved
+        _pending = [m for m in _active if (m.get("resolve_status") or "") in ("REVIEW", "PENDING", "CONFLICT")]
+        _recent_supersedes = [m for m in _active if (m.get("memory_status") or "").lower().find("supersed") >= 0]
+        try:
+            from memall.core.kb_policy import KB_SOURCE_PIPELINES as _KB_SPS
+            _excluded_sps = list(_KB_SPS)
+        except Exception:
+            _excluded_sps = ["document.import", "kb_ingest"]
+        _why = {
+            "filters": ["validity_aware", "kb_excluded", "non_archived", "agent/project scoped"],
+            "kb_excluded": True,
+            "excluded_source_pipelines": _excluded_sps,
+        }
+        return {
+            # ADR 0028 P1 contract
+            "active_state": _active,
+            "conflicts": _conflicts,
+            "pending_decisions": _pending,
+            "recent_supersedes": _recent_supersedes,
+            "why_selected": _why,
+            "kb_excluded": True,
+            "excluded_source_pipelines": _why["excluded_source_pipelines"],
+            # Back-compat aliases
+            "active_memories": _active,
+            "key_decisions": _decisions,
+            "open_reviews": _conflicts,
+            "project_state": proj_state,
+            "viewer": viewer or agent_name or "",
+            "agent_name": agent_name,
+            "project": project,
+            "build_ts": now_ts,
+            "total_active": len(_active),
+            "total_decisions": len(_decisions),
+            "mode": "validity_aware_continuity_pack",
+        }
     finally:
         conn.close()

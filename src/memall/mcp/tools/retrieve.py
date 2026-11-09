@@ -2,8 +2,41 @@ import logging
 import json
 from memall.core.thin_waist import retrieve, vector_search, hybrid_search
 from memall.core.db import get_conn
+from memall.core.kb_policy import KB_SOURCE_PIPELINES, source_kind_from_pipeline
 from memall.search.intent_router import classify, resolve_mode
 logger = logging.getLogger(__name__)
+
+def _meta_dict(meta_raw):
+    if isinstance(meta_raw, dict):
+        return meta_raw
+    if not meta_raw:
+        return {}
+    try:
+        d = json.loads(meta_raw)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+def _source_kind_from_meta(meta: dict) -> str:
+    sp = (meta or {}).get("source_pipeline", "") or ""
+    return source_kind_from_pipeline(sp, meta)
+
+def _cognitive_fields(obj) -> dict:
+    """Additive Memory Cognitive Loop fields for MCP consumers (backward compatible)."""
+    meta = _meta_dict(getattr(obj, "metadata", None))
+    res = meta.get("resolve") if isinstance(meta.get("resolve"), dict) else {}
+    sp = meta.get("source_pipeline", "") or ""
+    return {
+        "slot_key": meta.get("slot_key") or "",
+        "resolve_status": res.get("decision") or res.get("status") or "",
+        "resolve": res,
+        "valid_from": getattr(obj, "valid_from", "") or "",
+        "invalid_at": getattr(obj, "invalid_at", "") or "",
+        "memory_status": getattr(obj, "memory_status", "") or "",
+        "metadata": meta,
+        "source_pipeline": sp,
+        "source_kind": _source_kind_from_meta(meta),
+    }
 
 # Enhancement flags shared by handle_retrieve / handle_unified_search.
 _ENHANCE_FLAGS = ("expand_query", "suggest", "explain", "cluster", "personalize", "context_boost")
@@ -40,6 +73,7 @@ def handle_retrieve(arguments: dict) -> str:
             "id": m.id, "content": m.content, "category": m.category,
             "level": m.level, "owner": m.owner, "agent_name": m.agent_name,
             "subject": m.subject, "occurred_at": m.occurred_at,
+            **_cognitive_fields(m),
         } for m in result["results"]]
         payload = {"results": items, "total": result.get("total", len(items))}
         for key in ("facets", "suggestions", "clusters", "explanations", "expanded_query"):
@@ -55,11 +89,13 @@ def handle_retrieve(arguments: dict) -> str:
             "id": r.id, "content": r.content, "category": r.category,
             "level": r.level, "owner": r.owner, "agent_name": r.agent_name,
             "subject": r.subject, "occurred_at": r.occurred_at,
+            **_cognitive_fields(r),
         } for r in result], ensure_ascii=False)
     return json.dumps({
         "id": result.id, "content": result.content, "category": result.category,
         "level": result.level, "owner": result.owner, "agent_name": result.agent_name,
         "subject": result.subject, "occurred_at": result.occurred_at,
+        **_cognitive_fields(result),
     }, ensure_ascii=False)
 
 
@@ -77,6 +113,7 @@ def handle_vector_search(arguments: dict) -> str:
         owner=arguments.get("owner"),
         project=arguments.get("project"),
         agent_name=arguments.get("agent_name"),
+        source_pipeline=arguments.get("source_pipeline"),
         # The adapter re-attaches the session identity; without handing it to
         # the trust filter every path could return other agents' rows.
         viewer=arguments.get("viewer") or arguments.get("agent_name") or "",
@@ -90,6 +127,7 @@ def handle_hybrid_search(arguments: dict) -> str:
     result = hybrid_search(
         query=arguments["query"],
         top_k=arguments.get("top_k", 10),
+        source_pipeline=arguments.get("source_pipeline"),
         rrf_k=arguments.get("rrf_k", 60),
         category=arguments.get("category"),
         level=arguments.get("level"),
@@ -159,16 +197,25 @@ def handle_recap(arguments: dict) -> str:
             logger.debug("recap: sessions lookup skipped", exc_info=True)
 
         # Recent decisions and open tasks (the working set an agent needs to
-        # resume).  Derived/distilled levels excluded so the recap is real
-        # observations, not the pipeline's own echoes.
+        # resume). Derived/distilled levels excluded so the recap is real
+        # observations, not the pipeline's own echoes. KB evidence is not
+        # user-state continuity (P2: kb_policy.kb_sql_exclusion_clauses).
         recent: list = []
-        mwhere = "WHERE level IN ('L4','L5') "
+        try:
+            from memall.core.kb_policy import kb_sql_exclusion_clauses
+            _kb_excl = " AND ".join(kb_sql_exclusion_clauses())
+        except Exception:
+            _kb_excl = (
+                "COALESCE(json_extract(metadata,'$.source_pipeline'),'') NOT IN ('document.import','kb_ingest') "
+                "AND NOT (COALESCE(category,'')='knowledge' AND COALESCE(json_extract(metadata,'$.source_pipeline'),'') LIKE 'document.%')"
+            )
+        mwhere = f"WHERE level IN ('L4','L5') AND {_kb_excl} "
         mparams: list = []
         if agent:
             mwhere += "AND agent_name = ? "
             mparams.append(agent)
         rows = conn.execute(
-            f"SELECT id, level, category, subject, summary, occurred_at "
+            f"SELECT id, level, category, subject, summary, occurred_at, metadata "
             f"FROM memories {mwhere} ORDER BY occurred_at DESC LIMIT ?",
             mparams + [limit],
         ).fetchall()
@@ -183,6 +230,8 @@ def handle_recap(arguments: dict) -> str:
         conn.close()
 
     out["note"] = "post-compaction recap; re-inject these and continue"
+    out["excluded_source_pipelines"] = list(KB_SOURCE_PIPELINES)
+    out["kb_excluded"] = True
     return json.dumps(out, ensure_ascii=False, default=str)
 
 
@@ -281,6 +330,12 @@ def handle_batch_search(arguments: dict) -> str:
                 "subject": r.get("subject", ""),
                 "occurred_at": r.get("occurred_at", ""),
                 "rrf_score": r.get("rrf_score"),
+                "slot_key": r.get("slot_key", ""),
+                "resolve_status": r.get("resolve_status", ""),
+                "resolve": r.get("resolve") if isinstance(r.get("resolve"), dict) else {},
+                "valid_from": r.get("valid_from", ""),
+                "invalid_at": r.get("invalid_at", ""),
+                "memory_status": r.get("memory_status", ""),
             } for r in items]
             results.append({
                 "index": i,
@@ -407,3 +462,19 @@ def handle_trace(arguments: dict) -> str:
     finally:
         conn.close()
     return json.dumps(result, ensure_ascii=False)
+
+def handle_continuity_pack(arguments: dict) -> str:
+    """Validity-aware cross-session continuity state (read-only, P1)."""
+    try:
+        from memall.pipeline.session import build_continuity_pack
+        result = build_continuity_pack(
+            agent_name=(arguments.get("agent_name") or arguments.get("viewer") or "").strip(),
+            viewer=(arguments.get("viewer") or arguments.get("agent_name") or "").strip(),
+            project=(arguments.get("project") or "").strip(),
+            limit=max(1, min(int(arguments.get("limit") or 12), 100)),
+            include_conflicts=bool(arguments.get("include_conflicts")),
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as e:
+        logger.exception("handle_continuity_pack failed")
+        return json.dumps({"error": str(e)}, ensure_ascii=False)

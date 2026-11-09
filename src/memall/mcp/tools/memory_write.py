@@ -1,7 +1,40 @@
 import json
+
+# KB enrichment hook (non-blocking). Callers can set via set_kb_enrich_hook(fn).
+# fn(meta_dict) -> None; runs in a daemon thread, failures are swallowed.
+_kb_enrich_hook = None
+_kb_enrich_calls = 0
+
+def set_kb_enrich_hook(fn):
+    """Register a non-blocking KB enrichment function. Pass None to clear."""
+    global _kb_enrich_hook
+    _kb_enrich_hook = fn
+
+def _fire_kb_enrich(meta: dict) -> None:
+    global _kb_enrich_calls
+    fn = _kb_enrich_hook
+    if not callable(fn):
+        return
+    _kb_enrich_calls += 1
+    try:
+        import threading
+        t = threading.Thread(target=lambda: fn(meta), daemon=True)
+        t.start()
+    except Exception:
+        pass
+
+
 from memall.config import get_config
 from memall.core.db import get_conn
-from memall.core.thin_waist import smart_store, store_batch, update, normalize_agent_name, capture
+from memall.core.thin_waist import (
+    smart_store,
+    store_batch,
+    update,
+    normalize_agent_name,
+    capture,
+    _is_human_readable_content,
+    _normalize_content_for_human_readability,
+)
 from memall.core.models import MemoryInput
 
 
@@ -40,17 +73,30 @@ def handle_batch_capture(arguments: dict) -> str:
     # Process each item
     results = []
     errors = []
-    
+    skipped_unreadable = 0
+
     for i, item in enumerate(items):
         try:
             # Validate required fields
             if not item.get("content"):
                 errors.append({"index": i, "error": "content is required"})
                 continue
-                
+
+            content = item["content"]
+            ok_r, reason_r = _is_human_readable_content(content)
+            if not ok_r:
+                nc, changed, nr = _normalize_content_for_human_readability(content)
+                if changed and nc and len(nc.strip()) >= 12:
+                    content = nc
+                elif get_config("quality.batch_reject_unreadable", get_config("quality.auto_reject_unreadable", False)):
+                    skipped_unreadable += 1
+                    errors.append({"index": i, "error": f"unreadable content ({reason_r})"})
+                    continue
+                # else: Day1/2 behavior — allow, capture() will log/warn
+
             # Create memory input
             memory_input = MemoryInput(
-                content=item["content"],
+                content=content,
                 owner=item.get("owner", ""),
                 agent_name=item.get("agent_name", ""),
                 subject=item.get("subject", ""),
@@ -63,31 +109,223 @@ def handle_batch_capture(arguments: dict) -> str:
                 stream=item.get("stream", "ledger"),
                 thread_id=item.get("thread_id")
             )
-            
+
             # Capture the memory
             memory_id = capture(memory_input)
-            results.append({
-                "index": i,
-                "memory_id": memory_id,
-                "status": "ok"
-            })
+            row = {"index": i, "memory_id": int(memory_id), "status": getattr(memory_id, "status", "ok")}
+            if hasattr(memory_id, "to_dict"):
+                q = memory_id.to_dict().get("quality")
+                if q: row["quality"] = q
+                for k in ("readability","ingest_mode","source_pipeline"):
+                    v = memory_id.to_dict().get(k)
+                    if v is not None: row[k] = v
+            results.append(row)
         except Exception as e:
             errors.append({
                 "index": i,
                 "error": str(e)
             })
-    
+
     # Return results
     response = {
         "processed": len(results),
         "errors": len(errors),
+        "skipped_unreadable": skipped_unreadable,
         "results": results
     }
-    
+
     if errors:
         response["errors_detail"] = errors
-        
+
     return json.dumps(response, ensure_ascii=False)
+
+
+
+
+def handle_kb_ingest(arguments: dict) -> str:
+    """memall_write action=kb_ingest / document_import — ingest document into Knowledge Base.
+
+    KB entries are distinct from user-state memories:
+    - category=knowledge (default) and source_pipeline=document.import
+    - Strong provenance (doc_id, path, title, section, offset, hash, updated_at)
+    - Hash/FTS dedup+update/supersede by doc version (conservative, non-destructive)
+    - KB entries NOT conflated with user preferences/continuity state
+    """
+    import hashlib
+    from datetime import datetime, timezone
+
+    content = arguments.get("content") or ""
+    if not content.strip():
+        return json.dumps({"error": "content is required (non-empty string)"}, ensure_ascii=False)
+
+    doc_id = str(arguments.get("doc_id") or "").strip()
+    title = (arguments.get("title") or (doc_id[:80] if doc_id else "knowledge document")).strip()
+    path = str(arguments.get("path") or "").strip()
+    project = str(arguments.get("project") or "").strip()
+    category = arguments.get("category", "knowledge") or "knowledge"
+    chunk_size = max(200, int(arguments.get("chunk_size", 1200) or 1200))
+    chunk_overlap = min(max(0, int(arguments.get("chunk_overlap", 120) or 120)), max(0, chunk_size - 1))
+    doc_version = str(arguments.get("doc_version") or "").strip()
+    updated_at = str(arguments.get("updated_at") or "").strip()
+    source_pipeline = arguments.get("source_pipeline", "document.import") or "document.import"
+    metadata = arguments.get("metadata", "{}")
+
+    doc_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Deterministic chunking (KB provenance): overlapping character windows.
+    # Merge a tiny trailing chunk into the previous chunk to avoid unreadable fragments.
+    chunks = []
+    start_i = 0
+    n = len(content)
+    while start_i < n:
+        end_i = min(start_i + chunk_size, n)
+        chunk = content[start_i:end_i]
+        if chunk.strip():
+            chunks.append({"chunk_index": len(chunks), "content": chunk, "offset": start_i, "length": len(chunk)})
+        if end_i >= n:
+            break
+        nxt = end_i - chunk_overlap
+        if nxt <= start_i:
+            nxt = end_i
+        start_i = nxt
+    if len(chunks) >= 2 and len(chunks[-1]["content"].strip()) < max(80, chunk_size // 8):
+        prev = chunks[-2]
+        merged = content[prev["offset"]: chunks[-1]["offset"] + chunks[-1]["length"]]
+        chunks[-2] = {"chunk_index": prev["chunk_index"], "content": merged, "offset": prev["offset"], "length": len(merged)}
+        chunks.pop()
+        for i, c in enumerate(chunks):
+            c["chunk_index"] = i
+
+    from memall.core.db import get_conn
+    from memall.core.thin_waist import capture, update as mem_update
+    from memall.core.models import MemoryInput
+
+    conn = get_conn()
+    results = []
+    errors = []
+    deduped = 0
+    superseded = 0
+
+    def _find_existing(chunk_index: int):
+        if not doc_id:
+            return None
+        # Active KB chunk for same doc+chunk_index
+        rows = conn.execute(
+            "SELECT id, metadata, memory_status FROM memories WHERE category='knowledge' ORDER BY id DESC LIMIT 500"
+        ).fetchall()
+        for r in rows:
+            try:
+                md = json.loads(r["metadata"] or "{}") if isinstance(r["metadata"], str) else (r["metadata"] or {})
+            except Exception:
+                md = {}
+            if str(md.get("doc_id") or "") != doc_id:
+                continue
+            if int(md.get("chunk_index", -1)) != int(chunk_index):
+                continue
+            if str(r["memory_status"] or "") in ("archived", "superseded", "deleted"):
+                continue
+            return {"id": r["id"], "metadata": md, "memory_status": r["memory_status"]}
+
+    for chunk_info in chunks:
+        chunk = chunk_info["content"]
+        offset = chunk_info["offset"]
+        chunk_hash = hashlib.sha256(chunk.encode("utf-8")).hexdigest()
+
+        existing = _find_existing(chunk_info["chunk_index"])
+        if existing:
+            em = existing.get("metadata") or {}
+            if em.get("chunk_hash") == chunk_hash and (not doc_version or em.get("doc_version") == doc_version):
+                deduped += 1
+                results.append({
+                    "chunk_index": chunk_info["chunk_index"],
+                    "memory_id": existing["id"],
+                    "status": "deduped",
+                    "offset": offset,
+                })
+                continue
+            # New version/content for same doc chunk: create new row and supersede old (non-destructive)
+            try:
+                mem_update(existing["id"], memory_status="superseded", invalid_at=now)
+                superseded += 1
+            except Exception as e:
+                errors.append({"chunk_index": chunk_info["chunk_index"], "warn": f"failed to supersede {existing['id']}: {e}"})
+
+        ingest_metadata = {
+            "doc_id": doc_id,
+            "doc_version": doc_version,
+            "doc_hash": doc_hash,
+            "chunk_hash": chunk_hash,
+            "chunk_index": chunk_info["chunk_index"],
+            "offset": offset,
+            "total_chunks": len(chunks),
+            "source_pipeline": source_pipeline,
+            "category": "knowledge",
+            "provenance": {"path": path, "title": title, "updated_at": updated_at},
+            "kb_kind": "document_chunk",
+            "kb_user_state": False,
+        }
+        if updated_at:
+            ingest_metadata["updated_at"] = updated_at
+        if existing and existing.get("id"):
+            ingest_metadata["supersedes_memory_id"] = existing["id"]
+        try:
+            extra_meta = json.loads(metadata) if isinstance(metadata, str) else metadata
+            if isinstance(extra_meta, dict):
+                ingest_metadata.update(extra_meta)
+        except Exception:
+            pass
+
+        memory_input = MemoryInput(
+            content=chunk,
+            owner=arguments.get("owner", "") or "",
+            agent_name=arguments.get("agent_name", "kb_ingest") or "kb_ingest",
+            subject=(title or doc_id or "knowledge")[:120],
+            project=project,
+            category=category,
+            level=arguments.get("level", "P2") or "P2",
+            metadata=json.dumps(ingest_metadata, ensure_ascii=False),
+            tags=[t for t in [f"kb:{doc_id}" if doc_id else None, f"kb-chunk:{chunk_info['chunk_index']}", f"offset:{offset}", "source:document.import", f"docver:{doc_version}" if doc_version else None] if t] + (arguments.get("tags") or []),
+            # valid_from/invalid_at not in MemoryInput ctor; KB validity handled via metadata/supersede status
+        )
+
+        try:
+            mid = capture(memory_input)
+            row_result = {
+                "chunk_index": chunk_info["chunk_index"],
+                "memory_id": int(mid),
+                "content_preview": chunk[:120],
+                "offset": offset,
+                "status": getattr(mid, "status", "ok"),
+            }
+            if existing and existing.get("id"):
+                row_result["supersedes"] = existing["id"]
+            if hasattr(mid, "to_dict"):
+                d = mid.to_dict()
+                for k in ("quality", "readability", "ingest_mode", "source_pipeline"):
+                    if d.get(k) is not None:
+                        row_result[k] = d[k]
+            results.append(row_result)
+        except Exception as e:
+            errors.append({"chunk_index": chunk_info["chunk_index"], "error": str(e)})
+
+    conn.close()
+
+    out = {
+        "doc_id": doc_id,
+        "title": title,
+        "doc_hash": doc_hash,
+        "doc_version": doc_version,
+        "kb_chunks": len(chunks),
+        "created_or_updated": len([r for r in results if r.get("status") != "deduped"]),
+        "deduped": deduped,
+        "superseded": superseded,
+        "results": results,
+        "errors": errors,
+        "source_pipeline": source_pipeline,
+        "category": category,
+    }
+    return json.dumps(out, ensure_ascii=False)
 
 
 def _is_supervisor(agent: str) -> bool:

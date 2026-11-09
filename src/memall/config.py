@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # ── Default configuration ──────────────────────────────────────────────
 _DEFAULT_CONFIG: Dict[str, Any] = {
+    "kb": {"enrich_async": True},  # P2-4
     "db": {
         "path": str(Path.home() / ".memall" / "data.db"),
     },
@@ -134,6 +135,8 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "semantic_dedup_enabled": False,
         "semantic_dedup_threshold": 0.92,
         "semantic_dedup_window": 30,
+        # Phase 2 resolve engine: slot_key + NOOP/MERGE/UPDATE/SUPERSEDE/CONFLICT/REVIEW (rules-first, non-destructive)
+        "resolve_enabled": True,
         # Thread inference: link new memories to a thread root within N minutes.
         # 0 disables the feature (thread_id left null). Tune per deployment.
         "thread_inference_window_minutes": 60,
@@ -272,8 +275,27 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         # Gate policy: "strict" (reject if ANY dimension below threshold) or 
         # "lenient" (reject only if AVERAGE score below threshold)
         "gate_policy": "lenient",
+        # Gate policy for auto-ingested memories
+        "gate_policy_auto": "strict",
         # Minimum content length: memories shorter than this are rejected regardless of quality score
         "min_length": 15,
+        # Minimum content length for auto-ingested memories
+        "auto_min_length": 30,
+        # Strict mode for auto-ingest paths
+        "strict_auto_ingest": True,
+        # Try to rewrite unreadable content into human-readable form
+        "auto_rewrite_enabled": True,
+        # Reject unreadable content that cannot be rewritten (Day1 phase: log-only)
+        "auto_reject_unreadable": False,
+        # Enable substance dimension
+        "substance_required": True,
+        # Readability controls
+        "readability": {
+            "allow_json_dump": False,
+            "allow_template_only": False,
+            "max_pure_id_ratio": 0.6,
+        },
+        "observability": {"log_every_n": 50},
     },
     "session": {
         # Debt patrol 2026-11-08: improve_step / identity_step were wired into
