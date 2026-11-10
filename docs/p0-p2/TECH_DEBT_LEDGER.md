@@ -193,3 +193,13 @@
 - [x] 无未修【严重】/【中等】缺陷（唯一【中等】为 `retrieve()` 基线信任过滤，既有、非本轮引入）。
 - [ ] 两个独立审查 subagent 均未完整收尾 → 「严格双人独立签字」未达成；本报告为 lead 第二视角逐项实测兜底。
 - [ ] 既有负债：`retrieve()` 的 human viewer 可读 `visibility='private'` 行，若需收紧须单独改信任模型（影响全仓），本轮不动。
+
+## 第三轮攻击面复现式审查（2026-11-10 晚）
+- [x] 6 个真实缺陷修复（含 2 个可实锤的严重安全项：伪造 rollback 任意写、audit 跨身份泄露），各配专门回归测试；`test_blueprint_completion.py` 19 passed。
+- [x] 信任模型确立：调用方可请求（限授权集）/可定位（凭日志标识）/不可注入（快照仅服务端日志）/不可窥探（默认脱敏）。
+- [ ] 运维项：`maintenance._paths()` 相对路径以 `Path.cwd()` 为锚——生产应使用绝对 `maintenance.archive_dir/audit_log`（已登记，未改）。
+- [ ] 审计日志无大小轮转（仅尾读防 OOM）：长期运行的轮转/清理策略待定。
+- [ ] rollback 定位依赖审计尾窗口（4MB/20000 行内）；超窗口的旧记录无法回滚（保守拒绝，符合 fail-safe 但需在运维文档说明）。
+- [ ] 严格双人独立签字仍未达成（subagent 三轮均未完整收尾）；本轮为 lead 对抗式实测 + 独立脚本。
+- [x] 既有 flake 根因修复：列补齐 TOCTOU 竞态（`duplicate column name`）→ 两处 ALTER 精确忽略该错误；8 线程并发实测 0 错误。
+- [x] 测试顺序依赖修复：config 热重载吞掉测试注入值 → `_cfg_set` 固定 `_last_mtime_check`；20 passed。

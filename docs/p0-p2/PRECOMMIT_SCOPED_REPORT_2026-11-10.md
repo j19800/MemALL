@@ -121,3 +121,13 @@ git diff --name-only
 - 6 类正确性/安全性逐点实测 + 5 条 ADR 验收句独立脚本复核：全部通过；config 开关不改变召回集合（OFF=2 / ON=2）。
 - 提交态 `git write-tree` 导出 492 文件自洽（导入/默认 off/排除项）。
 - 详见 `independent-review-report.md`。
+
+## 第三轮：换审查方式（攻击面复现式）+ 安全修复（2026-11-10 晚）
+- 定向：`tests/test_blueprint_completion.py -q` -> **20 passed**（+5 安全/回归测试，重写 2 个假通过）。
+- 混合子集（config/env/thin_waist_edge/blueprint）-> **40 passed**。
+- **全量 `pytest tests/ -q --disable-warnings --tb=line` -> 618 passed, 2 skipped, 0 failed, 0 errors in 785.39s**。
+  - 这是本项目历史上首次 full suite **零 failed / 零 error**：顺带修掉了长期污染回归的两个既有 flake：
+    (a) 列补齐 TOCTOU 竞态（`duplicate column name: primary_layer/tags/echo_score`）—— 两处 ALTER 精确忽略该错误，8 线程并发实测 0 错误；
+    (b) P3 验收测试顺序依赖 —— `get_config()` 热重载吞掉测试注入值，`_cfg_set` 固定 `_last_mtime_check` 后稳定。
+- 本轮新增/修复的安全项：伪造 rollback 任意写、read_audit 跨身份泄露、maintenance 无授权边界、actions 越过 config 门、project 过滤丢失、假通过断言、_resolve_decision 早退缺审计。
+- py_compile 全部改动文件 OK；工作区自检（导入/`read_audit(redact=True)` 默认/rollback 服务端校验/默认全 off）通过。

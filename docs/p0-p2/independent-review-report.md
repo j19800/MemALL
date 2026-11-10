@@ -67,3 +67,57 @@
 - 两个独立 subagent 未完整收尾 → 本报告是 lead 第二视角逐项实测，不是「两个独立 agent 都签字」；如需严格双人签字结论，需重跑能完整收尾的审查。
 - `retrieve()` 基线信任过滤（human 可读 private）作为既有负债登记，不在本轮修。
 - `thin_waist.py.bak_phase1` 仍未跟踪/未纳入任何提交。
+
+---
+
+# 第三轮审查（2026-11-10 晚，换审查方式：对抗式逐项复现）
+
+> 应「换一种审查方式，并看看是否有什么缺陷，安全性问题」而做。方法改为：**把每个接口当作可被恶意调用方利用的攻击面，写最小复现脚本实锤后再修**（而非再扫检查清单）。两个窄任务 subagent 仍未完整收尾，但其一留下了一条已坐实的假通过断言（问题 1），成为本轮起点。
+
+## 发现并修复的 6 个真实缺陷
+
+### 1.【严重·测试】假通过断言（subagent 报出，已实锤修复）
+`test_p3_utility_resolve_metadata_audit_record_persisted` 断言 `"applied" in up`——`{'applied': False}` 照样通过，功能坏掉测不出来。
+**修复**：双门 ON 时断言 `applied is True` + `engine` + 阈值字段；另加负面控制（`resolve_enabled=False` ⇒ `applied is False`）。
+
+### 2.【严重·召回语义】project 过滤器在增强路由上静默丢失
+显式传 `project=projA`：plain 路径召回 1 行，走 enhanced 路由（任意 enhancement flag 或 config-only 主开关）召回 2 行——`project` 被 `enhanced_search` 具名参数吃掉，没进 `retrieve_kwargs`。
+**修复**：`enhanced_search` 把非空 `project` 重新注入 retrieve 过滤。回归测试 `test_explicit_project_filter_survives_enhancement_routing`（三种路由 ids 全等）。
+
+### 3.【中等·审计】`_resolve_decision` 早退路径不带 utility_policy
+no_slot/new_slot/same_content 直接 return，`utility_policy` 缺失；双门开着也无法证明「策略已激活但因无 slot 而无需调整」。
+**修复**：所有返回路径统一挂 `policy._meta`（applied 反映双门状态，NOOP 决策逻辑不变）。
+
+### 4.【严重·安全】伪造 rollback entry = 任意写原语（实锤）
+`rollback_from_audit(entry)` 直接信任调用方传入的 `before` 快照。复现：构造 `{"before":{"id":任意行,"metadata":{"pwned":true},"memory_status":"archived"}}` 一次调用即任意改写任意记忆。
+**修复**：快照唯一来源改为**服务端审计日志**（`_find_audit_record(ts, memory_id, action)` 按标识定位）；调用方 `before` 一律忽略；无匹配记录拒绝；拒绝回滚 rollback 记录；**CAS**——当前行必须仍等于日志 `after`，否则拒绝（防止覆盖后来合法写入）；恢复前校验快照 metadata 可读、status 在白名单。回归测试 4 段：伪造拒绝 / 陌生 ts 拒绝 / read_audit 定位字段回滚成功且精确恢复 / rollback 记录不可再回滚。
+
+### 5.【严重·授权边界】actions 参数可越过运维 config 门
+`run_maintenance(actions=["expire"])` 在 `maintenance.expire=False` 时仍归档了记忆（实锤：ACTIVE→archived）。
+**修复**：调用方只能**缩小**不能**放大**——requested 必须与 config 授权集求交；`skipped_unauthorised` 回报；无授权动作时 `ran=False` 且不写审计。回归测试 `test_p4_caller_actions_cannot_widen_config_authorization`。
+
+### 6.【严重·安全】read_audit 跨身份泄露（经 MCP mode=audit 可达）
+审计日志含全量 before/after metadata 快照（含他人 private 记忆的正文与 metadata 内密钥）。复现：attacker 调 `mode=audit`，响应中出现 `sk-secret-123` 与 victim 正文。
+**修复**：`read_audit(limit, redact=True)` 默认输出**脱敏投影**（ts/action/memory_id/rules_applied + `metadata_sha256` 不可逆指纹，剥掉 metadata/content）；磁盘原始日志保留完整快照，仅 trusted `redact=False` 内部路径可读（回滚/验证仍精确）；`_AUDIT_TAIL_MAX_BYTES`(4MB) 字节尾读防 OOM。复验：MCP mode=audit 不再出现 api_key/正文；identifiers 回滚仍恢复原值。回归测试 `test_p4_read_audit_redacts_snapshots_for_untrusted_readers`。
+
+## 非缺陷说明
+- `maintenance._paths()` 以 `Path.cwd()` 为相对锚：运维若配相对归档路径，实际位置随进程 CWD 变化。属部署注意事项（绝对路径完全正常），登记为轻微运维项，未改。
+- `archive_session` 实测：同 session 多次调用 append-only 累积（设计如此）；空/超长/含换行 session_id 均安全落在归档目录内。
+
+## 第三轮结论
+换攻击面复现式审查确实再挖出 4 个此前两轮清单式审查漏掉的真问题（#2/#4/#5/#6，其中 #4/#6 为可实锤的严重安全缺陷）。6 项全部修复并有专门回归测试；`tests/test_blueprint_completion.py` **19 passed**；全量回归数字见 `PRECOMMIT_SCOPED_REPORT_2026-11-10.md` 第三轮条目。信任模型修正后的关键性质：**调用方可请求（限运维授权集内）、可定位（凭日志标识）、不可注入（快照只从服务端日志取）、不可窥探（默认脱敏）**。
+
+## 补充发现（第 7 项）：维护 action 无授权边界
+继续追攻击面时发现：`memall_system action=maintenance` 的写入子动作（`run`/`archive`/`rollback`）**没有任何身份校验**——任意能调 MCP 的调用方实测均可触发归档跑批与写归档锚点（`random_low_priv` 调 `run`→ok、`archive`→ok）。config 门只控制「功能是否启用」，不构成「谁有权触发」的授权边界。
+**修复**（`src/memall/mcp/tools/__init__.py`）：写入子动作要求 supervisor 身份（`security.supervisor_agents`）或部署的 `identity.human_owner`；`status`/`audit` 只读保持开放。被拒返回 `{"ok": false, "error": "forbidden"}` 并附 caller。
+**验证**：新增 `test_p4_maintenance_write_actions_require_supervisor_identity`（随机/匿名被拒、supervisor/owner 放行、只读开放）；`test_p4_maintenance_default_off_and_status` 改为以 supervisor 身份验证 config 门。`test_blueprint_completion.py` → **20 passed**。
+
+## 附带修复：列补齐的 TOCTOU 竞态（全量回归 falkernel 源）
+追查「全量回归偶发 `duplicate column name: primary_layer/tags/echo_score`」时定位到真因：`_ensure_missing_columns` / `_ensure_interaction_columns` 先 `PRAGMA table_info` 判断缺列、再 `ALTER TABLE`，两步之间后台 daemon 线程（或并发测试连接）可能已补上该列，第二次 ALTER 抛 `duplicate column name` 并把整个 `init_db()` 打挂 → 表现为**无关测试**的偶发 error/failure（历史多轮都出现过）。
+**修复**（`src/memall/core/db.py`）：两处 ALTER 各自捕获 `sqlite3.OperationalError`，仅当消息含 `duplicate column name` 时忽略（等价于「目标状态已达成」），其它错误照常抛出。
+**验证**：8 线程并发补列实测 **0 错误**，`memories` 34 列、`search_interactions` 18 列全部齐备。
+
+## 附带修复：P3 验收测试的顺序依赖（flake）
+`test_p3_acceptance_tracking_enabled_makes_rerank_active` 在单跑与部分子集通过、全量偶发失败。真因是 `get_config()` 的**热重载**（最多每 2s 重扫配置文件，命中即从默认值重建 `_config`）会静默丢弃测试注入的 `quality.utility.tracking_enabled`。
+**修复**（`tests/test_blueprint_completion.py`）：`_cfg_set()` 追加 `cfg._last_mtime_check = float("inf")` 抑制重载（与 conftest 隔离夹具同款手法），并对 unified_search 断言加一次「重设门控后重试」兜底。
+**验证**：`test_blueprint_completion.py` **20 passed**；混合子集 40 passed。

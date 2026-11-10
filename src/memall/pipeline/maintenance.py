@@ -24,6 +24,7 @@ semantics instead of introducing a second archive store.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
@@ -33,6 +34,14 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _MAINTENANCE_PIPELINE = "cognitive.loop.maintenance"
+
+# memory_status values a rollback may restore. Anything else in an audit
+# record is treated as tampered/unexpected and refused (defence in depth:
+# the restore is never a blind write).
+_ROLLBACKABLE_STATUSES = frozenset(
+    {"", "None", None, "ACTIVE", "CONFLICT", "REVIEW", "archived", "superseded",
+     "deleted", "pending", "resolved"}
+)
 
 
 def _now() -> str:
@@ -224,10 +233,17 @@ def run_maintenance(actions: list[str] | None = None, dry_run: bool = False,
                 "actions": []}
     all_actions = ("canonicalize", "conflict_review", "expire",
                    "low_utility_archive", "theme_profile", "policy_adaptation")
+    # A caller may only NARROW the operator's authorised set, never widen it:
+    # each requested action must also be enabled in config. Otherwise passing
+    # actions=["expire"] would archive memories even though the operator
+    # explicitly left maintenance.expire=False (config-gate bypass).
+    permitted = [a for a in all_actions if bool(_cfg(a, False))]
     if actions:
-        wanted = [a for a in actions if a in all_actions]
+        wanted = [a for a in actions if a in permitted]
+        skipped = [a for a in actions if a not in permitted and a in all_actions]
     else:
-        wanted = [a for a in all_actions if bool(_cfg(a, False))]
+        wanted = list(permitted)
+        skipped = []
     cap = int(max_actions or _cfg("max_actions_per_run", 50) or 50)
     cap = max(1, min(cap, 500))
 
@@ -237,8 +253,15 @@ def run_maintenance(actions: list[str] | None = None, dry_run: bool = False,
         summary: dict[str, Any] = {
             "ok": True, "ran": True, "dry_run": bool(dry_run),
             "ts": _now(), "source_pipeline": str(_cfg("source_pipeline", _MAINTENANCE_PIPELINE)),
-            "actions": [], "total_marked": 0, "snapshot_before_write": bool(_cfg("snapshot_before_write", True)),
+            "actions": [], "skipped_unauthorised": skipped,
+            "total_marked": 0, "snapshot_before_write": bool(_cfg("snapshot_before_write", True)),
         }
+        if not wanted:
+            # Nothing the operator authorised was requested: report and leave
+            # without writing an audit line or touching any row.
+            summary["ran"] = False
+            summary["reason"] = "no action authorised by config"
+            return summary
         budget = cap
         for action in wanted:
             if budget <= 0:
@@ -304,44 +327,205 @@ def archive_session(session_id: str, payload: dict | None = None,
         return {"ok": False, "error": str(e)[:200]}
 
 
-def read_audit(limit: int = 50) -> dict:
-    """Read the tail of the append-only maintenance audit log."""
+_AUDIT_TAIL_MAX_BYTES = 4_000_000  # ~4MB tail read; guards against OOM on a huge log
+
+
+def _read_audit_tail_lines(max_lines: int):
+    """Read only the last chunk of the audit log (bounded by bytes)."""
+    _, audit = _paths()
+    if not audit.exists():
+        return []
+    size = audit.stat().st_size
+    with audit.open("rb") as f:
+        if size > _AUDIT_TAIL_MAX_BYTES:
+            f.seek(size - _AUDIT_TAIL_MAX_BYTES)
+        buf = f.read()
+    text = buf.decode("utf-8", "replace")
+    lines = text.splitlines()
+    if size > _AUDIT_TAIL_MAX_BYTES and lines:
+        # First line may be a partial record from the mid-file seek; drop it.
+        lines = lines[1:]
+    return lines[-max(1, int(max_lines)):]
+
+
+def _redact_audit_record(rec: dict) -> dict:
+    """Project an audit record for an UNTRUSTED reader.
+
+    The on-disk log keeps full before/after metadata snapshots so the server
+    can verify and roll back. Returning those verbatim over MCP leaks other
+    agents' private memory content and secrets that happen to live in
+    metadata. Callers still get the decision trail they need to audit:
+    identity, policy, which fields changed, and a non-reversible hash so a
+    rollback can be requested by (ts, memory_id, action).
+    """
+    if not isinstance(rec, dict):
+        return {}
+    out = {
+        "ts": rec.get("ts"),
+        "action": rec.get("action"),
+        "memory_id": rec.get("memory_id"),
+        "session_id": rec.get("session_id"),
+        "path": rec.get("path"),
+        "source_pipeline": rec.get("source_pipeline"),
+        "rules_applied": rec.get("rules_applied"),
+        "marker": {k: v for k, v in (rec.get("marker") or {}).items()
+                   if k in ("policy", "dry_run", "note")} if isinstance(rec.get("marker"), dict) else None,
+        "set_archived": rec.get("set_archived"),
+        "redacted": True,
+    }
+    for side in ("before", "after"):
+        snap = rec.get(side)
+        if isinstance(snap, dict):
+            meta = snap.get("metadata")
+            out[side] = {
+                "id": snap.get("id"),
+                "memory_status": snap.get("memory_status"),
+                "updated_at": snap.get("updated_at"),
+                # Fingerprint only: proves a snapshot exists and lets the
+                # server match it, without disclosing memory content.
+                "metadata_sha256": (hashlib.sha256(str(meta).encode("utf-8", "replace")).hexdigest()
+                                    if meta is not None else None),
+            }
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def read_audit(limit: int = 50, redact: bool = True) -> dict:
+    """Read the tail of the append-only maintenance audit log.
+
+    `redact=True` (default) returns the untrusted-reader projection. Pass
+    `redact=False` only from trusted, in-process maintenance code that needs
+    the full snapshot — never wire it to a network surface.
+    """
     try:
-        _, audit = _paths()
-        if not audit.exists():
-            return {"ok": True, "entries": [], "count": 0}
-        lines = audit.read_text(encoding="utf-8").splitlines()[-max(1, int(limit)):]
+        lines = _read_audit_tail_lines(max(1, int(limit)))
         entries = []
         for ln in lines:
             try:
-                entries.append(json.loads(ln))
+                rec = json.loads(ln)
             except Exception:
                 continue
-        return {"ok": True, "entries": entries, "count": len(entries)}
+            if not isinstance(rec, dict):
+                continue
+            entries.append(_redact_audit_record(rec) if redact else rec)
+        return {"ok": True, "entries": entries, "count": len(entries),
+                "redacted": bool(redact)}
     except Exception as e:
         return {"ok": False, "error": str(e)[:200], "entries": []}
 
 
-def rollback_from_audit(entry: dict) -> dict:
-    """Restore one memory's metadata/memory_status from an audit ``before``
-    snapshot. Non-destructive reversal of a single maintenance action.
+def _iter_audit_entries_desc(max_lines: int = 20000):
+    """Yield FULL audit records newest-first, from a bounded byte tail.
+
+    Trusted in-process use only (rollback verification); never returned over
+    MCP. A record outside the scanned tail is simply not found, which makes
+    the rollback refuse rather than act on unverifiable state.
     """
-    before = (entry or {}).get("before") or {}
-    mid = before.get("id")
-    if not mid or not _cfg("snapshot_before_write", True):
-        return {"ok": False, "error": "no snapshot in audit entry"}
+    try:
+        lines = _read_audit_tail_lines(max_lines)
+        for ln in reversed(lines):
+            try:
+                rec = json.loads(ln)
+            except Exception:
+                continue
+            if isinstance(rec, dict):
+                yield rec
+    except Exception as e:
+        logger.debug("maintenance: audit scan failed: %s", e)
+
+
+def _find_audit_record(ts: str, memory_id: int, action: str) -> dict:
+    """Locate ONE maintenance record in the server-side audit log.
+
+    The audit log — not caller-supplied data — is the only trusted source for
+    a rollback snapshot (security fix: passing an arbitrary `entry` dict made
+    rollback_from_audit an arbitrary-write primitive on any memory row).
+    """
+    if not ts or memory_id is None or not action:
+        return {}
+    for rec in _iter_audit_entries_desc():
+        if (str(rec.get("ts") or "") == str(ts)
+                and rec.get("memory_id") == memory_id
+                and rec.get("action") == action):
+            return rec
+    return {}
+
+
+def rollback_from_audit(entry: dict) -> dict:
+    """Reverse ONE maintenance action using the SERVER-SIDE audit record.
+
+    Trust model (hardened): the caller supplies only *identifiers* — ts,
+    memory_id, action. The restore snapshot is read from the append-only
+    audit log, so a caller cannot smuggle arbitrary metadata. The audit
+    entry's `before` is applied only when the row's current state still
+    matches the log's `after` (compare-and-set); otherwise the rollback is
+    refused rather than silently clobbering later legitimate writes.
+    """
+    entry = entry or {}
+    ts = entry.get("ts")
+    mem_id = entry.get("memory_id")
+    action = entry.get("action")
+    # Back-compat: an entry taken verbatim from read_audit() already carries
+    # ts/memory_id/action. A hand-crafted `before` payload is IGNORED.
+    if not (ts and mem_id is not None and action):
+        return {"ok": False, "error": "rollback requires ts+memory_id+action from an audit record"}
+    if action == "rollback":
+        return {"ok": False, "error": "refusing to roll back a rollback record"}
+
+    rec = _find_audit_record(ts, mem_id, action)
+    if not rec:
+        return {"ok": False, "error": "no matching audit record (unverifiable request refused)"}
+    before = rec.get("before") or {}
+    after = rec.get("after") or {}
+    mid = before.get("id") if before.get("id") is not None else mem_id
+    try:
+        mid = int(mid)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "invalid memory id in audit record"}
+    if not before.get("metadata"):
+        return {"ok": False, "error": "no before-snapshot in audit record (snapshot_before_write off?)"}
+
+    # Validate the snapshot we are about to write (never blind-write).
+    raw_meta = before.get("metadata")
+    try:
+        json.loads(raw_meta) if isinstance(raw_meta, str) else dict(raw_meta or {})
+    except Exception as e:
+        return {"ok": False, "error": f"audit snapshot metadata unreadable: {str(e)[:120]}"}
+    restore_status = before.get("memory_status")
+    if restore_status is not None and str(restore_status) not in _ROLLBACKABLE_STATUSES:
+        return {"ok": False, "error": f"unexpected memory_status in audit record: {restore_status!r}"}
+
     from memall.core.db import get_conn
     conn = get_conn()
     try:
+        cur = conn.execute(
+            "SELECT metadata, memory_status, updated_at FROM memories WHERE id = ?", (mid,)
+        ).fetchone()
+        if not cur:
+            return {"ok": False, "error": "memory row no longer exists"}
+
+        # CAS: the row must still be in the state the audit `after` recorded.
+        # If anything wrote it since, refuse instead of clobbering.
+        want_status = after.get("memory_status")
+        if want_status is not None and str(cur["memory_status"] if hasattr(cur, "keys") else cur[1]) != str(want_status):
+            return {"ok": False, "error": "state diverged from audit 'after'; rollback refused",
+                    "memory_id": mid}
+        want_meta = after.get("metadata")
+        if isinstance(want_meta, str) and want_meta:
+            have = (cur["metadata"] if hasattr(cur, "keys") else cur[0]) or ""
+            if str(have) != str(want_meta):
+                return {"ok": False, "error": "state diverged from audit 'after'; rollback refused",
+                        "memory_id": mid}
+
         conn.execute(
             "UPDATE memories SET metadata=?, memory_status=?, updated_at=? WHERE id=?",
-            (before.get("metadata"), before.get("memory_status"),
-             before.get("updated_at") or _now(), int(mid)),
+            (raw_meta, restore_status, before.get("updated_at") or _now(), mid),
         )
         conn.commit()
         _append_audit({"ts": _now(), "action": "rollback", "memory_id": mid,
-                       "restored": before})
-        return {"ok": True, "memory_id": mid, "restored": before}
+                       "reverses": {"ts": ts, "policy_action": action},
+                       "restored_from": "server-side-audit-log"})
+        return {"ok": True, "memory_id": mid, "restored": before,
+                "source": "server-side-audit-log"}
     except Exception as e:
         return {"ok": False, "error": str(e)[:200]}
     finally:

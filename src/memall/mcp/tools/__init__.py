@@ -453,6 +453,34 @@ def _handle_system(args: dict) -> str:
         # ADR 0028 P4: long-term governance maintenance (opt-in, non-destructive).
         from memall.pipeline import maintenance as _maint
         sub = args.pop("maintenance_sub_action", None) or args.pop("sub_action", "status")
+        # Authorization (third-round review): read-only sub-actions are open,
+        # but anything that WRITES (run/archive/rollback) requires a
+        # supervisor identity (or the deployment's human owner). Config gates
+        # alone are not an authorization boundary — any MCP caller could
+        # otherwise trigger archival runs.
+        _WRITE_SUBS = ("run", "archive", "rollback")
+        if sub in _WRITE_SUBS:
+            try:
+                from memall.config import get_config as _gc
+                from memall.core.task_identity import is_supervisor
+                _caller = (args.get("agent_name") or "").strip()
+                _owner = (_gc("identity.human_owner", "") or "").strip().lower()
+                _allowed = bool(_caller) and (
+                    is_supervisor(_caller) or (bool(_owner) and _caller.lower() == _owner)
+                )
+            except Exception:
+                _caller, _allowed = "", False
+            if not _allowed:
+                return json.dumps({
+                    "ok": False, "error": "forbidden",
+                    "message": (
+                        f"maintenance.{sub} requires a supervisor identity "
+                        "(security.supervisor_agents) or identity.human_owner; "
+                        f"caller={_caller or '<anonymous>'}"
+                    ),
+                    "caller": _caller or None,
+                    "sub_action": sub,
+                }, ensure_ascii=False)
         try:
             if sub == "run":
                 out = _maint.run_maintenance(

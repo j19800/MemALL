@@ -241,3 +241,27 @@
 ### ✅ 第二轮独立审查报告已落地提交（2026-11-10，本地 commit，未 push）
 - **commit `20c0985`**：`docs(memall): second independent code review report (lead second-pass, full closure)`（6 files, 101+/4-）。
 - 提交后工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪（按约束保留）。**未 push**。
+
+### 2026-11-10 第三轮审查（换方式：攻击面复现式；本地未提交）
+- 方法改变：不再扫检查清单，而是**把每个接口当攻击面写最小复现脚本**。2 个窄任务 subagent 仍未完整收尾，其一留下已坐实的假通过断言（起点）。
+- 发现并修复 6 个真实缺陷（4 个为前两轮漏掉）：
+  1.【严重·测试】假通过断言（`"applied" in up` 对 `applied=False` 也通过）→ 双门 ON 断言 `applied is True`+engine+字段，并加负面控制。
+  2.【严重·召回】显式 `project` 过滤在增强路由上静默丢失（plain=1 行 vs enhanced=2 行）→ `enhanced_search` 重新注入 retrieve 过滤。
+  3.【中等·审计】`_resolve_decision` 早退 NOOP 路径不带 `utility_policy` → 全路径统一挂载。
+  4.【严重·安全】`rollback_from_audit(entry)` 信任调用方 `before` = 任意写原语（实测 forged `{pwned:true,archived}` 改写任意行）→ 快照只取服务端审计日志（按 ts/memory_id/action 定位）、CAS 拒绝陈旧、拒绝回滚 rollback、恢复前校验；caller `before` 一律忽略。
+  5.【严重·授权】`run_maintenance(actions=[...])` 可越过 per-policy config 门（expire=False 仍归档）→ 调用方只能缩小不能放大；新增 `skipped_unauthorised`；无授权动作 ran=False 不写审计。
+  6.【严重·安全】`read_audit` 经 MCP `mode=audit` 跨身份泄露他人 metadata 快照（含正文与 api_key）→ 默认脱敏投影（`metadata_sha256` 指纹替代）+ `redact=False` 仅限受信内部路径 + 4MB 字节尾读防 OOM。
+- 代码改动：`src/memall/pipeline/maintenance.py`、`src/memall/core/thin_waist.py`。测试：`tests/test_blueprint_completion.py` 新增 4 个安全/回归测试 + 重写 2 个 → **19 passed**。
+- 全量回归与文档同步见 `PRECOMMIT_SCOPED_REPORT_2026-11-10.md` 第三轮条目。
+
+### 2026-11-10 第三轮补充：授权边界 + 两个既有 flake 修复（本地未提交）
+- **第 7 项（授权边界）**：`memall_system action=maintenance` 写入子动作（run/archive/rollback）原本无身份校验，任意 MCP 调用方可触发归档/写锚点（实测）。现要求 supervisor（`security.supervisor_agents`）或 `identity.human_owner`；`status`/`audit` 只读保持开放。新增 `test_p4_maintenance_write_actions_require_supervisor_identity`。
+- **第 8 项（既有竞态）**：`_ensure_missing_columns`/`_ensure_interaction_columns` 的 PRAGMA→ALTER TOCTOU 竞态会抛 `duplicate column name` 打挂 `init_db()`，表现为无关测试偶发失败。两处 ALTER 现精确忽略该错误；8 线程并发实测 0 错误。
+- **第 9 项（测试 flake）**：`get_config()` 热重载会重建 `_config` 并吞掉测试注入值，导致 P3 验收测试顺序依赖。`_cfg_set()` 现固定 `_last_mtime_check=inf`（同 conftest 手法）。
+- **全量回归：618 passed, 2 skipped, 0 failed, 0 errors**（历史首次零失败）。
+
+### ✅ 第三轮（换审查方式 + 安全修复）已落地提交（2026-11-10，本地 commit，未 push）
+- **commit `fd0d29d`**：`fix(memall): harden P3/P4 per adversarial review - 7 security/defect fixes + 2 pre-existing flakes`（11 files, 733+/30-）。
+- 提交态（`git write-tree` 导出 493 文件）自洽：导入 OK、`read_audit(redact=True)` 默认脱敏、rollback 服务端校验、默认全 off、竞态防护在位、排除项未混入。
+- 验收：定向 20 passed、混合子集 40 passed、**全量 618 passed / 2 skipped / 0 failed / 0 errors**（历史首次零失败）。
+- 工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪。**未 push**。

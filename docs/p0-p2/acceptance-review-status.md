@@ -65,3 +65,22 @@
 - P1 `conversation.session_end` 注入为 opt-in（默认仍用既有 `session.end`），避免改变线上默认行为。
 - P4 自动动作仍是非破坏性（不删行、不改 content），只是现在会按规则更新状态字段。
 - 独立审查 agent 未完整收尾：结论以「已复现并修复其报出的问题 + 主 agent 逐项实测」为准，不夸大为「全套审查通过」。
+
+## 7. 第三轮：换攻击面复现式审查（2026-11-10 晚）
+用户要求「换一种审查方式，看是否有什么缺陷、安全性问题」。方法从「扫检查清单」改为「把每个接口当攻击面，写最小复现实锤」。2 个 subagent 仍未完整收尾，其一坐实了一条假通过断言。结果：**又挖出 4 个前两轮清单式审查漏掉的真缺陷（共 6 个修复，其中 2 个可实锤的严重安全项）**。
+
+| # | 级别 | 缺陷 | 复现证据 | 修复 |
+|---|---|---|---|---|
+| 1 | 严重(测试) | `assert "applied" in up` 对 `{'applied':False}` 也通过 | policy=`{'applied': False}` 时断言仍真 | 双门ON断 `is True`+engine+字段；负面控制断 `is False` |
+| 2 | 严重(召回) | 显式 `project` 在增强路由被吃掉 | plain n=1 vs enhanced n=2 | `enhanced_search` 重新注入 retrieve 过滤 |
+| 3 | 中(审计) | `_resolve_decision` 早退路径无 `utility_policy` | NOOP 路径缺字段 | 所有返回路径统一挂载 |
+| 4 | **严重(安全)** | `rollback_from_audit(entry)` 信任 caller `before` = 任意写 | forged `{pwned:true,archived}` 改写任意行成功 | 快照仅取服务端审计日志定位；caller `before` 忽略；CAS 陈旧拒绝；拒绝回滚rollback；恢复前校验 |
+| 5 | 严重(授权) | `actions=["expire"]` 越过 `expire=False` 门 | 记忆 ACTIVE→archived | caller 只可缩小不可放大；`skipped_unauthorised`；无授权 ran=False |
+| 6 | **严重(安全)** | `read_audit` 经 MCP `mode=audit` 跨身份泄露 metadata 快照 | 响应含 `api_key`+victim 正文 | `redact=True` 脱敏投影+`metadata_sha256` 指纹；`redact=False` 仅受信内部；4MB 尾读防 OOM |
+
+信任模型修正后性质：**可请求（限运维授权集）/ 可定位（凭日志标识）/ 不可注入（快照只从服务端日志）/ 不可窥探（默认脱敏）**。
+验证：`test_blueprint_completion.py` **19 passed**（+4 新安全/回归测试，重写 2 个）；MCP mode=audit 复验无泄露；identifiers 回滚仍精确恢复；project 过滤三路由一致；config 门不可越过。全量数字见 PRECOMMIT 第三轮条目。
+登记（非缺陷）：`_paths()` 相对锚为 cwd（生产用绝对路径）；审计无轮转；rollback 定位限于尾窗口（超窗保守拒绝=fail-safe）。
+
+### 补充：第 7 项（授权边界缺失，已修）
+`memall_system action=maintenance` 写入子动作原本无身份校验（任意 MCP 调用方可触发归档/写锚点，实测）。现要求 supervisor 或 human_owner；只读 `status`/`audit` 开放。新增回归测试；`test_blueprint_completion.py` **20 passed**。

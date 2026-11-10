@@ -1500,16 +1500,23 @@ def _resolve_decision(conn, data: MemoryInput, h: str, now: str) -> dict:
         "invalid_at": None,
     }
     if not slot_key:
+        result["utility_policy"] = policy.get("_meta", {})
         return result
     existing = _find_active_slot_memory(conn, slot_key, data.agent_name or "", exclude_hash=h)
     if not existing:
         result.update({"decision": "NOOP", "reason": "new_slot"})
+        # ADR 0028 P3: attach the policy audit on EVERY return path, so
+        # `applied` reflects "dual gates active" regardless of whether a
+        # threshold/force decision was reachable for this record (NOOP here
+        # is correct: thresholds only mean something once a slot exists).
+        result["utility_policy"] = policy.get("_meta", {})
         return result
     # Compare content similarity cheaply
     old = (existing["content"] or "").strip()
     new = (data.content or "").strip()
     if old == new:
         result.update({"decision": "NOOP", "reason": "same_content", "target_id": existing["id"]})
+        result["utility_policy"] = policy.get("_meta", {})
         return result
     # Heuristic: if very similar length and high overlap -> MERGE/UPDATE; if contradictory keywords -> CONFLICT
     try:
@@ -3287,6 +3294,14 @@ def enhanced_search(
     )
     retrieve_kwargs = dict(filters)
     retrieve_kwargs.setdefault("limit", limit)
+    # `project` is a NAMED parameter here (continuity assembly consumes it),
+    # so it never lands in **filters. Without re-injecting it, an explicit
+    # project filter silently vanished whenever the request routed through
+    # the enhancement layer (recall grew from N to the whole corpus — found
+    # by second-round review; plain path n=1 vs enhanced path n=2). Honour it
+    # as a retrieval filter too, same semantics as retrieve().
+    if project and "project" not in retrieve_kwargs:
+        retrieve_kwargs["project"] = project
     if effective_agent_filter is not None:
         retrieve_kwargs["agent_name"] = effective_agent_filter
     results = retrieve(effective_query or None, viewer=viewer, **retrieve_kwargs)

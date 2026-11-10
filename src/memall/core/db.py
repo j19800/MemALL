@@ -651,7 +651,17 @@ def _ensure_missing_columns(conn):
                 raise ValueError(
                     f"unsafe column definition in _ensure_missing_columns: {col!r} {typedef!r}"
                 )
-            conn.execute(f"ALTER TABLE memories ADD COLUMN {col} {typedef}")
+            try:
+                conn.execute(f"ALTER TABLE memories ADD COLUMN {col} {typedef}")
+            except sqlite3.OperationalError as exc:
+                # TOCTOU: PRAGMA said the column was missing, but a concurrent
+                # writer (background pipeline daemon + a test connection) may
+                # add it between the check and the ALTER. "duplicate column
+                # name" then means the desired end state is already reached, so
+                # swallow it rather than failing all of init_db (this surfaced
+                # as intermittent full-suite errors in unrelated tests).
+                if "duplicate column name" not in str(exc).lower():
+                    raise
 
 
 def _ensure_interaction_columns(conn):
@@ -691,7 +701,13 @@ def _ensure_interaction_columns(conn):
                 raise ValueError(
                     f"unsafe column definition in _ensure_interaction_columns: {col!r} {typedef!r}"
                 )
-            conn.execute(f"ALTER TABLE search_interactions ADD COLUMN {col} {typedef}")
+            try:
+                conn.execute(f"ALTER TABLE search_interactions ADD COLUMN {col} {typedef}")
+            except sqlite3.OperationalError as exc:
+                # Same TOCTOU as _ensure_missing_columns: losing the race means
+                # the column already exists, which is the desired state.
+                if "duplicate column name" not in str(exc).lower():
+                    raise
 
 
 def init_db(conn=None, migrate=True, db_path_for_backup: str = ""):

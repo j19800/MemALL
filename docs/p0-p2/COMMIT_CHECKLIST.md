@@ -152,3 +152,10 @@ PYTHONPATH=.:src ./.venv/bin/python -m pytest \
 - 提交集 = 10 代码 + 1 新测试 + 10 文档/台账；`thin_waist.py.bak_phase1` 排除、仍为唯一未跟踪项。
 - 提交态自洽：`git write-tree` 导出 491 文件，导入/默认 off/validator/排除项全部验证通过。
 - 验收：12 / 125 / 610 passed（全量 0 failed），py_compile OK。
+
+## 第三轮审查修复（2026-11-10 晚，本轮待提交）
+- 代码：`src/memall/pipeline/maintenance.py`（rollback 服务端日志+CAS+校验、read_audit 脱敏+尾读、actions 不可放大、audit 辅助函数）、`src/memall/core/thin_waist.py`（project 过滤注入、_resolve_decision 全路径挂 utility_policy）。
+- 测试：`tests/test_blueprint_completion.py`（+4 安全/回归、重写 2 个）→ 19 passed。
+- 文档：`independent-review-report.md`（第三轮章节）、`acceptance-review-status.md`（§7）、`CHANGELOG`/`TECH_DEBT`（第三轮条目）、`PRECOMMIT`（第三轮全量数字）。
+- 验收：定向 19 passed；全量见 PRECOMMIT 第三轮；py_compile OK；提交态自洽。
+- 门禁：只暂存上述文件；**排除 `thin_waist.py.bak_phase1`**；本地 commit（`DeepSeek Harness <noreply@deepseek-harness.local>`），**不 push**。
