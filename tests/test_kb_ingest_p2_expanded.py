@@ -507,7 +507,15 @@ def test_p2_kb_policy_sql_excludes_kb_not_user_state():
             ).fetchall()
             blob = " ".join(str(r["subject"] or "") + " " + str(r["metadata"] or "") for r in rows)
             assert "kb-sql-policy" not in blob
-            assert any("SQL 策略测试决定" in (r["subject"] or "") or "SQL 策略测试决定" in str(r["metadata"] or "") or True for r in rows) or len(rows) >= 0
+            # Every returned row must be a real user-state match (the KB row is
+            # filtered out separately below). No wildcard: this used to end with
+            # `or True`, so the assertion could never fail.
+            assert all(
+                "SQL 策略测试决定" in (r["subject"] or "")
+                or "SQL 策略测试决定" in str(r["metadata"] or "")
+                or "SQL 策略测试决定" in str(r[0] if not hasattr(r, "keys") else r["content"] or "")
+                for r in rows
+            ) if rows else True
             # stronger: KB row itself must be excluded
             kb_rows = conn.execute("SELECT metadata FROM memories WHERE project=? AND metadata LIKE '%kb-sql-policy%'", ("memall",)).fetchall()
             assert kb_rows, "setup: KB row should exist"
@@ -952,5 +960,10 @@ def test_p1_session_start_auto_inject_per_bucket_kb_exclusion():
             assert content not in b, f"KB marker {content} leaked into injection.{ik}"
     # user-state should still be injectable (not over-filtered)
     whole = json.dumps(out, ensure_ascii=False)
-    assert "auto_inject user state memory marker ALPHA" in whole or True  # tolerant: capture may classify differently
+    # The user-state marker must survive injection (KB evidence is excluded, but
+    # ordinary user state must not be). No wildcard: this used to end with
+    # `or True`, so it asserted nothing at all.
+    assert "auto_inject user state memory marker ALPHA" in whole, (
+        "user-state memory must still be injectable; only KB evidence is excluded"
+    )
     print("PASS: test_p1_session_start_auto_inject_per_bucket_kb_exclusion")

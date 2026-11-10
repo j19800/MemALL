@@ -619,6 +619,19 @@ def get_conn(db_path=None) -> sqlite3.Connection:
                 init_db(conn=conn)
         # Flag kept for external readers (kept True once any init happened).
         _auto_init_done = True
+    else:
+        # An EXISTING database never re-enters init_db(), so the safety nets
+        # that add newer columns (P3 interaction feedback, temporal validity)
+        # were unreachable on the read path — a pure get_conn() consumer (MCP
+        # reads, CLI queries) kept failing on an old DB until some other code
+        # path happened to run migrations. Re-assert them here, cheaply and
+        # idempotently, the first time this process opens the file.
+        try:
+            _ensure_interaction_columns(conn)
+            _ensure_missing_columns(conn)
+            conn.commit()
+        except sqlite3.Error:
+            logger.debug("db.py: get_conn column re-assert skipped", exc_info=True)
 
     return conn
 

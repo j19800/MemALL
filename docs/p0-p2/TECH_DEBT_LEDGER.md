@@ -197,8 +197,8 @@
 ## 第三轮攻击面复现式审查（2026-11-10 晚）
 - [x] 6 个真实缺陷修复（含 2 个可实锤的严重安全项：伪造 rollback 任意写、audit 跨身份泄露），各配专门回归测试；`test_blueprint_completion.py` 19 passed。
 - [x] 信任模型确立：调用方可请求（限授权集）/可定位（凭日志标识）/不可注入（快照仅服务端日志）/不可窥探（默认脱敏）。
-- [ ] 运维项：`maintenance._paths()` 相对路径以 `Path.cwd()` 为锚——生产应使用绝对 `maintenance.archive_dir/audit_log`（已登记，未改）。
-- [ ] 审计日志无大小轮转（仅尾读防 OOM）：长期运行的轮转/清理策略待定。
+- [x] 运维项：`maintenance._paths()` 相对路径以 `Path.cwd()` 为锚——生产应使用绝对 `maintenance.archive_dir/audit_log`（已登记，未改）。  *(2026-11-11 已修)*
+- [x] 审计日志无大小轮转（仅尾读防 OOM）：长期运行的轮转/清理策略待定。  *(2026-11-11 已修)*
 - [ ] rollback 定位依赖审计尾窗口（4MB/20000 行内）；超窗口的旧记录无法回滚（保守拒绝，符合 fail-safe 但需在运维文档说明）。
 - [ ] 严格双人独立签字仍未达成（subagent 三轮均未完整收尾）；本轮为 lead 对抗式实测 + 独立脚本。
 - [x] 既有 flake 根因修复：列补齐 TOCTOU 竞态（`duplicate column name`）→ 两处 ALTER 精确忽略该错误；8 线程并发实测 0 错误。
@@ -210,7 +210,7 @@
 - [ ] `tests/test_e2e.py` 无可配置的后台开关，导致脚本级 E2E 非确定（capture 有 5 次重试，不丢写）。
 - [x] 真实 MCP 协议接入测试（stdio JSON-RPC：initialize/tools-list/tools-call）——8 工具、主链路 + 新增能力全部通过。
 - [x] MCP 链路暴露并修复：`rollback_from_audit` CAS 用字符串比较导致 JSON 键序变化时误拒合法回滚 → 改语义比较 + 回归测试。
-- [ ] MCP 协议测试目前是临时脚本（手工 /tmp），未纳入 `tests/` 自动化；建议补一个 `tests/test_mcp_protocol_e2e.py`（子进程 + JSON-RPC 客户端）。
+- [x] MCP 协议测试目前是临时脚本（手工 /tmp），未纳入 `tests/` 自动化；建议补一个 `tests/test_mcp_protocol_e2e.py`（子进程 + JSON-RPC 客户端）。  *(2026-11-11 已修)*
 - [x] MCP 协议 E2E 已固化：`tests/test_mcp_protocol_e2e.py`（3 tests，子进程 stdio JSON-RPC，全通过）。
 - [x] CAS 收窄为「只守护策略自有字段」，修复真机后台 enrich 导致合法回滚被永久拒绝的问题。
 - [ ] 既有 flake：`test_capture_thread_inference.py` 在全量连跑时偶发 `database is locked`（隔离 3 次全过）；根因是并发写锁，建议后续给该测试降低并发或加重试。
@@ -224,28 +224,52 @@
 - [x] S5 整数 `task_id` 静默丢 7 个 P3 字段 → 先 str 再切片；fallback 仅对缺列生效。
 - [x] **P3 排序合同测试盲区** → 新增 `test_p3_ordering_actually_changes_with_utility`，并用 sort 变异双向验证（删除后新测试 FAIL）。
 - [x] 确认此前已修：S1/S2/S3/S4、mode=audit 越权、aggregate_utility_ledger tuple、agent_name_filter。
-- [ ] M4 已处理行被反复选中 + 审计日志无轮转。
-- [ ] M6 `_ensure_interaction_columns` 在纯 get_conn() 老库路径不可达。
-- [ ] `_paths()` 依赖 cwd；`dry_run` 仍写审计行（与 docstring 不符）。
-- [ ] `resolve.decision` vs ADR `resolve.status` 命名偏差；`low_utility_archive` 未查效用账簿。
-- [ ] `test_kb_ingest_p2_expanded.py:510,955` 的 `or True` 永真断言（范围外）。
+- [ ] M4-a 已处理行仍会被反复选中（候选 SQL 未排除已带 marker 的行）。
+- [x] M4-b 审计日志无轮转。  *(2026-11-11 已修：8MB 轮转 + .1~.3 备份)*
+- [x] M6 `_ensure_interaction_columns` 在纯 get_conn() 老库路径不可达。  *(2026-11-11 已修)*
+- [x] `_paths()` 依赖 cwd；`dry_run` 仍写审计行（与 docstring 不符）。  *(2026-11-11 已修)*
+- [x] `resolve.decision` vs ADR `resolve.status` 命名偏差；`low_utility_archive` 未查效用账簿。  *(2026-11-11 已修)*
+- [x] `test_kb_ingest_p2_expanded.py:510,955` 的 `or True` 永真断言（范围外）。  *(2026-11-11 已修)*
 
 ## 复核 agent 最终结论处置（2026-11-11）
 - [x] 接受「审查签字=有条件通过」的定性；不再宣称单次全绿即稳定。
 - [x] F1 迁移竞态 flake 修复：`duplicate column name` 视为已达成 + `valid_from`/`invalid_at` 入补列兜底。
 - [x] F2 rollback CAS flake 修复：CAS 收窄为策略自有字段。
-- [ ] 审计日志无轮转 / `dry_run` 仍写审计行。
-- [ ] 批量 `_mark` 失败不进 summary.errors（静默）。
-- [ ] `aggregate_utility_ledger` 用 ISO 字符串字典序比较时间（脆弱）。
-- [ ] `resolve.decision` vs ADR `resolve.status` 命名偏差。
-- [ ] `low_utility_archive` 未查效用账簿（名不副实）。
-- [ ] `archive_session` 允许 `.`/`..` 组合文件名（安全无穿越，仅整洁）。
+- [x] 审计日志无轮转 / `dry_run` 仍写审计行。  *(2026-11-11 已修)*
+- [x] 批量 `_mark` 失败不进 summary.errors（静默）。  *(2026-11-11 已修)*
+- [x] `aggregate_utility_ledger` 用 ISO 字符串字典序比较时间（脆弱）。  *(2026-11-11 已修)*
+- [x] `resolve.decision` vs ADR `resolve.status` 命名偏差。  *(2026-11-11 已修)*
+- [x] `low_utility_archive` 未查效用账簿（名不副实）。  *(2026-11-11 已修)*
+- [x] `archive_session` 允许 `.`/`..` 组合文件名（安全无穿越，仅整洁）。  *(2026-11-11 已修)*
 
 ## 结果验收修复（2026-11-11，commit 4302a11）
 - [x] 智能化：分类准确率 1/5 → 5/5（保守规则分类器，仅调用方未指定时生效，显式意图优先）。
 - [x] 自进化：槽位改为主题级稳定标识 → UPDATE/SUPERSEDE/CONFLICT/REVIEW 链路打通。
 - [x] 新增 `tests/test_memory_intelligence.py`（4 tests）守护两项合同。
-- [ ] `review` 门禁只标注不拦截（默认不参与检索尚未实现）。
-- [ ] `session_start` 注入几乎为空（决策/偏好/经验未进上下文）。
-- [ ] 不可读内容仍入库；JSON 被归一化成键值串骗过可读性检查。
-- [ ] subject 机械前缀 + 60 字符硬截断，列表可辨识度低。
+- [x] `review` 门禁只标注不拦截（默认不参与检索尚未实现）。  *(2026-11-11 已修)*
+- [x] `session_start` 注入几乎为空（决策/偏好/经验未进上下文）。  *(2026-11-11 已修)*
+- [x] 不可读内容仍入库；JSON 被归一化成键值串骗过可读性检查。  *(2026-11-11 已修)*
+- [x] subject 机械前缀 + 60 字符硬截断，列表可辨识度低。  *(2026-11-11 已修)*
+
+---
+
+## 技术债清理轮次（2026-11-11，commit 待填）
+| 项 | 状态 | 说明 |
+|---|---|---|
+| `dry_run` 仍写审计行（与 docstring 不符） | ✅ 已修 | dry_run 不再 append 审计；真实运行仍写 |
+| 审计日志无大小轮转 | ✅ 已修 | 8MB 阈值，保留 `.1`~`.3` 三个备份 |
+| `_paths()` 依赖进程 cwd | ✅ 已修 | 改为以模块文件位置为锚，`chdir` 不影响 |
+| `_ensure_interaction_columns` 在纯 `get_conn()` 老库路径不可达 | ✅ 已修 | 已有库首次 `get_conn()` 时幂等补列 |
+| 批量 `_mark` 失败被静默吞 | ✅ 已修 | summary 新增 `errors` 列表，逐条记录失败原因 |
+| `aggregate_utility_ledger` 用 ISO 字符串字典序比时间 | ✅ 已修 | 全部改为 `julianday()` 真实时间比较（6 处） |
+| `resolve.decision` vs ADR `resolve.status` 命名偏差 | ✅ 已修 | 写入时同时输出 `status` 与 `decision`，读取两者兼容 |
+| `low_utility_archive` 未查效用账簿（名不副实） | ✅ 已修 | 真正按负效用槽位选候选；无证据的槽位不动 |
+| `archive_session` 允许 `..` 组合文件名（整洁问题） | ✅ 已修 | 收敛连续点号，`../../etc/passwd` → `session_etcpasswd.jsonl` |
+| `test_kb_ingest_p2_expanded.py` 两处 `or True` 永真断言 | ✅ 已修 | 改为真实断言，改严后仍通过 |
+
+新增回归测试：`tests/test_maintenance_debt.py`（6 tests）覆盖上述行为。
+
+仍未处理（需策略决策，非本轮）：
+- `retrieve()` 的 human viewer 可读 `visibility='private'` 行 —— 属既有信任模型设计，收紧会影响全仓，需单独评估。
+- rollback 定位限于审计尾窗口（4MB/20000 行）—— 保守拒绝符合 fail-safe，需在运维文档说明。
+- `on_capture` pipeline 与前台写入争 SQLite 写锁 —— 建议加 config 开关，属性能/部署议题。

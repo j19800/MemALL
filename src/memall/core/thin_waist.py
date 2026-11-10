@@ -1707,8 +1707,14 @@ def _resolve_decision(conn, data: MemoryInput, h: str, now: str) -> dict:
 
 def _apply_resolve_metadata(data: MemoryInput, resolution: dict, now: str) -> MemoryInput:
     meta = _ensure_metadata_dict(data)
+    _dec = resolution.get("decision")
     meta["resolve"] = {
-        "decision": resolution.get("decision"),
+        # ADR 0028 names this field `status`; the codebase historically wrote
+        # `decision`. Emit BOTH so an ADR-shaped reader and every existing
+        # consumer (which reads decision-then-status) see the same value, with
+        # no migration needed for rows already in the store.
+        "decision": _dec,
+        "status": _dec,
         "slot_key": resolution.get("slot_key"),
         "reason": resolution.get("reason"),
         "target_id": resolution.get("target_id"),

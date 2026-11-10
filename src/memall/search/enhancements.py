@@ -533,7 +533,7 @@ def build_affinity(
             "SUM(CASE WHEN dwell_ms > 0 THEN MIN(dwell_ms, 60000) ELSE 0 END) AS dwell_sum "
             "FROM search_interactions "
             "WHERE agent_name = ? AND memory_id IS NOT NULL "
-            "AND created_at > datetime('now', ?) "
+            "AND julianday(created_at) > julianday('now', ?) "
             "GROUP BY memory_id, action",
             (agent_name, f"-{int(window_days)} days"),
         ).fetchall()
@@ -622,7 +622,7 @@ def build_context_profile(conn, agent_name: str, window_days: int = 7) -> Dict[s
             "SELECT m.project AS p, COUNT(*) AS cnt FROM search_interactions si "
             "JOIN memories m ON m.id = si.memory_id "
             "WHERE si.agent_name = ? AND si.memory_id IS NOT NULL AND m.project != '' "
-            "AND si.created_at > datetime('now', ?) "
+            "AND julianday(si.created_at) > julianday('now', ?) "
             "GROUP BY m.project ORDER BY cnt DESC LIMIT 5",
             (agent_name, f"-{int(window_days)} days"),
         ).fetchall()
@@ -630,7 +630,7 @@ def build_context_profile(conn, agent_name: str, window_days: int = 7) -> Dict[s
             "SELECT m.category AS c, COUNT(*) AS cnt FROM search_interactions si "
             "JOIN memories m ON m.id = si.memory_id "
             "WHERE si.agent_name = ? AND si.memory_id IS NOT NULL AND m.category != '' "
-            "AND si.created_at > datetime('now', ?) "
+            "AND julianday(si.created_at) > julianday('now', ?) "
             "GROUP BY m.category ORDER BY cnt DESC LIMIT 5",
             (agent_name, f"-{int(window_days)} days"),
         ).fetchall()
@@ -817,7 +817,7 @@ def aggregate_interaction_utility(conn, agent_name: str = "", days: int = 30, li
                  FROM search_interactions
                 WHERE memory_id IS NOT NULL
                   AND (? = '' OR agent_name = ?)
-                  AND created_at >= datetime('now', ?)
+                  AND julianday(created_at) >= julianday('now', ?)
                 GROUP BY memory_id
                 ORDER BY (clicks*3 + copies*4 + dwells - skips*2) DESC, impressions DESC
                 LIMIT ?""",
@@ -896,7 +896,7 @@ def aggregate_utility_ledger(conn, agent_name: str = "", days: int = 30,
             f"""SELECT {sel}, COUNT(*) AS interactions{fb}
                   FROM search_interactions
                  WHERE (? = '' OR agent_name = ?)
-                   AND created_at >= datetime('now', ?)
+                   AND julianday(created_at) >= julianday('now', ?)
                  GROUP BY {sel}
                  ORDER BY interactions DESC
                  LIMIT ?""",
@@ -943,7 +943,7 @@ def _legacy_utility_ledger(conn, agent_name, days, limit):
                       COUNT(*) AS interactions
                  FROM search_interactions
                 WHERE memory_id IS NOT NULL AND (? = '' OR agent_name = ?)
-                  AND created_at >= datetime('now', ?)
+                  AND julianday(created_at) >= julianday('now', ?)
                 GROUP BY memory_id ORDER BY interactions DESC LIMIT ?""",
             (agent_name, agent_name, f"-{days} days", limit),
         ).fetchall()

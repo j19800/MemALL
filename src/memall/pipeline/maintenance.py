@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -53,19 +54,59 @@ def _cfg(key: str, default: Any = None):
     return get_config(f"maintenance.{key}", default)
 
 
+def _repo_root() -> Path:
+    """Stable anchor for relative archive/audit paths.
+
+    Anchor on THIS FILE, not on the process cwd: a stdio MCP server inherits
+    whatever directory its client happened to launch it in, so the same config
+    wrote different places depending on who started the process. Absolute
+    configured paths are honoured as-is.
+    """
+    try:
+        return Path(__file__).resolve().parents[3]
+    except Exception:
+        return Path.cwd()
+
+
 def _paths() -> tuple[Path, Path]:
-    """(archive_dir, audit_log) resolved against the repo root (cwd)."""
-    root = Path.cwd()
+    """(archive_dir, audit_log) resolved against the repo root (not cwd)."""
+    root = _repo_root()
     arch = (root / str(_cfg("archive_dir", "ADR/archived_sessions"))).resolve()
     audit = (root / str(_cfg("audit_log", "ADR/archived_sessions/audit.jsonl"))).resolve()
     return arch, audit
 
 
+_AUDIT_MAX_BYTES = 8_000_000   # rotate at ~8MB
+_AUDIT_BACKUPS = 3             # keep audit.jsonl.1 .. .3
+
+
+def _rotate_audit_if_needed(audit: Path) -> None:
+    """Size-based rotation, best effort.
+
+    The log is append-only and every maintenance pass adds a row per marked
+    memory plus a summary, so without rotation it grows forever on a long-lived
+    deployment. Bounded backups keep the newest history while capping disk use.
+    """
+    try:
+        if not audit.exists() or audit.stat().st_size < _AUDIT_MAX_BYTES:
+            return
+        for i in range(_AUDIT_BACKUPS - 1, 0, -1):
+            src = audit.with_suffix(audit.suffix + f".{i}")
+            dst = audit.with_suffix(audit.suffix + f".{i + 1}")
+            if src.exists():
+                src.replace(dst)
+        audit.replace(audit.with_suffix(audit.suffix + ".1"))
+        logger.info("maintenance: rotated audit log at %s bytes", _AUDIT_MAX_BYTES)
+    except Exception as e:
+        logger.debug("maintenance: audit rotation skipped: %s", e)
+
+
 def _append_audit(record: dict) -> None:
-    """Append one audit line (append-only). Never raises."""
+    """Append one audit line (append-only, size-rotated). Never raises."""
     try:
         _, audit = _paths()
         audit.parent.mkdir(parents=True, exist_ok=True)
+        _rotate_audit_if_needed(audit)
         with audit.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
     except Exception as e:
@@ -207,7 +248,33 @@ def _select_candidates(conn, action: str, limit: int) -> list[int]:
                 "ORDER BY updated_at DESC LIMIT ?",
                 (_now(), limit),
             ).fetchall()
-        elif action in ("canonicalize", "low_utility_archive", "theme_profile", "policy_adaptation"):
+        elif action == "low_utility_archive":
+            # This policy is NAMED for utility, so it must actually consult the
+            # utility ledger. It used to share the generic REVIEW query with
+            # canonicalize/theme_profile, which meant "low utility archive"
+            # archived whatever happened to be flagged REVIEW — the name and the
+            # behaviour disagreed. Take the lowest-scoring memories that have
+            # real (negative or zero) utility evidence, and still require they
+            # are not archived.
+            from memall.search.enhancements import aggregate_utility_ledger
+            led = aggregate_utility_ledger(conn, agent_name="", days=90, limit=1000,
+                                           dims=["slot_key"])
+            low_slots = set()
+            for row in (led.get("by_dimension") or []):
+                if row.get("slot_key") and int(row.get("utility_score", 0) or 0) <= 0:
+                    low_slots.add(str(row["slot_key"]))
+            if low_slots:
+                marks = ",".join("?" * len(low_slots))
+                rows = conn.execute(
+                    f"SELECT id FROM memories WHERE "
+                    f"COALESCE(json_extract(metadata,'$.slot_key'),'') IN ({marks}) "
+                    f"AND COALESCE(memory_status,'') != 'archived' "
+                    f"ORDER BY updated_at ASC LIMIT ?",
+                    (*sorted(low_slots), limit),
+                ).fetchall()
+            else:
+                rows = []
+        elif action in ("canonicalize", "theme_profile", "policy_adaptation"):
             # Conservative: only memories already explicitly tagged for review.
             rows = conn.execute(
                 "SELECT id FROM memories WHERE COALESCE(memory_status,'') = 'REVIEW' "
@@ -260,7 +327,7 @@ def run_maintenance(actions: list[str] | None = None, dry_run: bool = False,
             "ok": True, "ran": True, "dry_run": bool(dry_run),
             "ts": _now(), "source_pipeline": str(_cfg("source_pipeline", _MAINTENANCE_PIPELINE)),
             "actions": [], "skipped_unauthorised": skipped,
-            "total_marked": 0, "snapshot_before_write": bool(_cfg("snapshot_before_write", True)),
+            "errors": [], "total_marked": 0, "snapshot_before_write": bool(_cfg("snapshot_before_write", True)),
         }
         if not wanted:
             # Nothing the operator authorised was requested: report and leave
@@ -289,13 +356,25 @@ def run_maintenance(actions: list[str] | None = None, dry_run: bool = False,
                 if res.get("ok"):
                     marked += 1
                     budget -= 1
+                else:
+                    # A failed mark must be VISIBLE. Best-effort does not mean
+                    # silent: the run still continues, but the reason is
+                    # recorded so `total_marked` being low is explainable.
+                    summary["errors"].append({
+                        "action": action, "memory_id": mid,
+                        "error": str(res.get("error"))[:200],
+                    })
             conn.commit()
             summary["actions"].append({
                 "action": action, "candidates": len(cands), "marked": marked,
             })
             summary["total_marked"] += marked
-        _append_audit({"ts": _now(), "action": "run_maintenance",
-                       "dry_run": bool(dry_run), "summary": summary})
+        # dry_run promises "no writes, no audit lines" (see the docstring).
+        # Appending a summary row here contradicted that and left dry runs
+        # indistinguishable from real ones in the audit trail.
+        if not dry_run:
+            _append_audit({"ts": _now(), "action": "run_maintenance",
+                           "dry_run": False, "summary": summary})
         return summary
     except Exception as e:
         logger.debug("maintenance: run failed: %s", e)
@@ -315,7 +394,13 @@ def archive_session(session_id: str, payload: dict | None = None,
     try:
         arch, _ = _paths()
         arch.mkdir(parents=True, exist_ok=True)
-        safe = "".join(ch for ch in (session_id or "unknown") if ch.isalnum() or ch in "-_.")[:80] or "unknown"
+        # Keep only safe characters AND collapse dot runs: allowing "." let a
+        # session_id of "../../etc/passwd" become "session_....etcpasswd.jsonl"
+        # (contained by the whitelist, but ugly and confusing next to real
+        # files). Traversal was never possible; this is tidiness.
+        _safe_raw = "".join(ch for ch in (session_id or "unknown")
+                            if ch.isalnum() or ch in "-_.")[:80]
+        safe = re.sub(r"\.{2,}", ".", _safe_raw).strip(".") or "unknown"
         path = arch / f"session_{safe}.jsonl"
         rec = {
             "ts": _now(), "session_id": session_id, "agent_name": agent_name,
