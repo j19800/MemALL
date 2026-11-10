@@ -102,6 +102,29 @@ class BatchSearchInput(BaseModel):
                 raise ValueError(f'query at index {i} must be a non-empty string')
         return v
 
+class KBIngestInput(BaseModel):
+    """memall_write action=kb_ingest — document -> KB chunks with provenance.
+
+    KB entries are knowledge facts (source_pipeline=document.import,
+    category=knowledge by default) and MUST NOT be conflated with user state
+    (preferences/decisions/continuity).  They carry strong provenance and are
+    deduped/superseded by (doc_id, content_hash/doc_version).
+    """
+    content: str = Field(..., min_length=1, max_length=500000, description="Full document text to ingest")
+    doc_id: str = Field("", max_length=500, description="Stable document identifier (path/url/id); defaults to title/hash")
+    title: str = Field("", max_length=500, description="Document title")
+    path: str = Field("", max_length=2000, description="Source path or URL")
+    project: str = Field("", max_length=500)
+    owner: str = Field("", max_length=200)
+    agent_name: str = Field("", max_length=200)
+    category: str = Field("knowledge", max_length=100)
+    chunk_size: int = Field(1200, ge=200, le=8000, description="Target chunk size in characters")
+    chunk_overlap: int = Field(120, ge=0, le=2000, description="Chunk overlap in characters")
+    doc_version: str = Field("", max_length=200, description="Optional document version/hash label")
+    updated_at: str = Field("", max_length=64, description="Document update time (ISO 8601)")
+    metadata: str = "{}"
+    tags: Optional[Union[str, List[str]]] = None
+
 
 class RetrieveInput(BaseModel):
     query: Optional[str] = Field(None, max_length=5000)
@@ -115,6 +138,7 @@ class RetrieveInput(BaseModel):
     # requires every listed tag; default matches any.
     tags: Optional[List[str]] = Field(None, max_length=32)
     tags_all: bool = False
+    source_pipeline: Optional[str] = Field(None, max_length=200, description="Filter by source_pipeline (e.g., document.import, conversation.capture)")
     # Per-session novelty demotion (see UnifiedSearchInput.session_id).
     session_id: Optional[str] = Field(None, max_length=200)
     # Enhancement layer (same semantics as UnifiedSearchInput).
@@ -254,7 +278,10 @@ class VectorSearchInput(BaseModel):
     top_k: int = Field(10, ge=1, le=500)
     category: Optional[str] = Field(None, description="Filter by category")
     level: Optional[str] = Field(None, description="Filter by level")
+    owner: Optional[str] = Field(None, max_length=200)
+    agent_name: Optional[str] = Field(None, max_length=200)
     project: Optional[str] = Field(None, description="Filter by project")
+    source_pipeline: Optional[str] = Field(None, max_length=200, description="Filter by source_pipeline (e.g., document.import)")
 
 
 class RecordInteractionInput(BaseModel):
@@ -300,6 +327,7 @@ class UnifiedSearchInput(BaseModel):
     level: Optional[str] = Field(None, pattern=r"^(P[0-2]|L(10|11|[1-9]))$")
     owner: Optional[str] = Field(None, max_length=200)
     project: Optional[str] = Field(None, description="Filter by project")
+    source_pipeline: Optional[str] = Field(None, max_length=200, description="Filter by source_pipeline (e.g., document.import)")
     rerank: bool = False
     # Viewer identity — used for trust filtering, personalisation and
     # context-aware boosting.
@@ -394,6 +422,14 @@ class RecapInput(BaseModel):
     """memall_read action=recap — post-compaction context restore (read-only)."""
     agent_name: Optional[str] = Field(None, max_length=200)
     limit: int = Field(5, ge=1, le=50)
+
+class ContinuityPackInput(BaseModel):
+    """memall_read action=continuity_pack — validity-aware cross-session state (read-only)."""
+    agent_name: Optional[str] = Field(None, max_length=200)
+    viewer: Optional[str] = Field(None, max_length=200)
+    project: Optional[str] = Field(None, max_length=500)
+    limit: int = Field(12, ge=1, le=100)
+    include_conflicts: bool = False
 
 
 class GoalWriteInput(BaseModel):

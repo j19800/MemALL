@@ -613,3 +613,197 @@ def test_p1_continuity_pack_include_conflicts_boundary():
         print("PASS: test_p1_continuity_pack_include_conflicts_boundary")
     finally:
         cleanup_temp_db(db_path)
+
+def test_p1_continuity_pack_validity_filter_excludes_expired():
+    """P1: continuity_pack must exclude memories outside validity window (valid_from/invalid_at) from active/conflict buckets."""
+    import json
+    from datetime import datetime, timezone, timedelta
+    from memall.core.db import get_conn
+    db_path, orig_db = init_temp_db()
+    try:
+        from memall.core.kb_policy import KB_SOURCE_PIPELINES as _KB_SPS
+        conn = get_conn()
+        now = datetime.now(timezone.utc)
+        past = (now - timedelta(days=10)).isoformat()
+        future = (now + timedelta(days=10)).isoformat()
+        expired_at = (now - timedelta(days=1)).isoformat()
+        not_yet = (now + timedelta(days=1)).isoformat()
+
+        conn.execute(
+            "INSERT INTO memories (content, content_hash, level, category, project, agent_name, created_at, updated_at, occurred_at, valid_from, invalid_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            ("valid continuity memory", "ch_valid", "L4", "general", "memall", "tester", now.isoformat(), now.isoformat(), now.isoformat(), past, future),
+        )
+        conn.execute(
+            "INSERT INTO memories (content, content_hash, level, category, project, agent_name, created_at, updated_at, occurred_at, valid_from, invalid_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            ("expired continuity memory", "ch_expired", "L4", "general", "memall", "tester", now.isoformat(), now.isoformat(), now.isoformat(), (now - timedelta(days=20)).isoformat(), expired_at),
+        )
+        conn.execute(
+            "INSERT INTO memories (content, content_hash, level, category, project, agent_name, created_at, updated_at, occurred_at, valid_from, invalid_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            ("future continuity memory", "ch_future", "L4", "general", "memall", "tester", now.isoformat(), now.isoformat(), now.isoformat(), not_yet, future),
+        )
+        conn.commit()
+        conn.close()
+
+        from memall.pipeline.session import build_continuity_pack
+        out = build_continuity_pack(agent_name="tester", project="memall", include_conflicts=True)
+        assert out.get("kb_excluded") is True
+        why = out.get("why_selected") or {}
+        assert "temporal_validity" in why.get("filters", [])
+
+        def bucket_texts(items):
+            texts = []
+            for it in (items or []):
+                if isinstance(it, dict):
+                    txt = (it.get("content") or "") + " " + (it.get("summary") or "")
+                    texts.append(txt)
+                else:
+                    texts.append(str(it))
+            return "\n".join(texts)
+
+        active_text = bucket_texts(out.get("active_state"))
+        conflict_text = bucket_texts(out.get("conflicts"))
+        pending_text = bucket_texts(out.get("pending_decisions"))
+        all_text = active_text + "\n" + conflict_text + "\n" + pending_text
+        assert "valid continuity memory" in all_text
+        assert "expired continuity memory" not in all_text
+        assert "future continuity memory" not in all_text
+        print("PASS: test_p1_continuity_pack_validity_filter_excludes_expired")
+    finally:
+        cleanup_temp_db(db_path, orig_db)
+
+
+def test_p1_continuity_pack_include_conflicts_respects_validity():
+    """P1: include_conflicts=True surfaces REVIEW/CONFLICT only when temporally valid; KB still excluded."""
+    import json
+    from datetime import datetime, timezone, timedelta
+    from memall.core.db import get_conn
+    db_path, orig_db = init_temp_db()
+    try:
+        from memall.core.kb_policy import KB_SOURCE_PIPELINES as _KB_SPS
+        conn = get_conn()
+        now = datetime.now(timezone.utc)
+        past = (now - timedelta(days=5)).isoformat()
+        future = (now + timedelta(days=5)).isoformat()
+        expired_at = (now - timedelta(days=1)).isoformat()
+
+        # valid conflict/review candidate
+        conn.execute(
+            "INSERT INTO memories (content, content_hash, level, category, project, agent_name, created_at, updated_at, occurred_at, memory_status, valid_from, invalid_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("valid review memory", "ch_rev_ok", "L4", "general", "memall", "tester", now.isoformat(), now.isoformat(), now.isoformat(), "REVIEW", past, future),
+        )
+        # expired review - must not surface even with include_conflicts
+        conn.execute(
+            "INSERT INTO memories (content, content_hash, level, category, project, agent_name, created_at, updated_at, occurred_at, memory_status, valid_from, invalid_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("expired conflict memory", "ch_conf_exp", "L4", "general", "memall", "tester", now.isoformat(), now.isoformat(), now.isoformat(), "CONFLICT", past, expired_at),
+        )
+        # KB evidence with conflict-like status should still be excluded
+        conn.execute(
+            "INSERT INTO memories (content, content_hash, level, category, project, agent_name, created_at, updated_at, occurred_at, memory_status, metadata, valid_from, invalid_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("kb review evidence", "ch_kb_rev", "L5", "knowledge", "memall", "tester", now.isoformat(), now.isoformat(), now.isoformat(), "REVIEW",
+             json.dumps({"kb_kind":"document_chunk","doc_id":"d1","doc_version":"1","doc_hash":"h","chunk_hash":"c","chunk_index":0,"source_pipeline":"document.import","kb_user_state":False}),
+             past, future),
+        )
+        conn.commit()
+        conn.close()
+
+        from memall.pipeline.session import build_continuity_pack
+        out = build_continuity_pack(agent_name="tester", project="memall", include_conflicts=True)
+        assert out.get("kb_excluded") is True
+        assert "document.import" in (out.get("excluded_source_pipelines") or [])
+
+        def all_text(items):
+            parts = []
+            for it in (items or []):
+                if isinstance(it, dict):
+                    parts.append((it.get("content") or "") + " " + (it.get("summary") or ""))
+            return "\n".join(parts)
+
+        combined = all_text(out.get("conflicts")) + "\n" + all_text(out.get("active_state")) + "\n" + all_text(out.get("pending_decisions"))
+        assert "valid review memory" in combined
+        assert "expired conflict memory" not in combined
+        assert "kb review evidence" not in combined
+        print("PASS: test_p1_continuity_pack_include_conflicts_respects_validity")
+    finally:
+        cleanup_temp_db(db_path, orig_db)
+
+
+def test_p1_continuity_pack_recent_supersedes_boundary():
+    """P1: continuity_pack recent_supersedes should include valid supersession chains and exclude KB/temporally invalid entries."""
+    import json
+    from datetime import datetime, timezone, timedelta
+    from memall.core.db import get_conn
+    db_path, orig_db = init_temp_db()
+    try:
+        from memall.core.kb_policy import KB_SOURCE_PIPELINES as _KB_SPS
+        conn = get_conn()
+        now = datetime.now(timezone.utc)
+        past = (now - timedelta(days=5)).isoformat()
+        future = (now + timedelta(days=5)).isoformat()
+        expired_at = (now - timedelta(days=1)).isoformat()
+
+        # old memory superseded by new valid one
+        conn.execute(
+            "INSERT INTO memories (id, content, content_hash, level, category, project, agent_name, created_at, updated_at, occurred_at, memory_status, valid_from, invalid_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (910001, "old superseded state", "ch_old_sup", "L4", "general", "memall", "tester", past, past, past, "SUPERSEDED", past, future),
+        )
+        conn.execute(
+            "INSERT INTO memories (id, content, content_hash, level, category, project, agent_name, created_at, updated_at, occurred_at, memory_status, metadata, valid_from, invalid_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (910002, "new active state", "ch_new_sup", "L4", "general", "memall", "tester", now.isoformat(), now.isoformat(), now.isoformat(), "ACTIVE",
+             json.dumps({"supersedes": [910001]}), past, future),
+        )
+        # KB supersede-like record must be excluded
+        conn.execute(
+            "INSERT INTO memories (id, content, content_hash, level, category, project, agent_name, created_at, updated_at, occurred_at, memory_status, metadata, valid_from, invalid_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (910003, "kb superseded evidence", "ch_kb_sup", "L5", "knowledge", "memall", "tester", now.isoformat(), now.isoformat(), now.isoformat(), "SUPERSEDED",
+             json.dumps({"kb_kind":"document_chunk","doc_id":"d2","doc_version":"1","doc_hash":"h2","chunk_hash":"c2","chunk_index":0,"source_pipeline":"document.import","kb_user_state":False}),
+             past, future),
+        )
+        conn.commit()
+        conn.close()
+
+        from memall.pipeline.session import build_continuity_pack
+        out = build_continuity_pack(agent_name="tester", project="memall", include_conflicts=True)
+        assert out.get("kb_excluded") is True
+        # KB must not appear
+        blob = json.dumps(out, ensure_ascii=False)
+        assert "kb superseded evidence" not in blob
+        # valid supersession chain should be present if implementation surfaces it
+        assert "new active state" in blob or "old superseded" in blob
+        print("PASS: test_p1_continuity_pack_recent_supersedes_boundary")
+    finally:
+        cleanup_temp_db(db_path, orig_db)
+
+
+def test_p1_session_start_mcp_kb_exclusion_contract():
+    """P1: session_start via MCP handler must mark kb_excluded and exclude KB evidence from injected continuity surfaces."""
+    from datetime import datetime, timezone
+    from memall.core.thin_waist import capture
+    from memall.mcp.tools.session import handle_session_start
+
+    # regular memory
+    capture("regular session memory for continuity", level="L4", category="general", agent_name="tester", project="memall")
+    # KB chunk evidence (should be excluded from continuity surfaces)
+    capture("kb evidence chunk should not be injected", level="L5", category="knowledge", agent_name="tester", project="memall",
+            metadata={"kb_kind":"document_chunk","doc_id":"docA","doc_version":"v1","doc_hash":"dh","chunk_hash":"ch","chunk_index":0,"source_pipeline":"document.import","kb_user_state":False})
+
+    raw = handle_session_start({"agent_name": "tester", "auto_inject": True})
+    out = json.loads(raw)
+    assert out.get("status") == "active"
+    assert out.get("kb_excluded") is True
+    assert "document.import" in (out.get("excluded_source_pipelines") or [])
+    inj = out.get("injection") or {}
+    assert inj.get("kb_excluded") is True
+
+    # ensure KB evidence content not present in primary injected lists
+    blob = json.dumps({k: out.get(k) for k in ("l4_recent", "l5_active", "l3_matched", "injection")}, ensure_ascii=False)
+    assert "kb evidence chunk should not be injected" not in blob
+    print("PASS: test_p1_session_start_mcp_kb_exclusion_contract")

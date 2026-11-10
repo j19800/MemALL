@@ -16,7 +16,19 @@ logger = logging.getLogger(__name__)
 
 # ── Default configuration ──────────────────────────────────────────────
 _DEFAULT_CONFIG: Dict[str, Any] = {
-    "kb": {"enrich_async": True},  # P2-4
+    "kb": {
+        "enrich_async": True,
+        "enrich_worker": {
+            "backend": "sqlite+queue",
+            "max_attempts": 3,
+            "base_backoff_seconds": 5,
+            "max_backoff_seconds": 300,
+            "claim_ttl_seconds": 300,
+            "batch_size": 10,
+            "poll_interval_seconds": 2,
+            "autostart": False,
+        },
+    },  # P2-4
     "db": {
         "path": str(Path.home() / ".memall" / "data.db"),
     },
@@ -94,6 +106,14 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
             # inferred from recent interactions.
             "weight": 0.15,
             "window_days": 7,
+        },
+        # P3 conservative: interaction-utility rerank. **Default off**; never
+        # changes ranking unless explicitly enabled by config + call flag.
+        "utility_rerank": {
+            "enabled": False,
+            "weight": 0.12,
+            "window_days": 30,
+            "min_interactions": 2,
         },
         # Per-session "already returned" tracking.  A repeat query within one
         # session gets the same top-k both times and teaches the agent nothing;

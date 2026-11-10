@@ -330,6 +330,10 @@ def _pending_l5_for(conn, agent_name: str) -> tuple:
     pending_tasks = []
     l5_active_global = []
     try:
+        from memall.core.kb_policy import KB_SOURCE_PIPELINES
+        _kbs = "','".join(KB_SOURCE_PIPELINES)
+        _kbm = "COALESCE(json_extract(metadata, '$.source_pipeline'), '')"
+        _kb_excl = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
         rows = conn.execute(
             "SELECT id, content, summary, subject, metadata, category, level, created_at "
             "FROM memories "
@@ -340,6 +344,7 @@ def _pending_l5_for(conn, agent_name: str) -> tuple:
             "AND COALESCE(LOWER(json_extract(metadata, '$.assignee')), "
             "             LOWER(agent_name)) = LOWER(?) "
             f"AND {NOT_ARCHIVED} "
+            f"AND {_kb_excl} "
             "AND LENGTH(TRIM(content)) > 5 "
             "ORDER BY created_at DESC LIMIT 20",
             (agent_name,),
@@ -446,7 +451,8 @@ def auto_inject(agent_name: str) -> dict:
         reflections = []
         rows = conn.execute(
             "SELECT id, content, summary, category, created_at FROM memories "
-            "WHERE agent_name = ? AND level = 'L6' AND LENGTH(TRIM(content)) > 10 "
+            "WHERE agent_name = ? AND level = 'L6' AND category != 'knowledge' "
+            "AND LENGTH(TRIM(content)) > 10 "
             "ORDER BY created_at DESC LIMIT 5",
             (agent_name,),
         ).fetchall()
@@ -462,9 +468,14 @@ def auto_inject(agent_name: str) -> dict:
         # ══ 2.5. L7 Lessons (learned patterns extracted from L6 reflections) ══
         l7_lessons = []
         try:
+            from memall.core.kb_policy import KB_SOURCE_PIPELINES
+            _kbs = "','".join(KB_SOURCE_PIPELINES)
+            _kbm = "COALESCE(json_extract(metadata, '$.source_pipeline'), '')"
+            _kb_excl = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
             rows = conn.execute(
-                "SELECT id, content, category, weight, created_at FROM memories "
+                "SELECT id, content, category, weight, created_at, metadata FROM memories "
                 "WHERE agent_name = ? AND level = 'L7' "
+                f"AND {_kb_excl} "
                 "AND LENGTH(TRIM(content)) > 10 "
                 "ORDER BY weight DESC, created_at DESC LIMIT 5",
                 (agent_name,),
@@ -513,9 +524,15 @@ def auto_inject(agent_name: str) -> dict:
             # Supplement L1 from memories table (catches classify_step assignments
             # that identity_step hasn't processed yet)
             try:
+                from memall.core.kb_policy import KB_SOURCE_PIPELINES
+                _kbs = "','".join(KB_SOURCE_PIPELINES)
+                _kbm = "COALESCE(json_extract(metadata, '$.source_pipeline'), '')"
+                _kb_excl = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
                 l1_rows = conn.execute(
-                    "SELECT content FROM memories "
-                    "WHERE agent_name = ? AND level = 'L1' AND LENGTH(TRIM(content)) > 10 "
+                    "SELECT content, metadata FROM memories "
+                    "WHERE agent_name = ? AND level = 'L1' "
+                    f"AND {_kb_excl} "
+                    "AND LENGTH(TRIM(content)) > 10 "
                     "ORDER BY created_at DESC LIMIT 5",
                     (agent_name,),
                 ).fetchall()
@@ -530,9 +547,15 @@ def auto_inject(agent_name: str) -> dict:
 
             # Supplement L7 from memories table (catches distill_l7_step lessons)
             try:
+                from memall.core.kb_policy import KB_SOURCE_PIPELINES
+                _kbs = "','".join(KB_SOURCE_PIPELINES)
+                _kbm = "COALESCE(json_extract(metadata, '$.source_pipeline'), '')"
+                _kb_excl = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
                 l7_rows = conn.execute(
-                    "SELECT content FROM memories "
-                    "WHERE agent_name = ? AND level = 'L7' AND LENGTH(TRIM(content)) > 10 "
+                    "SELECT content, metadata FROM memories "
+                    "WHERE agent_name = ? AND level = 'L7' "
+                    f"AND {_kb_excl} "
+                    "AND LENGTH(TRIM(content)) > 10 "
                     "ORDER BY weight DESC, created_at DESC LIMIT 5",
                     (agent_name,),
                 ).fetchall()
@@ -567,9 +590,14 @@ def auto_inject(agent_name: str) -> dict:
         workflow_skills = []
         try:
             # L3 scope: agent=own agent only, family/shared=all agents, NULL=agent (backward compat)
+            from memall.core.kb_policy import KB_SOURCE_PIPELINES
+            _kbs = "','".join(KB_SOURCE_PIPELINES)
+            _kbm = "COALESCE(json_extract(metadata, '$.source_pipeline'), '')"
+            _kb_excl = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
             rows = conn.execute(
                 "SELECT id, subject, content, category, metadata FROM memories "
                 "WHERE level = 'L3' AND LENGTH(TRIM(content)) > 50 "
+                f"AND {_kb_excl} "
                 "AND ("
                 "  json_extract(metadata, '$.scope') IN ('family', 'shared')"
                 "  OR (COALESCE(json_extract(metadata, '$.scope'), 'agent') = 'agent' AND agent_name = ?)"
@@ -605,10 +633,15 @@ def auto_inject(agent_name: str) -> dict:
         decision_arcs = {"open": [], "in_progress": [], "closed": []}
         l4_recent_global = []
         try:
+            from memall.core.kb_policy import KB_SOURCE_PIPELINES
+            _kbs = "','".join(KB_SOURCE_PIPELINES)
+            _kbm = "COALESCE(json_extract(metadata, '$.source_pipeline'), '')"
+            _kb_excl = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
             rows = conn.execute(
                 "SELECT id, subject, content, summary, metadata, arc_status, created_at "
                 "FROM memories "
                 "WHERE level = 'L4' AND LOWER(agent_name) = LOWER(?) "
+                f"AND {_kb_excl} "
                 "AND LENGTH(TRIM(content)) > 5 "
                 "ORDER BY created_at DESC LIMIT 20",
                 (agent_name,),
@@ -643,7 +676,8 @@ def auto_inject(agent_name: str) -> dict:
         try:
             rows = conn.execute(
                 "SELECT id, subject, content, summary, category, created_at FROM memories "
-                "WHERE level = 'L10' AND LENGTH(TRIM(content)) > 50 "
+                "WHERE level = 'L10' AND category != 'knowledge' "
+                "AND LENGTH(TRIM(content)) > 50 "
                 "ORDER BY created_at DESC LIMIT 3"
             ).fetchall()
             for r in rows:
@@ -662,7 +696,8 @@ def auto_inject(agent_name: str) -> dict:
         try:
             rows = conn.execute(
                 "SELECT id, subject, content, summary, category, created_at FROM memories "
-                "WHERE level = 'L11' AND LENGTH(TRIM(content)) > 30 "
+                "WHERE level = 'L11' AND category != 'knowledge' "
+                "AND LENGTH(TRIM(content)) > 30 "
                 "ORDER BY created_at DESC LIMIT 5"
             ).fetchall()
             for r in rows:
@@ -714,6 +749,8 @@ def auto_inject(agent_name: str) -> dict:
             "l4_recent_global": l4_recent_global,
             "l5_active_global": l5_active_global,
             "behavior_patterns": behavior_patterns,
+            "kb_excluded": True,
+            "excluded_source_pipelines": list(KB_SOURCE_PIPELINES),
             "injected_at": datetime.now(timezone.utc).isoformat(),
         }
         _inject_cache[agent_name] = {"cached_at": datetime.now(timezone.utc), "data": result}
@@ -871,6 +908,8 @@ def auto_extract(session_id: str) -> dict:
     Called on session_end. Queries memories from the session period,
     extracts key facts, and publishes to shared_memories.
     """
+    from memall.core.thin_waist import _is_human_readable_content, _normalize_content_for_human_readability
+
     conn = get_conn()
     try:
         # Get session boundaries
@@ -892,12 +931,29 @@ def auto_extract(session_id: str) -> dict:
         ).fetchall()
 
         published_ids = []
+        skipped_unreadable = 0
         now = datetime.now(timezone.utc).isoformat()
         family_conn = _get_family_conn()
 
         try:
             for r in rows:
-                content = redact_content(r["content"][:500])
+                raw = r["content"] or ""
+                ok_r, _ = _is_human_readable_content(raw)
+                if not ok_r:
+                    nc, changed, _ = _normalize_content_for_human_readability(raw)
+                    if changed and nc and len(nc.strip()) >= 12:
+                        raw = nc
+                    else:
+                        try:
+                            from memall.config import get_config as _gc
+                            _rej = _gc("quality.federation_reject_unreadable", _gc("quality.auto_reject_unreadable", False))
+                        except Exception:
+                            _rej = False
+                        if _rej:
+                            skipped_unreadable += 1
+                            continue
+                        # no-reject default: still publish normalized/raw marker via metadata path not available; keep content
+                content = redact_content(raw[:500])
                 family_conn.execute(
                     """INSERT OR IGNORE INTO shared_memories
                        (original_id, source_agent, source_db, content, category, level, owner, published_at, trust_level)
@@ -915,6 +971,7 @@ def auto_extract(session_id: str) -> dict:
             "agent_name": agent_name,
             "memories_scanned": len(rows),
             "facts_published": len(published_ids),
+            "skipped_unreadable": skipped_unreadable,
             "published_ids": published_ids[:20],
         }
     finally:

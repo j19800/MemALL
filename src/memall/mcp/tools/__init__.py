@@ -453,6 +453,13 @@ def _handle_system(args: dict) -> str:
         return hub.handle_sync(args)
     elif action == "session_start":
         return session.handle_session_start(args)
+    elif action == "kb_enrich_stats":
+        from memall.pipeline.kb_enrich import kb_enrich_stats
+        return json.dumps(kb_enrich_stats(), ensure_ascii=False)
+    elif action == "kb_reprocess":
+        from memall.pipeline.kb_enrich import reprocess_kb_enrich
+        result = reprocess_kb_enrich(args)
+        return json.dumps(result, ensure_ascii=False)
     elif action == "session_end":
         return session.handle_session_end(args)
     elif action == "session_summary":
@@ -480,7 +487,7 @@ def _handle_system(args: dict) -> str:
     elif action == "index_rebuild":
         return index.handle(args)
     elif action == "import":
-        import json, pathlib
+        import pathlib
         from memall.auto_capture import import_from_jsonl, import_from_csv, import_from_mem0
         fmt = args.get("format", "jsonl")
         path = args.get("path", "")
@@ -501,7 +508,7 @@ def _handle_system(args: dict) -> str:
         return json.dumps(result, ensure_ascii=False)
     elif action in ("digest", "每日摘要", "日报", "总结"):
         # Daily digest — count today's memories by category with content snippets
-        import json, datetime
+        import datetime
         from memall.core.db import pool_conn
         # Days roll over at UTC+8 local midnight; created_at is stored UTC.
         now_utc8 = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)
@@ -565,7 +572,7 @@ def _handle_system(args: dict) -> str:
     elif action in ("hot", "热门", "热点", "热榜"):
         # Hot topics — most accessed or recently active memories
         from memall.core.db import get_conn
-        import json, datetime
+        import datetime
         conn = get_conn()
         try:
             now_utc = datetime.datetime.now(datetime.timezone.utc)
@@ -595,7 +602,7 @@ registry.register(ToolDef(
     name="memall_system",
     description="Pipeline, sessions, gateway, hub sync, DB maintenance, security, adaptive, onboarding, reflection, index rebuild, daily digest, hot topics. Actions: run_pipeline | distill | gateway | hub_connect | hub_sync | session_start | session_end | session_summary | db | security | adaptive | onboarding | reflect | index_rebuild | digest (每日摘要/日报/总结) | hot (热门/热点/热榜)",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["run_pipeline", "distill", "gateway", "hub_connect", "hub_sync", "session_start", "session_end", "session_summary", "db", "security", "adaptive", "onboarding", "reflect", "index_rebuild", "digest", "每日摘要", "日报", "总结", "hot", "热门", "热点", "热榜"]},
+        "action": {"type": "string", "enum": ["run_pipeline", "distill", "gateway", "hub_connect", "hub_sync", "session_start", "session_end", "session_summary", "db", "security", "adaptive", "onboarding", "reflect", "index_rebuild", "digest", "每日摘要", "日报", "总结", "hot", "热门", "热点", "热榜", "kb_enrich_stats", "kb_reprocess"]},
         # Per-action sub-action vocabularies.  Each action accepts ONLY its own
         # field — a single shared ``sub_action`` enum used to mix seven
         # vocabularies, so almost every declared value was invalid for almost

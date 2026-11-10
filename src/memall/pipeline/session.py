@@ -466,29 +466,49 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
         if auto_inject and agent_name:
             from memall.mcp.federation_tools import auto_inject as _auto_inject
             injection = _auto_inject(agent_name)
-            # KB evidence must not enter session continuity/user-state context
+            # KB evidence must not enter session continuity/user-state context (defensive whole-injection)
             _kb_sp = set(KB_SOURCE_PIPELINES)
-            def _kb_exclude(lst):
-                out = []
-                for it in (lst or []):
-                    sp = ""
-                    md = it.get("metadata") or {}
-                    if isinstance(md, str):
-                        try: import json as _j; md = _j.loads(md)
-                        except Exception: md = {}
-                    sp = (md.get("source_pipeline") or it.get("source_pipeline") or "").strip()
-                    if sp in _kb_sp: continue
-                    if (it.get("category") or "") == "knowledge" and sp.startswith("document."): continue
-                    out.append(it)
-                return out
-            injection["l4_recent_global"] = _kb_exclude(injection.get("l4_recent_global", []))
-            injection["l5_active_global"] = _kb_exclude(injection.get("l5_active_global", []))
+
+            def _is_kb_item(it) -> bool:
+                if not isinstance(it, dict):
+                    return False
+                sp = str(it.get("source_pipeline") or it.get("metadata_source_pipeline") or "").strip()
+                md = it.get("metadata") or {}
+                if isinstance(md, str):
+                    try:
+                        md = json.loads(md)
+                    except Exception:
+                        md = {}
+                if isinstance(md, dict):
+                    sp = str(md.get("source_pipeline") or sp).strip()
+                cat = str(it.get("category") or "")
+                return sp in _kb_sp or sp.startswith("document.") or (cat == "knowledge" and (sp.startswith("document.") or sp in _kb_sp))
+
+            def _filter_kb_value(v):
+                if isinstance(v, list):
+                    return [x for x in v if not _is_kb_item(x)]
+                if isinstance(v, dict):
+                    return {k: _filter_kb_value(vv) for k, vv in v.items()}
+                return v
+
+            if isinstance(injection, dict):
+                injection = {k: _filter_kb_value(v) for k, v in injection.items()}
+                injection["kb_excluded"] = True
+                injection["excluded_source_pipelines"] = list(_kb_sp)
+            result["injection"] = injection
+            result["l4_recent"] = (injection or {}).get("l4_recent_global", []) if isinstance(injection, dict) else []
+            result["l5_active"] = (injection or {}).get("l5_active_global", []) if isinstance(injection, dict) else []
+            result["kb_excluded"] = True
+            result["excluded_source_pipelines"] = list(_kb_sp)
             result["injection"] = injection
 
             result["l4_recent"] = injection.get("l4_recent_global", [])
 
             l5_todos = injection.get("l5_active_global", [])
             result["l5_active"] = l5_todos
+            # P1/P2 contract: session continuity surfaces exclude KB evidence (additive, back-compat)
+            result["kb_excluded"] = True
+            result["excluded_source_pipelines"] = list(_kb_sp)
 
             # L3 workflow matching by category (infer from last memory)
             l3_workflows = []
@@ -503,10 +523,9 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                         from memall.core.kb_policy import kb_sql_exclusion_clauses
                         _kb_l3 = " AND ".join(kb_sql_exclusion_clauses())
                     except Exception:
-                        _kb_l3 = (
-                            "COALESCE(json_extract(metadata, '$.source_pipeline'), '') NOT IN ('document.import', 'kb_ingest') "
-                            "AND NOT (COALESCE(category,'')='knowledge' AND COALESCE(json_extract(metadata, '$.source_pipeline'),'') LIKE 'document.%')"
-                        )
+                        _kbs = "','".join(KB_SOURCE_PIPELINES)
+                        _kbm = "COALESCE(json_extract(metadata, '$.source_pipeline'), '')"
+                        _kb_l3 = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
                     l3_rows = conn.execute(
                         "SELECT id, subject, summary, content FROM memories "
                         "WHERE level = 'L3' AND category = ? "
@@ -1120,13 +1139,19 @@ def build_continuity_pack(
         # KB entries (document.import/knowledge provenance) are evidence, not user state:
         # continuity packs must not conflate them with preferences/decisions.
         base_where.append("(memory_status IS NULL OR memory_status NOT IN ('archived','superseded','deleted'))")
+        # Temporal validity (P1): exclude expired or not-yet-valid records when timestamps are present.
+        base_where.append("(valid_from IS NULL OR valid_from = '' OR valid_from <= ?)")
+        base_params.append(now_ts)
+        base_where.append("(invalid_at IS NULL OR invalid_at = '' OR invalid_at > ?)")
+        base_params.append(now_ts)
         try:
             from memall.core.kb_policy import kb_sql_exclusion_clauses
             base_where.extend(kb_sql_exclusion_clauses())
         except Exception:
-            # kb_policy-equivalent fallback (no import): exclude KB source pipelines and document-provenance knowledge
+            # kb_policy-equivalent fallback: derive from KB_SOURCE_PIPELINES to avoid literal drift
             _kbm = "COALESCE(json_extract(metadata,'$.source_pipeline'),'')"
-            base_where.append(f"{_kbm} NOT IN ('document.import','kb_ingest')")
+            _kbsps = "','".join(KB_SOURCE_PIPELINES)
+            base_where.append(f"{_kbm} NOT IN ('{_kbsps}')")
             base_where.append(f"NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')")
         if not include_conflicts:
             base_where.append("(memory_status IS NULL OR (memory_status NOT LIKE '%CONFLICT%' AND memory_status NOT LIKE '%REVIEW%'))")
@@ -1212,7 +1237,7 @@ def build_continuity_pack(
         except Exception:
             _excluded_sps = ["document.import", "kb_ingest"]
         _why = {
-            "filters": ["validity_aware", "kb_excluded", "non_archived", "agent/project scoped"],
+            "filters": ["validity_aware", "temporal_validity", "kb_excluded", "non_archived", "agent/project scoped"],
             "kb_excluded": True,
             "excluded_source_pipelines": _excluded_sps,
         }

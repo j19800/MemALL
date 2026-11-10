@@ -11,6 +11,12 @@ def set_kb_enrich_hook(fn):
     _kb_enrich_hook = fn
 
 def _fire_kb_enrich(meta: dict) -> None:
+    """Best-effort KB enrichment.
+    1) Calls the registered hook (non-blocking, daemon thread).
+    2) If kb.enrich_worker.backend == sqlite+queue, also enqueues a job
+       into the persistent pipeline_jobs table for background worker processing.
+    Failures are swallowed so capture() remains non-blocking.
+    """
     global _kb_enrich_calls
     fn = _kb_enrich_hook
     if not callable(fn):
@@ -20,6 +26,45 @@ def _fire_kb_enrich(meta: dict) -> None:
         import threading
         t = threading.Thread(target=lambda: fn(meta), daemon=True)
         t.start()
+    except Exception:
+        pass
+    # P2-4: persistent queue path (sqlite+queue) — best-effort, non-blocking
+    try:
+        from memall.core.db import get_conn
+        from memall.config import get_config as _gc
+        cfg = _gc("kb.enrich_worker.backend", "sqlite+queue")
+        if str(cfg).strip() == "sqlite+queue":
+            doc_id = meta.get("doc_id")
+            chunk_hash = meta.get("chunk_hash")
+            doc_version = meta.get("doc_version")
+            chunk_index = meta.get("chunk_index")
+            conn = get_conn()
+            now_iso = __import__('datetime').datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+            # Cross-process idempotency: skip if an active/completed job exists for same key
+            exists = conn.execute(
+                """SELECT 1 FROM pipeline_jobs
+                   WHERE kind='kb_enrich'
+                     AND (doc_id = ? OR (doc_id IS NULL AND ? IS NULL))
+                     AND (chunk_hash = ? OR (chunk_hash IS NULL AND ? IS NULL))
+                     AND (doc_version = ? OR (doc_version IS NULL AND ? IS NULL))
+                     AND (chunk_index = ? OR (chunk_index IS NULL AND ? IS NULL))
+                     AND status IN ('queued','running','ok','completed')
+                   LIMIT 1""",
+                (doc_id, doc_id, chunk_hash, chunk_hash, doc_version, doc_version, chunk_index, chunk_index),
+            ).fetchone()
+            if not exists:
+                max_attempts = int(_gc("kb.enrich_worker.max_attempts", 3) or 3)
+                conn.execute(
+                    """INSERT INTO pipeline_jobs
+                       (created_at, kind, doc_id, chunk_hash, doc_version, chunk_index, source_pipeline, metadata, status, attempts, max_attempts, next_retry_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (now_iso, "kb_enrich", doc_id, chunk_hash, doc_version, chunk_index,
+                     meta.get("source_pipeline"),
+                     json.dumps({k: v for k, v in meta.items() if k in ("doc_id","chunk_hash","doc_version","chunk_index","source_pipeline","memory_id","project")}, ensure_ascii=False),
+                     "queued", 0, max_attempts, now_iso),
+                )
+                conn.commit()
+            conn.close()
     except Exception:
         pass
 
@@ -306,6 +351,15 @@ def handle_kb_ingest(arguments: dict) -> str:
                     if d.get(k) is not None:
                         row_result[k] = d[k]
             results.append(row_result)
+            # P2-4: async/non-blocking KB enrichment hook (best-effort)
+            try:
+                _fire_kb_enrich({
+                    "doc_id": doc_id, "chunk_hash": chunk_hash, "doc_version": doc_version,
+                    "chunk_index": chunk_info["chunk_index"], "source_pipeline": source_pipeline,
+                    "memory_id": int(mid) if mid is not None else None, "project": project,
+                })
+            except Exception:
+                pass
         except Exception as e:
             errors.append({"chunk_index": chunk_info["chunk_index"], "error": str(e)})
 

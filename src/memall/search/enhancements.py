@@ -742,7 +742,100 @@ def record_interaction(
         return False
 
 
+
+
+def aggregate_interaction_utility(conn, agent_name: str = "", days: int = 30, limit: int = 500) -> Dict[str, Any]:
+    """Read-only aggregation of search_interactions for P3 utility ledger experiments.
+
+    **Not wired into ranking by default.** Returns conservative aggregates;
+    callers must opt in via explicit config/strategy switches and tests.
+    """
+    if conn is None:
+        return {"ok": False, "error": "no_connection", "agent_name": agent_name, "by_memory": []}
+    try:
+        agent_name = (agent_name or "")[:200]
+        days = max(1, min(int(days or 30), 365))
+        limit = max(1, min(int(limit or 500), 5000))
+        rows = conn.execute(
+            """SELECT memory_id,
+                      SUM(CASE WHEN action='click' THEN 1 ELSE 0 END) AS clicks,
+                      SUM(CASE WHEN action='copy' THEN 1 ELSE 0 END) AS copies,
+                      SUM(CASE WHEN action='dwell' THEN 1 ELSE 0 END) AS dwells,
+                      SUM(CASE WHEN action='skip' THEN 1 ELSE 0 END) AS skips,
+                      SUM(CASE WHEN action='impression' THEN 1 ELSE 0 END) AS impressions,
+                      COALESCE(SUM(dwell_ms), 0) AS dwell_ms_total,
+                      MAX(created_at) AS last_seen
+                 FROM search_interactions
+                WHERE memory_id IS NOT NULL
+                  AND (? = '' OR agent_name = ?)
+                  AND created_at >= datetime('now', ?)
+                GROUP BY memory_id
+                ORDER BY (clicks*3 + copies*4 + dwells - skips*2) DESC, impressions DESC
+                LIMIT ?""",
+            (agent_name, agent_name, f"-{days} days", limit),
+        ).fetchall()
+        by_memory = []
+        for r in rows:
+            if hasattr(r, "keys"):
+                d = {k: r[k] for k in r.keys()}
+            else:
+                d = {"memory_id": r[0], "clicks": r[1], "copies": r[2], "dwells": r[3], "skips": r[4], "impressions": r[5], "dwell_ms_total": r[6], "last_seen": r[7]}
+            d["utility_score"] = int(d.get("clicks", 0) or 0) * 3 + int(d.get("copies", 0) or 0) * 4 + int(d.get("dwells", 0) or 0) - int(d.get("skips", 0) or 0) * 2
+            by_memory.append(d)
+        return {"ok": True, "agent_name": agent_name, "days": days, "by_memory": by_memory, "count": len(by_memory)}
+    except Exception as e:
+        logger.debug("enhancements: aggregate_interaction_utility failed", exc_info=True)
+        return {"ok": False, "error": str(e)[:200], "agent_name": agent_name, "by_memory": []}
+
 # ── Orchestration ────────────────────────────────────────────────────
+
+
+def _apply_utility_rerank(
+    results: List[Dict[str, Any]],
+    conn,
+    agent_name: str = "",
+    window_days: int = 30,
+    weight: float = 0.12,
+    min_interactions: int = 2,
+) -> List[Dict[str, Any]]:
+    """P3 opt-in: blend read-only interaction utility into final ordering.
+
+    **Default off** (config-gated). Conservative: requires >=min_interactions
+    aggregate evidence per memory; never drops items; stores debug fields.
+    """
+    if not results or conn is None or not agent_name:
+        return results
+    try:
+        agg = aggregate_interaction_utility(conn, agent_name=agent_name, days=window_days, limit=1000)
+        if not agg.get("ok"):
+            return results
+        util = {}
+        for m in agg.get("by_memory", []):
+            mid = m.get("memory_id")
+            if mid is None:
+                continue
+            evidence = int(m.get("clicks", 0) or 0) + int(m.get("copies", 0) or 0) + int(m.get("dwells", 0) or 0) + int(m.get("impressions", 0) or 0)
+            if evidence < max(1, int(min_interactions or 1)):
+                continue
+            util[int(mid)] = float(m.get("utility_score", 0) or 0)
+        if not util:
+            return results
+        vals = list(util.values())
+        denom = max(abs(min(vals)), abs(max(vals)), 1.0)
+        for r in results:
+            rid = r.get("id") or r.get("memory_id")
+            try:
+                rid_i = int(rid) if rid is not None else None
+            except Exception:
+                rid_i = None
+            u = util.get(rid_i, 0.0) / denom
+            r["utility_rerank_signal"] = round(u, 6)
+            base = float(r.get("context_score") or r.get("personalized_score") or r.get("rerank_score") or r.get("rrf_score") or r.get("score") or 0.0)
+            r["utility_rerank_score"] = round(base * (1.0 + max(0.0, min(float(weight), 0.5)) * u), 6)
+        results.sort(key=lambda r: (r.get("utility_rerank_score") if r.get("utility_rerank_score") is not None else -1e9), reverse=True)
+    except Exception:
+        logger.debug("enhancements: utility rerank failed", exc_info=True)
+    return results
 
 
 def apply_enhancements(
@@ -754,6 +847,7 @@ def apply_enhancements(
     cluster: bool = False,
     personalize: bool = False,
     context_boost: bool = False,
+    utility_rerank: bool = False,
 ) -> Dict[str, Any]:
     """Apply the enabled post-retrieval enhancements to *results*.
 
@@ -793,6 +887,17 @@ def apply_enhancements(
             out["results"],
             affinity,
             weight=get_config("search.personalization.weight", 0.25),
+        )
+
+    # P3 conservative utility rerank (explicit flag + config gate; default off).
+    if utility_rerank and get_config("search.utility_rerank.enabled", False):
+        out["results"] = _apply_utility_rerank(
+            out["results"],
+            conn,
+            agent_name=agent_name,
+            window_days=int(get_config("search.utility_rerank.window_days", 30) or 30),
+            weight=float(get_config("search.utility_rerank.weight", 0.12) or 0.12),
+            min_interactions=int(get_config("search.utility_rerank.min_interactions", 2) or 2),
         )
 
     # 4. Clustering (computed on the final ordering, cheap TF-IDF only).

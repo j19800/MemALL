@@ -194,7 +194,7 @@ PYTHONPATH=.:src ./.venv/bin/python -m pytest \
   tests/test_kb_ingest_p2.py tests/test_kb_ingest_p2_expanded.py \
   tests/test_capture_resolve_engine.py \
   tests/test_session.py tests/test_session_sweep.py -q
-# 结果：39 passed（24 + 15），2026-11-10 本地（P2-3 fallback 对齐 + P1 边界/P3/MCP 契约补充）
+# 结果：43 passed (expanded)（24 + 15），2026-11-10 本地（P2-3 fallback 对齐 + P1 边界/P3/MCP 契约补充）
 ```
 
 ### 待继续（验收后再提交）
@@ -210,3 +210,29 @@ PYTHONPATH=.:src ./.venv/bin/python -m pytest \
 - **P1**：`handle_continuity_pack` MCP 路径委托 `session.build_continuity_pack` 已 smoke；补充 `test_p1_continuity_pack_mcp_handler_contract`（契约键 + KB 排除标签 + KB 证据不进入包体）。
 - **P2-4**：`kb_enrich` 增强为幂等 key（`doc_id+chunk_hash+doc_version+chunk_index`）+ 有界 seen set + 统计字段（`fired/ok/failed/skipped/deduped/last_error/seen_keys`）；仍为进程内非持久化骨架，未阻塞 capture。后续必须替换为可配置持久化 enqueue/后台 worker（跨进程幂等、重试上限、可重处理）。
 - **P3（最小，保守）**：确认 `record_interaction` 已存在（`memall_write` 路由 + `search.enhancements.record_interaction` + MCP schema/validator）；补充 `test_p3_record_interaction_mcp_best_effort`，验证 best-effort/参数校验，不改变排序默认行为。
+
+### P0–P2 技术文档/清单/债务（已补齐）
+- 总览与索引：[docs/p0-p2/README.md](../docs/p0-p2/README.md)
+- 改造技术文档：[docs/p0-p2/TRANSFORMATION_DOC.md](../docs/p0-p2/TRANSFORMATION_DOC.md)
+- P0/P1/P2 分项：[docs/p0-p2/p0-resolve-exposure.md](../docs/p0-p2/p0-resolve-exposure.md)、[docs/p0-p2/p1-continuity-contract.md](../docs/p0-p2/p1-continuity-contract.md)、[docs/p0-p2/p2-kb-boundary-hardening.md](../docs/p0-p2/p2-kb-boundary-hardening.md)
+- 提交清单：[docs/p0-p2/COMMIT_CHECKLIST.md](../docs/p0-p2/COMMIT_CHECKLIST.md)
+- 技术债务：[docs/p0-p2/TECH_DEBT_LEDGER.md](../docs/p0-p2/TECH_DEBT_LEDGER.md)
+
+
+### 2026-11-10 最新推进（模型切换后继续全自动，本地未提交）
+
+> 以上"待继续/历史验收数字"为早期基线；此处为工作区最新状态，保留上文以保持可追溯性。
+
+**P1（边界契约补齐）**：`tests/test_kb_ingest_p2_expanded.py` 新增 4 个测试，覆盖 temporal validity（`valid_from/invalid_at`）、`include_conflicts`×有效性、`recent_supersedes`、MCP `session_start` KB 排除契约。`build_continuity_pack` 的 `why_selected.filters` 含 `temporal_validity,kb_excluded`。（4 passed）
+
+**P2-4（持久化 worker 加固，真实缺陷修复）**：`kb_enrich._claim_job` 原为 SELECT-then-UPDATE，无跨进程条件保护 → 两进程可重复 claim 同一 queued 行；现改为 CAS 条件 UPDATE（`WHERE id=? AND status='queued' AND next_retry/claimed_at`），dedup 分支同样条件化，竞争失败递归重试。新增 3 个测试（单赢家、running 不可重 claim、budget 有界钳制）。`autostart` 默认仍 False，gateway best-effort hook 不变。（`tests/test_kb_enrich_worker_p2.py` 16 passed）
+
+**P3（默认关闭的效用重排，真实缺陷修复 + 端到端传播）**：
+- 修复 `enhanced_search` 增强路径引用未定义 `arguments` 的 NameError；新增显式 `utility_rerank` 参数（此前 MCP `handle_retrieve` 会把该 kwarg 漏传给 `retrieve()`）。
+- `unified_search` 全路径（fts5/direct/vector/hybrid）解析 `utility_rerank`、纳入 `wants_enhancements`、转发到 `enhanced_search` 与 `_apply_enhancements_inplace`；内部 dict 的 additive `utility_rerank_signal/score` 透传到 Memory 对象与 JSON payload。
+- 保持默认 off：`search.utility_rerank.enabled=False`；保守门控（>=min_interactions 证据，永不丢结果）。
+- 新文件 `tests/test_utility_rerank_p3.py`：6 个 E2E 契约（6 passed）。
+
+**最新验收**：扩展 scoped regression（9 文件）-> **70 passed in 65.59s (exit 0)**。详见 `docs/p0-p2/PRECOMMIT_SCOPED_REPORT_2026-11-10.md`。
+
+**仍待（P4 / P3 灰度前）**：canonicalization/conflict review/expiry/low-utility 归档/主题画像/策略自适应/审计；P3 冷启动回退、跨 agent 隔离、遥测/基线、灰度与 kill-switch 标准；真实多进程并发集成测试。以上均登记于 `docs/p0-p2/TECH_DEBT_LEDGER.md`。

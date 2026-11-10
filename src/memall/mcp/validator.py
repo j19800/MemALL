@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Tuple
 from pydantic import BaseModel, ValidationError
 
 from memall.mcp.models import (
+    KBIngestInput,
     AdaptiveInput, AskInput, BatchCaptureInput, BatchSearchInput, CaptureInput, ConnectInput, DBInput,
     DigestInput, DiscussionAmendInput, DiscussionCreateInput, DiscussionRespondInput,
     DiscussionStatusInput, DistillListInput, DistillSummarizeInput,
@@ -28,7 +29,7 @@ from memall.mcp.models import (
     IndexRebuildInput, OnboardingInput, OpsInput, PersonaForesightInput,
     PersonaInput, PersonaProfileInput, PersonaSearchInput,
     ProfilePreloadInput, ReflectInteractMCPInput, RetrieveInput,
-    RecordInteractionInput, RecapInput, RunPipelineInput, SecurityInput,
+    RecordInteractionInput, RecapInput, ContinuityPackInput, RunPipelineInput, SecurityInput,
     TaskBlockInput, TaskClaimInput, TaskListInput, TaskResolveInput,
     GoalWriteInput, GoalStatusInput,
     SessionEndInput, SessionStartInput,
@@ -46,6 +47,8 @@ _ACTION_MODELS: dict[tuple[str, str], type[BaseModel]] = {
     ("memall_write", "update"): UpdateInput,
     ("memall_write", "connect"): ConnectInput,
     ("memall_write", "batch_capture"): BatchCaptureInput,
+    ("memall_write", "kb_ingest"): KBIngestInput,
+    ("memall_write", "document_import"): KBIngestInput,
     # memall_write — sub_action-driven (handler rewrites action=sub_action)
     ("memall_write", "forget"): ForgetInput,
     ("memall_write", "ops"): OpsInput,
@@ -87,6 +90,7 @@ _ACTION_MODELS: dict[tuple[str, str], type[BaseModel]] = {
     ("memall_read", "fed_query"): FedQueryInput,
     ("memall_read", "fed_conflicts"): FedConflictsInput,
     ("memall_read", "recap"): RecapInput,
+    ("memall_read", "continuity_pack"): ContinuityPackInput,
     ("memall_read", "task_list"): TaskListInput,
     ("memall_read", "goal_status"): GoalStatusInput,
 

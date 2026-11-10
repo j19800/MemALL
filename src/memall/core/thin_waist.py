@@ -2357,6 +2357,8 @@ def unified_search(arguments: dict) -> str:
       - ``cluster``: bool — topic grouping of results.
       - ``personalize``: bool — per-agent affinity ranking.
       - ``context_boost``: bool — boost active project/category matches.
+      - ``utility_rerank``: bool — conservative interaction-utility re-ranking
+        (default-off; additionally gated by ``search.utility_rerank.enabled``).
       - ``agent_name``: viewer identity for personalisation/context/trust.
       - ``session_id``: enables per-session novelty demotion (see
         ``memall.search.seen``; requires ``search.seen_tracking.enabled``).
@@ -2378,8 +2380,9 @@ def unified_search(arguments: dict) -> str:
     cluster = bool(arguments.get("cluster", False))
     personalize = bool(arguments.get("personalize", False))
     context_boost = bool(arguments.get("context_boost", False))
+    utility_rerank = bool(arguments.get("utility_rerank", False))
     wants_enhancements = any(
-        (facet_fields, expand_query, suggest, explain, cluster, personalize, context_boost)
+        (facet_fields, expand_query, suggest, explain, cluster, personalize, context_boost, utility_rerank)
     )
 
     if mode == "auto":
@@ -2406,6 +2409,7 @@ def unified_search(arguments: dict) -> str:
             cluster=cluster,
             personalize=personalize,
             context_boost=context_boost,
+            utility_rerank=utility_rerank,
             owner=arguments.get("owner"),
             agent_name_filter=arguments.get("agent_name_filter"),
             category=arguments.get("category"),
@@ -2418,8 +2422,9 @@ def unified_search(arguments: dict) -> str:
         )
         # enhanced_search returns Memory objects; serialise to the same
         # shape the plain paths use.
-        items = [
-            {
+        items = []
+        for m in result["results"]:
+            d = {
                 "memory_id": m.id,
                 "content": m.content[:200],
                 "subject": m.subject,
@@ -2429,8 +2434,12 @@ def unified_search(arguments: dict) -> str:
                 "agent_name": m.agent_name,
                 **_cognitive_item_from_meta(getattr(m, "metadata", "{}"), valid_from=getattr(m, "valid_from", ""), invalid_at=getattr(m, "invalid_at", ""), memory_status=getattr(m, "memory_status", "")),
             }
-            for m in result["results"]
-        ]
+            # P3 additive debug signals, attached by enhanced_search when
+            # utility_rerank is enabled and evidence clears min_interactions.
+            if getattr(m, "utility_rerank_signal", None) is not None:
+                d["utility_rerank_signal"] = m.utility_rerank_signal
+                d["utility_rerank_score"] = m.utility_rerank_score
+            items.append(d)
         items = _seen_postprocess(items, arguments, top_k=top_k)
         payload = {
             "query": query,
@@ -2438,7 +2447,7 @@ def unified_search(arguments: dict) -> str:
             "results": items,
             "total": result.get("total", len(items)),
         }
-        for key in ("facets", "suggestions", "clusters", "explanations", "expanded_query"):
+        for key in ("facets", "suggestions", "clusters", "explanations", "expanded_query", "utility_rerank_signals"):
             if key in result:
                 payload[key] = result[key]
         return json.dumps(payload, ensure_ascii=False)
@@ -2539,6 +2548,7 @@ def unified_search(arguments: dict) -> str:
                 result, arguments,
                 expand_query=expand_query, suggest=suggest, explain=explain,
                 cluster=cluster, personalize=personalize, context_boost=context_boost,
+                utility_rerank=utility_rerank,
             )
         if isinstance(result, dict) and isinstance(result.get("results"), list):
             result["results"] = _seen_postprocess(result["results"], arguments, top_k=top_k)
@@ -2569,6 +2579,7 @@ def unified_search(arguments: dict) -> str:
             result, arguments,
             expand_query=expand_query, suggest=suggest, explain=explain,
             cluster=cluster, personalize=personalize, context_boost=context_boost,
+            utility_rerank=utility_rerank,
         )
     if isinstance(result, dict) and isinstance(result.get("results"), list):
         result["results"] = _seen_postprocess(result["results"], arguments, top_k=top_k)
@@ -2705,6 +2716,7 @@ def _apply_enhancements_inplace(result: dict, arguments: dict, **flags) -> None:
             cluster=flags.get("cluster", False),
             personalize=flags.get("personalize", False),
             context_boost=flags.get("context_boost", False),
+            utility_rerank=flags.get("utility_rerank", False),
         )
     result["results"] = enhanced.get("results") or results
     if enhanced.get("clusters"):
@@ -3068,6 +3080,7 @@ def enhanced_search(
     cluster: bool = False,
     personalize: bool = False,
     context_boost: bool = False,
+    utility_rerank: bool = False,
     agent_name_filter: Optional[str] = None,
     **filters,
 ) -> dict:
@@ -3084,6 +3097,8 @@ def enhanced_search(
     * ``cluster`` — topic grouping of the result set.
     * ``personalize`` — per-agent affinity from interaction history.
     * ``context_boost`` — boost results matching the active project/category.
+    * ``utility_rerank`` — conservative interaction-utility re-ranking
+      (default-off; additionally gated by ``search.utility_rerank.enabled``).
 
     Every enhancement is additionally gated by its ``search.*`` config flag,
     so passing an argument alone cannot enable a feature a deployment left
@@ -3180,7 +3195,7 @@ def enhanced_search(
             out["suggestions"] = suggest_queries(conn, query, limit=10)
 
         # ── Post-retrieval enhancements (need dict-shaped results) ──
-        if explain or cluster or personalize or context_boost:
+        if explain or cluster or personalize or context_boost or utility_rerank:
             # Carry the retrieval rank into the dicts: retrieve() already
             # ordered by bm25, so position i *is* the relevance signal.
             # Without a score the enhancements were inert on this path —
@@ -3216,6 +3231,7 @@ def enhanced_search(
                 cluster=cluster,
                 personalize=personalize,
                 context_boost=context_boost,
+                utility_rerank=utility_rerank,
             )
             out["clusters"] = enhanced.get("clusters") or []
             out["explained"] = bool(enhanced.get("explained"))
@@ -3224,6 +3240,24 @@ def enhanced_search(
             if order:
                 by_id = {m.id: m for m in results}
                 out["results"] = [by_id[i] for i in order if i in by_id]
+            # P3: surface conservative utility-rerank debug signals computed on
+            # the dict-shaped results. Memory objects are dataclasses (mutable),
+            # so attach the two additive fields directly for JSON/MCP callers.
+            sig_by_id = {
+                d.get("memory_id"): (d.get("utility_rerank_signal"), d.get("utility_rerank_score"))
+                for d in (enhanced.get("results") or [])
+                if d.get("utility_rerank_signal") is not None
+            }
+            if sig_by_id:
+                out["utility_rerank_signals"] = {
+                    str(mid): {"signal": sig, "score": score}
+                    for mid, (sig, score) in sig_by_id.items()
+                }
+                for m in out["results"]:
+                    if m.id in sig_by_id:
+                        sig, score = sig_by_id[m.id]
+                        m.utility_rerank_signal = sig
+                        m.utility_rerank_score = score
             # Attach explanations alongside the memories for JSON callers.
             expl_by_id = {
                 d.get("memory_id"): d

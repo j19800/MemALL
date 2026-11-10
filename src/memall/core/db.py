@@ -287,6 +287,31 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     interrupted_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status ON pipeline_runs(status);
+-- Pipeline jobs queue (P2-4: persistent enqueue / background worker support)
+CREATE TABLE IF NOT EXISTS pipeline_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    kind TEXT NOT NULL,           -- e.g. "kb_enrich"
+    doc_id TEXT,
+    chunk_hash TEXT,
+    doc_version TEXT,
+    chunk_index INTEGER,
+    source_pipeline TEXT,
+    metadata TEXT,               -- JSON-serialized extra metadata
+    status TEXT NOT NULL DEFAULT 'queued',  -- queued|running|ok|failed|completed
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    next_retry_at TEXT,
+    result TEXT,
+    error_msg TEXT,
+    handled_by TEXT,
+    claimed_at TEXT,
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_status_next ON pipeline_jobs(status, next_retry_at);
+CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_claimed ON pipeline_jobs(status, claimed_at);
+CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_kind_doc ON pipeline_jobs(kind, doc_id);
+
 
 CREATE TABLE IF NOT EXISTS tracing_spans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

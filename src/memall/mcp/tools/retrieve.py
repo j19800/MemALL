@@ -39,7 +39,7 @@ def _cognitive_fields(obj) -> dict:
     }
 
 # Enhancement flags shared by handle_retrieve / handle_unified_search.
-_ENHANCE_FLAGS = ("expand_query", "suggest", "explain", "cluster", "personalize", "context_boost")
+_ENHANCE_FLAGS = ("expand_query", "suggest", "explain", "cluster", "personalize", "context_boost", "utility_rerank")
 
 
 def _split_facet_fields(arguments: dict):
@@ -205,10 +205,9 @@ def handle_recap(arguments: dict) -> str:
             from memall.core.kb_policy import kb_sql_exclusion_clauses
             _kb_excl = " AND ".join(kb_sql_exclusion_clauses())
         except Exception:
-            _kb_excl = (
-                "COALESCE(json_extract(metadata,'$.source_pipeline'),'') NOT IN ('document.import','kb_ingest') "
-                "AND NOT (COALESCE(category,'')='knowledge' AND COALESCE(json_extract(metadata,'$.source_pipeline'),'') LIKE 'document.%')"
-            )
+            _kbs = "','".join(KB_SOURCE_PIPELINES)
+            _kbm = "COALESCE(json_extract(metadata,'$.source_pipeline'),'')"
+            _kb_excl = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
         mwhere = f"WHERE level IN ('L4','L5') AND {_kb_excl} "
         mparams: list = []
         if agent:

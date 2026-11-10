@@ -190,6 +190,16 @@ class MemAllGateway(HtmlHandlersMixin, RestHandlersMixin,
                 target=self._run_async, daemon=True
             )
             self._loop_thread.start()
+            # P2-4: optional KB enrich durable worker (config-gated, default off).
+            # Safe to call repeatedly; ensure_kb_enrich_worker_started checks
+            # kb.enrich_async, kb.enrich_worker.backend==sqlite+queue, and
+            # kb.enrich_worker.autostart (default False) before starting anything.
+            try:
+                from memall.pipeline.kb_enrich import ensure_kb_enrich_worker_started
+                ensure_kb_enrich_worker_started()
+            except Exception:
+                # Non-fatal: worker start is optional and config-gated.
+                pass
 
     def stop(self) -> None:
         """优雅关闭 gateway"""

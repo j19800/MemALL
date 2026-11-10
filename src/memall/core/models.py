@@ -30,6 +30,10 @@ class Memory:
     # Source IDs for provenance tracking (M3): track which source memories contributed to this memory
     # Especially useful for distilled knowledge (L9+) to trace back to source memories
     source_ids: str = "[]"
+    # Memory Cognitive Loop (Phase 2): validity/state, optional for backward compatibility.
+    valid_from: str = ""
+    invalid_at: str = ""
+    memory_status: str = ""
 
 
 @dataclass
