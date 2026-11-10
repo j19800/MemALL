@@ -438,12 +438,20 @@ def _make_subject(
         elif nl != -1 and core[nl + 1:].strip():
             core = core[nl + 1:].strip()[:35]
         else:
-            core = core[:35]
+            # No sentence/newline boundary: keep the phrase generous and let the
+            # final clause-aware cut (below) trim it WITH an ellipsis. A hard
+            # [:35] here is what severed titles mid-token ("…https://api.example")
+            # with no indication that anything was omitted.
+            core = core[:120]
 
     # Collapse any surviving whitespace/marker noise in the phrase itself
     # (sanitise the CORE only — the assembled label's [L4 会话] style prefix
     # is intentional and must not go through bracket-edge trimming).
-    core = sanitize_subject(core, max_len=60)
+    # Keep the core generously sized here: the FINAL label budget (60) is
+    # enforced below with a clause-aware cut + ellipsis. Capping the core at
+    # 60 here truncated mid-token with no ellipsis, so every long title looked
+    # silently severed ("...https://api.example").
+    core = sanitize_subject(core, max_len=120)
 
     # Build who label: prefer owner, fall back to agent_name
     who = owner or agent_name or ""
@@ -452,9 +460,24 @@ def _make_subject(
     # Assemble
     label = f"{prefix}{who_label}{core}" if prefix else f"{who_label}{core}"
 
-    # Trim to 60 chars max
+    # Trim to 60 chars max — but cut on a MEANINGFUL boundary. A blind
+    # label[:57] severed words and closing punctuation ("...限流 1"), which is
+    # what made every list row look truncated mid-thought.
     if len(label) > 60:
-        label = label[:57] + "..."
+        head = label[:57]
+        # Prefer the last CLAUSE boundary inside the budget. Punctuation inside
+        # a URL is not a clause boundary ("https://api.example" ends mid-token),
+        # so strip URL spans before looking for a cut point.
+        _scan = re.sub(r"https?://\S+", " " * 8, head)
+        cut = max(_scan.rfind("，"), _scan.rfind("。"), _scan.rfind("；"),
+                  _scan.rfind(", "), _scan.rfind(". "), _scan.rfind(" "))
+        # A URL that does not fit should not be sliced: cut BEFORE it instead.
+        _url = re.search(r"https?://", head)
+        if _url and _url.start() > 0 and _url.start() < 57:
+            cut = max(cut, _url.start() - 1)
+        if cut >= 20:
+            head = head[:cut]
+        label = head.rstrip("，。；,.;:：、 ") + "…"
 
     return label.strip()
 
@@ -971,9 +994,25 @@ def _normalize_content_for_human_readability(content: str) -> tuple[str, bool, s
     if not get_config("quality.auto_rewrite_enabled", True):
         return c, False, "rewrite_disabled"
     if _JSON_WRAPPER_RE.match(c):
+        # A JSON dump is STRUCTURED DATA, not prose. The old path "humanised"
+        # it into "a=1，b=2，c=3" which then PASSED the readability check and got
+        # stored — junk that looked like a sentence. Only convert when the
+        # payload carries a genuine natural-language field; a bag of scalars is
+        # reported unextractable so the caller sees the real reason.
         s = _extract_readable_from_json(c)
         if s and len(s.strip()) >= 8:
-            return s, True, "json_to_natural"
+            # Reject the fabricated "k=v，k=v" shape outright: it is a re-encoded
+            # object, not a sentence. A real conversion (a title/message field
+            # rendered as prose) contains multi-word natural language.
+            _kv_tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*=", s)
+            _prose_words = re.findall(r"[A-Za-z]{2,}", re.sub(r"[A-Za-z_][A-Za-z0-9_]*=", " ", s))
+            _cjk = re.findall(r"[\u4e00-\u9fff]{2,}", s)
+            if len(_kv_tokens) >= 2 and len(_prose_words) <= 2 and not _cjk:
+                return c, False, "json_structured_scalars"
+            _ok, _why = _is_human_readable_content(s)
+            if _ok or _cjk or len(_prose_words) >= 3:
+                return s, True, "json_to_natural"
+            return c, False, "json_structured_scalars"
         return c, False, "json_unextractable"
     # trim template markers; keep substantive body
     if _TEMPLATE_MARKER_RE.search(c):
@@ -2725,6 +2764,10 @@ def unified_search(arguments: dict) -> str:
             "to_occurred_at": arguments.get("to_occurred_at"),
             "source_pipeline": arguments.get("source_pipeline"),
             "include_content": True,
+            # Quality-gate visibility must survive the fts5/direct whitelist;
+            # omitting it here silently hid REVIEW rows even when the caller
+            # explicitly asked for them.
+            "include_review": arguments.get("include_review", False),
         }
         retrieve_args = {k: v for k, v in retrieve_args.items() if v is not None}
         viewer = arguments.get("viewer") or arguments.get("agent_name") or ""
@@ -2760,6 +2803,10 @@ def unified_search(arguments: dict) -> str:
             "to_occurred_at": arguments.get("to_occurred_at"),
             "source_pipeline": arguments.get("source_pipeline"),
             "include_content": True,
+            # Quality-gate visibility must survive the fts5/direct whitelist;
+            # omitting it here silently hid REVIEW rows even when the caller
+            # explicitly asked for them.
+            "include_review": arguments.get("include_review", False),
         }
         retrieve_args = {k: v for k, v in retrieve_args.items() if v is not None}
         viewer = arguments.get("viewer") or arguments.get("agent_name") or ""

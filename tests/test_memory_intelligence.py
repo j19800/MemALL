@@ -200,3 +200,95 @@ def test_session_start_injects_recent_decisions_after_capture():
         print("PASS: test_session_start_injects_recent_decisions_after_capture")
     finally:
         cleanup_temp_db(db, orig)
+
+
+def test_structured_json_is_not_disguised_as_prose():
+    """A bag of scalars must stay unreadable instead of being re-encoded.
+
+    The normaliser used to turn {"a":1,"b":2,...} into "a=1，b=2，c=3", which
+    then PASSED the readability check and was stored as if it were a sentence.
+    A payload with real natural-language fields must still convert.
+    """
+    db, orig = init_temp_db()
+    try:
+        from memall.core.thin_waist import (
+            _normalize_content_for_human_readability,
+            _is_human_readable_content,
+        )
+
+        scalars = '{"a":1,"b":2,"c":3,"d":4,"e":5,"f":6}'
+        out, changed, reason = _normalize_content_for_human_readability(scalars)
+        assert changed is False, (out, reason)
+        assert reason == "json_structured_scalars", reason
+        assert _is_human_readable_content(out)[0] is False
+
+        prose = '{"title":"数据库选型","message":"决定使用 PostgreSQL 作为主库"}'
+        out2, changed2, reason2 = _normalize_content_for_human_readability(prose)
+        assert changed2 is True and reason2 == "json_to_natural", (out2, reason2)
+        assert "PostgreSQL" in out2
+        print("PASS: test_structured_json_is_not_disguised_as_prose")
+    finally:
+        cleanup_temp_db(db, orig)
+
+
+def test_subject_truncates_on_meaningful_boundary():
+    """Long subjects must not sever words or swallow closing punctuation.
+
+    Pure-function test: _make_subject needs no database, and opening a temp DB
+    here let the background pipeline race the assertion.
+    """
+    from memall.core.thin_waist import _make_subject
+
+    long_text = ("生产环境 API 网关地址是 https://api.example.com/v2，"
+                 "限流 1000 QPS，需要白名单校验。")
+    s = _make_subject(long_text, "general", "L4", "tester", "老陈")
+    assert len(s) <= 60, s
+    assert s.endswith("…"), s                       # explicit ellipsis, not a silent cut
+    assert not s.endswith(("，", ",", "、")), s       # never leave a dangling comma
+    assert _make_subject("短标题", "general", "L4", "t", "o").endswith("短标题")
+    print("PASS: test_subject_truncates_on_meaningful_boundary")
+
+
+def test_include_review_survives_the_mcp_search_whitelist():
+    """`include_review` must work end-to-end through MCP search, not just retrieve().
+
+    Two separate holes made it dead over MCP: the field was undeclared in
+    UnifiedSearchInput (validator stripped it) and unified_search's fts5/direct
+    path builds an explicit retrieve_args whitelist that omitted it.
+    """
+    db, orig = init_temp_db()
+    try:
+        from memall.core.db import get_conn
+        from memall.mcp.adapter import handle_call
+        import json as _json
+
+        c = get_conn()
+        try:
+            c.execute("INSERT OR REPLACE INTO identities (agent_name, agent_type, trusted_by) "
+                      "VALUES (?,?,?)", ("rv_viewer", "human", ""))
+            c.execute(
+                "INSERT INTO memories (content, content_hash, level, agent_name, category, "
+                "project, subject, occurred_at, created_at, updated_at, memory_status, "
+                "visibility, metadata) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("PostgreSQL review pending content stable verified.", "h_rev_whitelist",
+                 "L4", "rv_viewer", "decision", "p", "s",
+                 "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z",
+                 "2026-01-01T00:00:00Z", "REVIEW", "public", "{}"))
+            c.commit()
+            rid = int(c.execute("SELECT id FROM memories WHERE content_hash='h_rev_whitelist'"
+                                ).fetchone()[0])
+        finally:
+            c.close()
+
+        def ids(extra=None):
+            args = {"action": "search", "query": "PostgreSQL", "mode": "fts5",
+                    "agent_name": "rv_viewer"}
+            args.update(extra or {})
+            out = _json.loads(handle_call("memall_read", args))
+            return [r.get("memory_id") for r in (out.get("results") or [])]
+
+        assert rid not in ids(), "REVIEW row must be hidden by default over MCP"
+        assert rid in ids({"include_review": True}), "include_review must work over MCP"
+        print("PASS: test_include_review_survives_the_mcp_search_whitelist")
+    finally:
+        cleanup_temp_db(db, orig)

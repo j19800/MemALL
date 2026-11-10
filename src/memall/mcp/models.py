@@ -160,6 +160,10 @@ class RetrieveInput(BaseModel):
     # exclude_unset dump silently strips it, making the "explicit filter wins"
     # branch in handle_retrieve unreachable over MCP.
     agent_name_filter: Optional[str] = Field(None, max_length=200)
+    # Quality-gate visibility: REVIEW rows are hidden by default; this is the
+    # deliberate opt-in for a human review workflow. Declared so the validator
+    # does not strip it (same F3-class defect as agent_name_filter).
+    include_review: bool = False
     viewer: Optional[str] = Field(None, max_length=200)
 
 
@@ -383,6 +387,9 @@ class UnifiedSearchInput(BaseModel):
     # ADR 0028 P1/P3: opt-in, default-off, additionally config-gated.
     utility_rerank: bool = Field(False, description="Conservative interaction-utility rerank (default off)")
     continuity: bool = Field(False, description="Attach validity-aware continuity pack (default off)")
+    # Quality-gate visibility: REVIEW rows are hidden by default; opt in here
+    # for a human review workflow (declared so the validator keeps it).
+    include_review: bool = Field(False, description="Include memories still pending quality review")
     # Per-session novelty demotion (requires search.seen_tracking.enabled):
     # repeat queries within one session surface unseen results lower down
     # instead of returning the identical top-k twice.  Never excludes.

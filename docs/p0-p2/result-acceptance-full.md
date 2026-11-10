@@ -118,3 +118,44 @@ slot:config:[L4_会话]老陈:_数据库改为_MySQL，因为许可成本更低
 - `session_start` 注入几乎为空（决策/偏好/经验未注入）
 - 不可读内容仍会入库；JSON 被"美化"骗过检查
 - subject 机械前缀 + 60 字符硬截断
+
+---
+
+## 第二轮修复（2026-11-11，commit `4c6cbb1` / `c61ef08`）
+
+按「全自动推进」继续修完剩余四项。
+
+### ✅ 记忆质量：门禁从「只标注」→ **真拦截**
+`_build_retrieve_where` 现在默认排除 `REVIEW` 行，retrieve / enhanced_search / unified_search / vector / hybrid 共用同一定义。
+- 默认：`REVIEW` 行不出现在检索结果。
+- `include_review=True` 或 config `search.review_visibility.include_by_default` 可显式查看。
+- 顺带修了 `include_review` 在 MCP 上完全失效的两个洞：`UnifiedSearchInput` 未声明（被 validator 剥离）+ `unified_search` 的 `retrieve_args` 白名单漏了它。
+
+### ✅ 记忆消费：session 注入从 **0 条 → 有内容**
+两个独立原因，都已修：
+1. 注入查询要求 `level='L4'`，而 capture 默认写 `P2` → 永远匹配不到。改为**按 category 语义**选取（decision/preference/fix/reflection/task）并接受 L4。
+2. `auto_inject` 按 agent 缓存 300s，且**只有 MCP update 路径会失效它** → 新 capture 后会话仍看到陈旧空值。改为在 capture 漏斗出口失效，覆盖 store_batch / pipeline / 直调 capture()。
+
+### ✅ 人类可读性：JSON 不再伪装成句子
+`{"a":1,"b":2,...}` 曾被归一化成 `a=1，b=2，c=3` 并**通过可读性检查**入库。现在只有含真实自然语言字段（title/message 等）才转换；纯标量判为 `json_structured_scalars`、保持不可读，让质量门禁看见真面目。
+
+### ✅ 标题（subject）可读性
+三层叠加导致的硬截断全部修掉：
+- core 硬砍 `[:35]` → 放宽到 120
+- `sanitize_subject` 提前截 60 且丢了省略号 → 放宽，交由最终预算处理
+- 最终 60 字符切分不看词边界、还会切进 URL 中间 → 改为**按子句边界**（逗号/句号/分号/空格）截断、遇到超长 URL 在**前面**断开、去掉悬空分隔符后加 `…`
+
+### 验证
+- 全量：**631 passed, 2 skipped, 0 failed, 0 errors**
+- `tests/test_memory_intelligence.py`：**9 tests**（新增 JSON 非伪装、标题边界截断、include_review 端到端）
+
+### 现在四个维度的状态
+| 维度 | 修复前 | 现在 |
+|---|---|---|
+| MCP 工具可靠性 | ✅ 良好 | ✅ 良好（未退步） |
+| 存入机制 | ✅ 基本可用 | ✅ 去重/并发正确 + 门禁真拦截 |
+| 人类可读性 | ⚠️ 有漏洞 | ✅ JSON 不再伪装；不可读内容被标记 |
+| 记忆质量 | ❌ 门禁不拦截 | ✅ 默认过滤 REVIEW |
+| 记忆消费 | ❌ 注入几乎为空 | ✅ 能注入近期决策/偏好/修复 |
+| 自进化 | ❌ 从不触发 | ✅ 同槽位产生 UPDATE/REVIEW |
+| 智能化 | ❌ 分类 1/5 | ✅ 分类 5/5，槽位主题化 |
