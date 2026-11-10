@@ -53,7 +53,12 @@ def handle(arguments: dict) -> str:
 
     try:
         mid = do_capture(inp)
-        out = {"id": mid, "status": "ok"}
+        out = {"id": int(mid), "status": getattr(mid, "status", "ok")}
+        if hasattr(mid, "to_dict"):
+            d = mid.to_dict()
+            for k in ("quality", "readability", "ingest_mode", "source_pipeline", "decision_hint"):
+                if d.get(k) is not None:
+                    out[k] = d[k]
         if ignored:
             out["ignored_fields"] = ignored
             out["hint"] = (
@@ -61,6 +66,6 @@ def handle(arguments: dict) -> str:
                 "(e.g. items -> store_batch, memory_id -> update, "
                 "interaction_type -> record_interaction); they were ignored"
             )
-        return json.dumps(out)
+        return json.dumps(out, ensure_ascii=False)
     except ValueError as e:
-        return json.dumps({"id": None, "status": "rejected", "reason": str(e)})
+        return json.dumps({"id": None, "status": "rejected", "reason": str(e)}, ensure_ascii=False)

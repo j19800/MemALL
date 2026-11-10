@@ -168,8 +168,40 @@ def _import_memories(conn, memories: list, agent_name: str) -> tuple:
                 m.get("owner", ""),
             )
 
+        # Day 3/4: normalize unreadable sync content (no reject; preserve fidelity markers)
+        content_val = m.get("content", "") or ""
+        meta_obj = m.get("metadata", {})
+        if isinstance(meta_obj, str):
+            try:
+                meta_obj = json.loads(meta_obj) if meta_obj else {}
+            except Exception:
+                meta_obj = {"_raw_metadata": meta_obj}
+        if not isinstance(meta_obj, dict):
+            meta_obj = {}
+        meta_obj.setdefault("ingest_mode", "sync")
+        try:
+            from memall.core.thin_waist import _normalize_content_for_human_readability, _is_human_readable_content
+            ok, reason = _is_human_readable_content(content_val)
+            if not ok:
+                nc, changed, nreason = _normalize_content_for_human_readability(content_val)
+                if changed and nc and len(str(nc).strip()) >= 12:
+                    content_val = nc
+                    import hashlib as _hashlib
+                    h = _hashlib.sha256(content_val.encode("utf-8", "ignore")).hexdigest()
+                    meta_obj["readability"] = {"normalized": True, "reason": nreason or reason, "source": "gateway_sync"}
+                else:
+                    meta_obj["readability"] = {"normalized": False, "reason": reason, "source": "gateway_sync"}
+        except Exception:
+            pass
+        # re-check dedup on possibly updated hash
+        if h and h in existing_hashes:
+            row = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (h,)).fetchone()
+            if row:
+                old_id_to_new[m["id"]] = row["id"]
+            continue
+
         fields = {
-            "content": m.get("content", ""),
+            "content": content_val,
             "content_hash": h,
             "level": normalize_level(m.get("level", "P2")),
             "owner": m.get("owner", ""),
@@ -184,7 +216,7 @@ def _import_memories(conn, memories: list, agent_name: str) -> tuple:
             "supersedes": m.get("supersedes") or "[]",
             "confidence": m.get("confidence", 1.0),
             "visibility": m.get("visibility", "private"),
-            "metadata": json.dumps(m.get("metadata", {})) if isinstance(m.get("metadata"), dict) else (m.get("metadata") or "{}"),
+            "metadata": json.dumps(meta_obj, ensure_ascii=False),
         }
 
         cur = conn.execute("PRAGMA table_info(memories)")
@@ -201,7 +233,8 @@ def _import_memories(conn, memories: list, agent_name: str) -> tuple:
             values,
         )
         old_id_to_new[m["id"]] = cur.lastrowid
-        existing_hashes.add(h)
+        if h:
+            existing_hashes.add(h)
         imported += 1
 
     return imported, old_id_to_new

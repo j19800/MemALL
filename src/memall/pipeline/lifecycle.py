@@ -184,35 +184,38 @@ def _distill_clusters(conn, clusters: list[dict]) -> int:
             continue
 
         merged = _build_l9_content(rows)
-        content_hash = hashlib.sha256(merged.encode()).hexdigest()
-
-        # Dedup by content hash
-        existing = conn.execute(
-            "SELECT id FROM memories WHERE content_hash = ?", (content_hash,)
-        ).fetchone()
-        if existing:
-            continue
-
         agent = rows[0]["agent_name"] or "?"
         category = rows[0]["category"] or "?"
         now = datetime.now(timezone.utc).isoformat()
-
-        conn.execute(
-            "INSERT INTO memories "
-            "(subject, content, content_hash, level, category, agent_name, "
-            "metadata, occurred_at, created_at, updated_at, memory_status) "
-            "VALUES (?, ?, ?, 'L9', ?, ?, ?, ?, ?, ?, NULL)",
-            (
-                f"Lifecycle distill: {category} ({len(rows)} items)",
-                merged,
-                content_hash,
-                category or "",
-                agent,
-                json.dumps({"layer_source": {"value": "lifecycle_auto", "version": 1}}),
-                now, now, now,
-            ),
-        )
-        l9_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        try:
+            from memall.core.thin_waist import capture as _capture
+            from memall.core.models import MemoryInput as _MI
+            l9_id = _capture(_MI(
+                content=merged, level="L9", agent_name=agent, category=category or "",
+                subject=f"Lifecycle distill: {category} ({len(rows)} items)",
+                occurred_at=now,
+                metadata={"layer_source": {"value": "lifecycle_auto", "version": 1}, "ingest_mode": "auto", "source_pipeline": "lifecycle.distill"},
+            ))
+            if not l9_id:
+                continue
+        except Exception:
+            content_hash = hashlib.sha256(merged.encode()).hexdigest()
+            existing = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (content_hash,)).fetchone()
+            if existing:
+                continue
+            conn.execute(
+                "INSERT INTO memories "
+                "(subject, content, content_hash, level, category, agent_name, "
+                "metadata, occurred_at, created_at, updated_at, memory_status) "
+                "VALUES (?, ?, ?, 'L9', ?, ?, ?, ?, ?, ?, NULL)",
+                (
+                    f"Lifecycle distill: {category} ({len(rows)} items)",
+                    merged, content_hash, category or "", agent,
+                    json.dumps({"layer_source": {"value": "lifecycle_auto", "version": 1}, "source_pipeline": "lifecycle.distill", "ingest_mode": "auto"}, ensure_ascii=False),
+                    now, now, now,
+                ),
+            )
+            l9_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
         # Create refines edges and update supersedes on sources
         for r in rows:

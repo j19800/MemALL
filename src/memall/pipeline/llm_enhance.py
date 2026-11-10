@@ -104,24 +104,34 @@ def auto_summarize_step() -> dict:
             if not summary:
                 continue
 
-            # 检查是否已存在相同摘要
-            h = content_hash(summary)
-            existing = conn.execute(
-                "SELECT id FROM memories WHERE content_hash = ?", (h,)
-            ).fetchone()
-            if existing:
-                continue
-
-            # 存储为 L9
-            now = datetime.now(timezone.utc).isoformat()
-            conn.execute(
-                "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, occurred_at, created_at, updated_at) "
-                "VALUES (?, ?, 'L9', ?, ?, ?, ?, ?, ?)",
-                (summary, h, agent, category,
-                 f"[L9 摘要] {agent} 近期活动：{category}类 {len(ids)} 条记录"[:120],
-                 now, now, now),
-            )
-            l9_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            # Day 3: route through capture() for quality/readability
+            try:
+                from memall.core.thin_waist import capture as _capture
+                from memall.core.models import MemoryInput as _MI
+                now = datetime.now(timezone.utc).isoformat()
+                l9_id = _capture(_MI(
+                    content=summary, level="L9", agent_name=agent or "", category=category or "general",
+                    subject=f"[L9 摘要] {agent} 近期活动：{category}类 {len(ids)} 条记录"[:120],
+                    occurred_at=now,
+                    metadata={"l9_source": "llm_enhance", "ingest_mode": "auto", "source_pipeline": "llm_enhance.summarize"},
+                ))
+                if not l9_id:
+                    continue
+            except Exception as _e:
+                logger.debug("llm_enhance.summarize: capture failed, fallback: %s", _e)
+                h = content_hash(summary)
+                existing = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (h,)).fetchone()
+                if existing:
+                    continue
+                now = datetime.now(timezone.utc).isoformat()
+                conn.execute(
+                    "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, occurred_at, created_at, updated_at) "
+                    "VALUES (?, ?, 'L9', ?, ?, ?, ?, ?, ?)",
+                    (summary, h, agent, category,
+                     f"[L9 摘要] {agent} 近期活动：{category}类 {len(ids)} 条记录"[:120],
+                     now, now, now),
+                )
+                l9_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
             # 创建 refines 边
             for mid in ids[:10]:

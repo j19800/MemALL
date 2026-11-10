@@ -106,25 +106,28 @@ def observation_step() -> dict:
             f"近 24 小时新增 {l6_recent} 条，聚合组 {agg_count} 个。"
             f"{warn_line}"
         )
-        ch = hashlib.sha256(content.encode()).hexdigest()
-        existing = conn.execute(
-            "SELECT id FROM memories WHERE content_hash = ?",
-            (ch,),
-        ).fetchone()
-        if not existing:
-            cur = conn.execute(
-                "INSERT INTO memories (content, content_hash, level, agent_name, category, project, summary, subject, occurred_at, created_at, updated_at, metadata) "
-                "VALUES (?, ?, 'L6', 'system', 'reflection', ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    content, ch,
-                    "",
-                    f"管线观察 {now[:10]}：分布与 L6 质量"[:120],
-                    content[:180],
-                    now, now, now,
-                    json.dumps({"l6_source": "observation", "report": report}),
-                ),
-            )
-            report["captured_as_memory"] = cur.lastrowid
+        try:
+            from memall.core.thin_waist import capture as _capture, MemoryInput as _MI
+            mid = _capture(_MI(
+                content=content, level="L6", agent_name="system", category="reflection",
+                project="", subject=f"管线观察 {now[:10]}：分布与 L6 质量"[:120],
+                summary=content[:180], metadata={"l6_source": "observation", "report": report, "ingest_mode": "auto"},
+                occurred_at=now,
+            ))
+            report["captured_as_memory"] = mid
+        except Exception as _e:
+            # fallback: keep original path non-fatal
+            ch = hashlib.sha256(content.encode()).hexdigest()
+            existing = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (ch,)).fetchone()
+            if not existing:
+                cur = conn.execute(
+                    "INSERT INTO memories (content, content_hash, level, agent_name, category, project, summary, subject, occurred_at, created_at, updated_at, metadata) "
+                    "VALUES (?, ?, 'L6', 'system', 'reflection', ?, ?, ?, ?, ?, ?, ?)",
+                    (content, ch, "", f"管线观察 {now[:10]}：分布与 L6 质量"[:120], content[:180], now, now, now,
+                     json.dumps({"l6_source": "observation", "report": report, "source_pipeline": "observe", "ingest_mode": "auto"}, ensure_ascii=False)),
+                )
+                report["captured_as_memory"] = cur.lastrowid
+            logger.debug("observe: capture fallback used: %s", _e)
 
         conn.commit()
 
@@ -268,19 +271,31 @@ def _update_weekly_monthly(conn) -> dict:
                 continue
             summaries = [m["summary"] for m in wk_mems[-20:] if m["summary"]]
             content = f"[L6 周反思] {agent} {wk} 共 {len(wk_mems)} 条反思：\n" + "\n".join(f"- {s[:200]}" for s in summaries)
-            ch = hashlib.sha256(content.encode()).hexdigest()
-            cur = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (ch,)).fetchone()
-            if cur:
-                continue
-            conn.execute(
-                "INSERT INTO memories (content, content_hash, level, agent_name, category, project, subject, summary, occurred_at, created_at, updated_at, metadata) "
-                "VALUES (?, ?, 'L6', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?)",
-                (content, ch, normalize_agent_name(agent), "",
-                 f"[L6 周反思] {agent} {wk}：共 {len(wk_mems)} 条"[:120],
-                 f"📅 周反思 {wk}", now, now, now,
-                 json.dumps({"l6_source": "weekly_aggregate", "source_count": len(wk_mems)})),
-            )
-            results["weekly"] += 1
+            try:
+                from memall.core.thin_waist import capture as _capture
+                from memall.core.models import MemoryInput as _MI
+                mid = _capture(_MI(
+                    content=content, level="L6", agent_name=normalize_agent_name(agent),
+                    category="reflection", project="",
+                    subject=f"[L6 周反思] {agent} {wk}：共 {len(wk_mems)} 条"[:120],
+                    summary=f"📅 周反思 {wk}", occurred_at=now,
+                    metadata={"l6_source": "weekly_aggregate", "source_count": len(wk_mems), "ingest_mode": "auto"},
+                ))
+                if mid:
+                    results["weekly"] += 1
+            except Exception:
+                ch = hashlib.sha256(content.encode()).hexdigest()
+                cur = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (ch,)).fetchone()
+                if not cur:
+                    conn.execute(
+                        "INSERT INTO memories (content, content_hash, level, agent_name, category, project, subject, summary, occurred_at, created_at, updated_at, metadata) "
+                        "VALUES (?, ?, 'L6', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?)",
+                        (content, ch, normalize_agent_name(agent), "",
+                         f"[L6 周反思] {agent} {wk}：共 {len(wk_mems)} 条"[:120],
+                         f"📅 周反思 {wk}", now, now, now,
+                         json.dumps({"l6_source": "weekly_aggregate", "source_count": len(wk_mems)})),
+                    )
+                    results["weekly"] += 1
 
         # Monthly: same logic
         for mk, mo_mems in months.items():
@@ -295,18 +310,30 @@ def _update_weekly_monthly(conn) -> dict:
                 continue
             summaries = [m["summary"] for m in mo_mems[-50:] if m["summary"]]
             content = f"[L6 月反思] {agent} {mk} 共 {len(mo_mems)} 条反思：\n" + "\n".join(f"- {s[:200]}" for s in summaries)
-            ch = hashlib.sha256(content.encode()).hexdigest()
-            if conn.execute("SELECT id FROM memories WHERE content_hash = ?", (ch,)).fetchone():
-                continue
-            conn.execute(
-                "INSERT INTO memories (content, content_hash, level, agent_name, category, project, subject, summary, occurred_at, created_at, updated_at, metadata) "
-                "VALUES (?, ?, 'L6', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?)",
-                (content, ch, normalize_agent_name(agent), "",
-                 f"[L6 月反思] {agent} {mk}：共 {len(mo_mems)} 条"[:120],
-                 f"📅 月反思 {mk}", now, now, now,
-                 json.dumps({"l6_source": "monthly_aggregate", "source_count": len(mo_mems)})),
-            )
-            results["monthly"] += 1
+            try:
+                from memall.core.thin_waist import capture as _capture
+                from memall.core.models import MemoryInput as _MI
+                mid = _capture(_MI(
+                    content=content, level="L6", agent_name=normalize_agent_name(agent),
+                    category="reflection", project="",
+                    subject=f"[L6 月反思] {agent} {mk}：共 {len(mo_mems)} 条"[:120],
+                    summary=f"📅 月反思 {mk}", occurred_at=now,
+                    metadata={"l6_source": "monthly_aggregate", "source_count": len(mo_mems), "ingest_mode": "auto"},
+                ))
+                if mid:
+                    results["monthly"] += 1
+            except Exception:
+                ch = hashlib.sha256(content.encode()).hexdigest()
+                if not conn.execute("SELECT id FROM memories WHERE content_hash = ?", (ch,)).fetchone():
+                    conn.execute(
+                        "INSERT INTO memories (content, content_hash, level, agent_name, category, project, subject, summary, occurred_at, created_at, updated_at, metadata) "
+                        "VALUES (?, ?, 'L6', ?, 'reflection', ?, ?, ?, ?, ?, ?, ?)",
+                        (content, ch, normalize_agent_name(agent), "",
+                         f"[L6 月反思] {agent} {mk}：共 {len(mo_mems)} 条"[:120],
+                         f"📅 月反思 {mk}", now, now, now,
+                         json.dumps({"l6_source": "monthly_aggregate", "source_count": len(mo_mems)})),
+                    )
+                    results["monthly"] += 1
 
     conn.commit()
     return results
@@ -362,20 +389,27 @@ def _update_growth_log(conn, report: dict) -> dict:
     else:
         # Create new timeline
         content = today_entry + "\n\n*反思时间线始于 " + today + "*"
+        try:
+            from memall.core.thin_waist import capture as _capture
+            from memall.core.models import MemoryInput as _MI
+            new_id = _capture(_MI(
+                content=content, level="L6", agent_name="system", category="reflection", project="",
+                subject=f"[L6 反思] 反思时间线（始于 {today}）", summary="📅 反思时间线",
+                occurred_at=now, metadata={"l6_source": "growth_log", "ingest_mode": "auto"},
+            ))
+            if new_id:
+                return {"updated": True, "created": True, "id": new_id}
+        except Exception:
+            pass
         ch = hashlib.sha256(content.encode()).hexdigest()
-        # The L6-only lookup above can miss a timeline that classify()
-        # downgraded to another level; inserting then collides on the
-        # UNIQUE content_hash.  Treat an existing hash as "already logged".
-        existing = conn.execute(
-            "SELECT id FROM memories WHERE content_hash = ?", (ch,)
-        ).fetchone()
+        existing = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (ch,)).fetchone()
         if existing:
             return {"updated": False, "reason": "timeline already exists", "id": existing["id"]}
         conn.execute(
             "INSERT INTO memories (content, content_hash, level, agent_name, category, project, subject, summary, occurred_at, created_at, updated_at, metadata) "
             "VALUES (?, ?, 'L6', 'system', 'reflection', ?, ?, ?, ?, ?, ?, ?)",
             (content, ch, "", f"[L6 反思] 反思时间线（始于 {today}）",
-             "📅 反思时间线", now, now, now, json.dumps({"l6_source": "growth_log"})),
+             "📅 反思时间线", now, now, now, json.dumps({"l6_source": "growth_log", "source_pipeline": "observe", "ingest_mode": "auto"}, ensure_ascii=False)),
         )
         new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         return {"updated": True, "created": True, "id": new_id}

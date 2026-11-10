@@ -140,3 +140,21 @@
 ## ✅ 本轮提交登记（2026-11-10）
 - [x] 本轮 ADR0028 follow-up 已落地本地 commit `c841c2f`（未 push）。
 - [ ] 9 个独立工作线文件 + `bak_phase1` + `test_capture_quality_contract.py` 仍按约束保留，未纳入提交（见前述各节负债）。
+
+## 独立工作线「capture 质量漏斗路由」（2026-11-10 处理，单独提交）
+
+> 与 ADR0028 正交，详见 `docs/independent-workline/capture-quality-routing.md`。此前多轮按约束保留在工作区未提交。
+
+- [x] 完整审计 9 个文件 diff：主题内聚（pipeline 蒸馏产物改走 `capture()`，异常回退原 INSERT；gateway_sync/ops 可读性归一化；capture handler 暴露质量契约）。
+- [x] 实证依赖自洽：`CaptureId`/`_is_human_readable_content`/`_normalize_content_for_human_readability`/`MemoryInput` 均在当前 HEAD。
+- [x] **修 bug 1**：`MemoryInput` 无 `weight` 字段，3 处 `weight=` 导致 capture 分支静默回退 → 改记 `metadata["member_count"]`。
+- [x] **修 bug 2**（基线既有）：`split_memory` 给 NOT NULL 列 `supersedes` 传 `None` → 改 `"[]"`，split 路恢复可用。
+- [x] 新增 `tests/test_capture_quality_workline.py`（6 passed）+ 纳入既有 `test_capture_quality_contract.py`（3 passed）。
+- [x] 相关子集回归 55 passed；全量回归见 `PRECOMMIT_SCOPED_REPORT_2026-11-10.md` 最新条目。
+- [ ] 分类漂移风险：`capture()` 会推断 project/分类；本线靠显式 level/category + pinned 缓解，未做全管线 E2E 断言（需要时补）。
+- [ ] auto_dream/cross_agent/llm_enhance 的 fallback INSERT 未补 `source_pipeline`（保持基线，避免扩大 diff）。
+- [ ] `thin_waist.py.bak_phase1` 备份文件仍未跟踪，待决策删除/归档（不纳入任何提交）。
+- [ ] 单独落地本地 commit（不 push），scope = 9 文件 + 2 测试 + 2 文档（本说明 + docs/README.md）。
+
+- [x] 独立工作线已落地本地 commit `6fe2b4c`（16 files，未 push）；提交态自洽校验通过。
+- [ ] `thin_waist.py.bak_phase1` 仍为唯一未跟踪项，待决策删除/归档（不纳入任何提交）。

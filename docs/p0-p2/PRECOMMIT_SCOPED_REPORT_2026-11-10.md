@@ -80,3 +80,16 @@ git diff --name-only
 `PYTHONPATH=.:src ./.venv/bin/python -m pytest tests/ -q --ignore=smoke_test --ignore=stress_test --ignore=benchmark --ignore=quality_test --disable-warnings --tb=line`
 -> **592 passed, 2 skipped, 192 warnings in 451.94s (exit 0)**。
 对照：上轮 578 passed + 3 个 pre-existing 共享 DB `duplicate column` 竞态（隔离重跑通过）；本轮竞态未复现，0 failed / 0 errors。确认与本次改动无关。
+
+## 独立工作线「capture 质量漏斗路由」验收（2026-11-10，单独提交）
+- 新增 `tests/test_capture_quality_workline.py` -> **6 passed**；既有 `test_capture_quality_contract.py` -> **3 passed**。
+- 相关子集（`test_capture_quality_workline` / `test_capture_quality_contract` / `test_ops` / `test_reflect` / `test_gateway` / `test_pipeline` / `test_distill` / `test_decay`）-> **55 passed in 59.97s**。
+- `py_compile` 9 代码 + 2 测试 -> OK。
+- 全量回归结果见本报告最新追加条目。
+
+### 独立工作线全量回归（最终结果）
+`pytest tests/ -q --ignore=smoke_test --ignore=stress_test --ignore=benchmark --ignore=quality_test --disable-warnings --tb=line`
+-> **598 passed, 2 skipped, 192 warnings in 772.86s (exit 0)**。
+对照上轮 592 passed：+6 = 本轮新增 `test_capture_quality_workline.py` 6 测试；0 failed / 0 errors。确认 9 文件工作线 + 2 个 bug 修复无回归。
+
+✅ 独立工作线落地：commit `6fe2b4c`（16 files, 662+/176-），本地未 push。工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪。

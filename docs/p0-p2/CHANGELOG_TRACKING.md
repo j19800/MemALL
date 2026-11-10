@@ -159,3 +159,19 @@
 - 提交后工作区仅剩：9 个独立工作线文件 + `thin_waist.py.bak_phase1` + `test_capture_quality_contract.py`（均未暂存）。
 - 验收：scoped 81 passed、全量 592 passed/2 skipped/0 failed、py_compile OK、导入/validator/MCP 链 OK。
 - **未 push**。
+
+### 2026-11-10 处理独立工作线（capture 质量漏斗路由，单独提交）
+- 此前多轮保留在工作区的 9 个文件，本轮完整审计 → 修 2 个 bug → 单独验收 → 单独落地 commit（不 push）。**与 ADR0028 正交**，详见 `docs/independent-workline/capture-quality-routing.md`。
+- 审计结论：主题内聚 = 管线蒸馏产物/同步/拆分统一走 `capture()` 质量漏斗（异常回退原 INSERT）+ readability 归一化 + capture handler 暴露质量契约；依赖的 `CaptureId`/readability 基础设施已在基线。
+- 修 bug 1：`MemoryInput` 无 `weight` 字段，`auto_dream`/`cross_agent` 3 处 `weight=` 让 capture 分支静默回退 → 改 `metadata["member_count"]`。
+- 修 bug 2（基线既有）：`ops.split_memory` 给 NOT NULL 列 `supersedes` 传 `None` → 改 `"[]"`，split 路恢复可用。
+- 新增 `tests/test_capture_quality_workline.py`（6 passed）；纳入既有 `tests/test_capture_quality_contract.py`（3 passed）。
+- 文档：新建 `docs/independent-workline/capture-quality-routing.md`，更新 `docs/README.md` 索引 + `TECH_DEBT_LEDGER.md`。
+- 验收：相关子集 55 passed、py_compile OK；全量见 `PRECOMMIT_SCOPED_REPORT_2026-11-10.md`。
+
+### ✅ 独立工作线已落地提交（2026-11-10，本地 commit，未 push）
+- **commit `6fe2b4c`**：`feat(memall): independent workline - capture quality funnel routing + readability normalization`（16 files, 662+/176-）。
+- 提交集 = 9 代码 + 2 测试 + 5 文档；`thin_waist.py.bak_phase1` 排除、仍为未跟踪。
+- 提交态（`git write-tree` 导出 488 文件）自洽：9 模块 + 依赖全可导入、无残留 `weight=`、`bak_phase1` 未混入。
+- 验收：相关子集 55 passed、全量 598 passed/2 skipped/0 failed/0 errors、py_compile OK。
+- **未 push**。

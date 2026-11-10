@@ -380,7 +380,20 @@ def split_memory(memory_id: int, delimiter: str = "\n\n") -> Dict[str, Any]:
         now = datetime.now(timezone.utc).isoformat()
         new_ids: List[int] = []
 
+        # Day 3: normalize split segments for readability (keep split semantics)
+        try:
+            from memall.core.thin_waist import _normalize_content_for_human_readability
+        except Exception:
+            _normalize_content_for_human_readability = None
         for seg in segments:
+            seg2 = seg
+            if _normalize_content_for_human_readability:
+                try:
+                    nc, changed, _ = _normalize_content_for_human_readability(seg)
+                    if changed and nc and len(nc.strip()) >= 12:
+                        seg2 = nc
+                except Exception:
+                    pass
             cur = conn.execute(
                 """INSERT INTO memories
                    (content, content_hash, level, owner, agent_name, subject,
@@ -388,8 +401,8 @@ def split_memory(memory_id: int, delimiter: str = "\n\n") -> Dict[str, Any]:
                     supersedes, confidence, visibility, metadata)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    seg,
-                    hashlib.sha256(seg.encode("utf-8")).hexdigest(),
+                    seg2,
+                    hashlib.sha256(seg2.encode("utf-8")).hexdigest(),
                     orig["level"],
                     orig["owner"],
                     orig["agent_name"],
@@ -400,10 +413,10 @@ def split_memory(memory_id: int, delimiter: str = "\n\n") -> Dict[str, Any]:
                     now,
                     now,
                     now,
-                    None,
+                    "[]",  # NOT NULL DEFAULT '[]'; split segments don't inherit original supersedes
                     orig["confidence"],
                     orig["visibility"],
-                    orig["metadata"],
+                    (lambda _om: json.dumps({**(json.loads(_om) if isinstance(_om,str) and _om.strip().startswith("{") else {}), "source_pipeline":"ops.split","ingest_mode":"auto"}, ensure_ascii=False))(orig["metadata"]),
                 ),
             )
             new_id = cur.lastrowid

@@ -128,17 +128,26 @@ def _extract_patterns(conn) -> dict:
         top = [w for w, c in freq.most_common(10) if c >= 3]
         if len(top) >= 3:
             pattern_content = f"[L9 模式] {agent} 的重复模式: {', '.join(top[:5])}"
-            h = content_hash(pattern_content)
-            exists = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (h,)).fetchone()
-            if not exists:
-                conn.execute(
-                    "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, occurred_at, created_at, updated_at) "
-                    "VALUES (?, ?, 'L9', ?, 'pattern', ?, ?, ?, ?)",
-                    (pattern_content, h, agent,
-                     f"[L9 模式] {agent} 的重复主题：{', '.join(top[:5])}"[:120],
-                     now, now, now),
-                )
-                found += 1
+            try:
+                from memall.core.thin_waist import capture as _capture
+                from memall.core.models import MemoryInput as _MI
+                mid = _capture(_MI(
+                    content=pattern_content, level="L9", agent_name=agent or "system",
+                    category="pattern", subject=f"[L9 模式] {agent} 的重复主题：{', '.join(top[:5])}"[:120],
+                    occurred_at=now, metadata={"l9_source": "auto_dream", "ingest_mode": "auto", "source_pipeline": "auto_dream.pattern"},
+                ))
+                if mid:
+                    found += 1
+            except Exception as _e:
+                h = content_hash(pattern_content)
+                exists = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (h,)).fetchone()
+                if not exists:
+                    conn.execute(
+                        "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, occurred_at, created_at, updated_at) "
+                        "VALUES (?, ?, 'L9', ?, 'pattern', ?, ?, ?, ?)",
+                        (pattern_content, h, agent, f"[L9 模式] {agent} 的重复主题：{', '.join(top[:5])}"[:120], now, now, now),
+                    )
+                    found += 1
 
     return {"found": found, "agents": len(agent_patterns)}
 
@@ -176,15 +185,26 @@ def _distill_knowledge(conn) -> dict:
             f"共识: 这是一个反复出现的问题领域\n"
             f"建议: 建立相关的最佳实践和检查清单"
         )
-        h = content_hash(content)
-        exists = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (h,)).fetchone()
-        if not exists:
-            conn.execute(
-                "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, weight, occurred_at, created_at, updated_at) "
-                "VALUES (?, ?, 'L10', 'system', 'knowledge', ?, ?, ?, ?, ?)",
-                (content, h, f"[L10 知识] 主题：{topic}"[:120], len(members), now, now, now),
-            )
-            created += 1
+        try:
+            from memall.core.thin_waist import capture as _capture
+            from memall.core.models import MemoryInput as _MI
+            mid = _capture(_MI(
+                content=content, level="L10", agent_name="system", category="knowledge",
+                subject=f"[L10 知识] 主题：{topic}"[:120],
+                occurred_at=now, metadata={"l10_source": "auto_dream", "ingest_mode": "auto", "source_pipeline": "auto_dream.distill", "member_count": len(members)},
+            ))
+            if mid:
+                created += 1
+        except Exception as _e:
+            h = content_hash(content)
+            exists = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (h,)).fetchone()
+            if not exists:
+                conn.execute(
+                    "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, weight, occurred_at, created_at, updated_at) "
+                    "VALUES (?, ?, 'L10', 'system', 'knowledge', ?, ?, ?, ?, ?)",
+                    (content, h, f"[L10 知识] 主题：{topic}"[:120], len(members), now, now, now),
+                )
+                created += 1
 
     return {"created": created, "clusters": len(clusters)}
 

@@ -161,21 +161,31 @@ def knowledge_distill_step() -> dict:
                 f"要点:\n" + "\n".join(f"  • {c[:200]}" for c in unique_contents[:3])
             )
 
-            h = content_hash(l10_content)
-            existing = conn.execute(
-                "SELECT id FROM memories WHERE content_hash = ?", (h,)
-            ).fetchone()
-            if existing:
-                continue
-
-            now = datetime.now(timezone.utc).isoformat()
-            conn.execute(
-                "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, confidence, weight, occurred_at, created_at, updated_at) "
-                "VALUES (?, ?, 'L10', 'system', 'knowledge', ?, ?, ?, ?, ?, ?)",
-                (l10_content, h, f"[L10 整合] 跨 Agent 全局模式：{topic}（{len(members)} 条教训聚合）"[:120],
-                 round(avg_conf, 2), len(members), now, now, now),
-            )
-            l10_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            try:
+                from memall.core.thin_waist import capture as _capture
+                from memall.core.models import MemoryInput as _MI
+                now = datetime.now(timezone.utc).isoformat()
+                l10_id = _capture(_MI(
+                    content=l10_content, level="L10", agent_name="system", category="knowledge",
+                    subject=f"[L10 整合] 跨 Agent 全局模式：{topic}（{len(members)} 条教训聚合）"[:120],
+                    confidence=round(avg_conf, 2),
+                    occurred_at=now, metadata={"l10_source": "cross_agent", "ingest_mode": "auto", "source_pipeline": "cross_agent.integrate", "member_count": len(members)},
+                ))
+                if not l10_id:
+                    continue
+            except Exception as _e:
+                h = content_hash(l10_content)
+                existing = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (h,)).fetchone()
+                if existing:
+                    continue
+                now = datetime.now(timezone.utc).isoformat()
+                conn.execute(
+                    "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, confidence, weight, occurred_at, created_at, updated_at) "
+                    "VALUES (?, ?, 'L10', 'system', 'knowledge', ?, ?, ?, ?, ?, ?)",
+                    (l10_content, h, f"[L10 整合] 跨 Agent 全局模式：{topic}（{len(members)} 条教训聚合）"[:120],
+                     round(avg_conf, 2), len(members), now, now, now),
+                )
+                l10_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
             # 创建 derived_from 边
             for m in members:
@@ -206,20 +216,30 @@ def knowledge_distill_step() -> dict:
                 f"建议: 将此纳入团队最佳实践。"
             )
 
-            h = content_hash(l11_content)
-            existing = conn.execute(
-                "SELECT id FROM memories WHERE content_hash = ?", (h,)
-            ).fetchone()
-            if existing:
-                continue
-
-            now = datetime.now(timezone.utc).isoformat()
-            conn.execute(
-                "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, weight, occurred_at, created_at, updated_at) "
-                "VALUES (?, ?, 'L11', 'system', 'domain', ?, ?, ?, ?, ?)",
-                (l11_content, h, f"[L11 领域] 跨 Agent 反复出现的模式：{topic}（{len(members)} 次记录）"[:120], len(members), now, now, now),
-            )
-            l11_created += 1
+            try:
+                from memall.core.thin_waist import capture as _capture
+                from memall.core.models import MemoryInput as _MI
+                now = datetime.now(timezone.utc).isoformat()
+                l11_id = _capture(_MI(
+                    content=l11_content, level="L11", agent_name="system", category="domain",
+                    subject=f"[L11 领域] 跨 Agent 反复出现的模式：{topic}（{len(members)} 次记录）"[:120],
+                    occurred_at=now,
+                    metadata={"l11_source": "cross_agent", "ingest_mode": "auto", "source_pipeline": "cross_agent.integrate", "member_count": len(members)},
+                ))
+                if l11_id:
+                    l11_created += 1
+            except Exception as _e:
+                h = content_hash(l11_content)
+                existing = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (h,)).fetchone()
+                if existing:
+                    continue
+                now = datetime.now(timezone.utc).isoformat()
+                conn.execute(
+                    "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, weight, occurred_at, created_at, updated_at) "
+                    "VALUES (?, ?, 'L11', 'system', 'domain', ?, ?, ?, ?, ?)",
+                    (l11_content, h, f"[L11 领域] 跨 Agent 反复出现的模式：{topic}（{len(members)} 次记录）"[:120], len(members), now, now, now),
+                )
+                l11_created += 1
 
         conn.commit()
 

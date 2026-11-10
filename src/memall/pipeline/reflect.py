@@ -269,27 +269,40 @@ def _aggregate_l6(conn, upgraded_ids: list, now: str) -> int:
             f"[L6 聚合] {agent_label} 在 {cat}/{week} 的 {len(mids)} 条反思汇总：\n{bullets}"
         )[:3000]
 
-        ch = hashlib.sha256(content.encode()).hexdigest()
-        cur = conn.execute(
-            "SELECT id FROM memories WHERE content_hash = ?", (ch,)
-        )
-        if cur.fetchone():
-            continue  # already exists
-
-        # Majority project from source memories
-        mid_ph = ",".join("?" * len(mids))
-        proj_row = conn.execute(f"SELECT project, COUNT(*) as cnt FROM memories WHERE id IN ({mid_ph}) AND project IS NOT NULL AND project != '' GROUP BY project ORDER BY cnt DESC LIMIT 1", mids).fetchone()
-        l6_project = proj_row["project"] if proj_row else ""
-
-        conn.execute(
-            "INSERT INTO memories (content, content_hash, level, agent_name, category, project, subject, summary, occurred_at, created_at, updated_at, metadata) "
-            "VALUES (?, ?, 'L6', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (content, ch, normalize_agent_name(agent_label), cat, l6_project,
-             f"[L6 聚合] {agent_label}：{len(mids)} 条反思聚合"[:120],
-             f"{len(mids)} 条反思聚合", now, now, now,
-             json.dumps({"l6_source": "aggregate", "source_ids": mids, "quality": "aggregated"})),
-        )
-        agg_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        # Day 3: route through capture() for quality/readability gates
+        try:
+            from memall.core.thin_waist import capture as _capture
+            from memall.core.models import MemoryInput as _MI
+            mid_ph = ",".join("?" * len(mids))
+            proj_row = conn.execute(f"SELECT project, COUNT(*) as cnt FROM memories WHERE id IN ({mid_ph}) AND project IS NOT NULL AND project != '' GROUP BY project ORDER BY cnt DESC LIMIT 1", mids).fetchone()
+            l6_project = proj_row["project"] if proj_row else ""
+            agg_id = _capture(_MI(
+                content=content, level="L6", agent_name=normalize_agent_name(agent_label),
+                category=cat, project=l6_project,
+                subject=f"[L6 聚合] {agent_label}：{len(mids)} 条反思聚合"[:120],
+                summary=f"{len(mids)} 条反思聚合", occurred_at=now,
+                metadata={"l6_source": "aggregate", "source_ids": mids, "quality": "aggregated", "ingest_mode": "auto", "source_pipeline": "reflect.aggregate"},
+            ))
+            if not agg_id:
+                continue
+        except Exception as _e:
+            logger.debug("reflect.aggregate: capture failed, fallback: %s", _e)
+            ch = hashlib.sha256(content.encode()).hexdigest()
+            cur = conn.execute("SELECT id FROM memories WHERE content_hash = ?", (ch,))
+            if cur.fetchone():
+                continue
+            mid_ph = ",".join("?" * len(mids))
+            proj_row = conn.execute(f"SELECT project, COUNT(*) as cnt FROM memories WHERE id IN ({mid_ph}) AND project IS NOT NULL AND project != '' GROUP BY project ORDER BY cnt DESC LIMIT 1", mids).fetchone()
+            l6_project = proj_row["project"] if proj_row else ""
+            conn.execute(
+                "INSERT INTO memories (content, content_hash, level, agent_name, category, project, subject, summary, occurred_at, created_at, updated_at, metadata) "
+                "VALUES (?, ?, 'L6', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (content, ch, normalize_agent_name(agent_label), cat, l6_project,
+                 f"[L6 聚合] {agent_label}：{len(mids)} 条反思聚合"[:120],
+                 f"{len(mids)} 条反思聚合", now, now, now,
+                 json.dumps({"l6_source": "aggregate", "source_ids": mids, "quality": "aggregated", "source_pipeline": "reflect.aggregate", "ingest_mode": "auto"})),
+            )
+            agg_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
         # Create edges
         for mid in mids:
