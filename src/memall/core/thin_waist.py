@@ -2252,6 +2252,18 @@ def _capture_write_once(conn, data: MemoryInput, h: str, now: str,
         except Exception as e:
             logger.warning(f"Contextual recall failed: {e}", exc_info=True)
 
+    # Session-injection cache (auto_inject, 300s TTL) must not survive a write.
+    # It used to be invalidated ONLY by the MCP `update` path, so a capture
+    # through the normal funnel left a stale — often empty — picture: measured
+    # 4 fresh memories stored and the very next session_start still injecting
+    # nothing. Invalidate on every successful write.
+    try:
+        from memall.mcp.federation_tools import invalidate_inject_cache
+        _who = (getattr(data, "agent_name", "") or "").strip()
+        if _who:
+            invalidate_inject_cache(_who)
+    except Exception:
+        pass
     return _build_capture_contract(mem_id, data)
 
 
@@ -3152,6 +3164,21 @@ def _build_retrieve_where(conn, query, viewer, filters) -> tuple[list, list, boo
     # enhanced_search() / unified_search shares one definition.
     if not filters.get("include_archived"):
         where.append("COALESCE(memories.memory_status, '') != 'archived'")
+
+    # Quality gate must FILTER, not just label. A memory marked REVIEW failed the
+    # quality gate ("needs human review"), yet measured behaviour was that 5 of 6
+    # REVIEW rows surfaced in normal search alongside accepted content — so
+    # "a=1，b=2，c=3" style junk competed with real memories. Default excludes
+    # REVIEW; `include_review=True` (or config
+    # `search.review_visibility.include_by_default`) restores the old behaviour
+    # for callers that deliberately want to inspect pending items.
+    if not filters.get("include_review"):
+        try:
+            _rv = get_config("search.review_visibility.include_by_default", False)
+        except Exception:
+            _rv = False
+        if not _rv:
+            where.append("(COALESCE(memories.memory_status, '') NOT LIKE '%REVIEW%')")
 
     for key in ("owner", "agent_name", "category", "project", "level"):
         val = filters.get(key)
@@ -4146,6 +4173,19 @@ def smart_store(
             for k in ("readability","ingest_mode","source_pipeline"):
                 if d.get(k) is not None: result[k] = d[k]
         dispatch_lifecycle(HOOK_POST_STORE, result=result)
+        # A new memory changes what the next session should be told. The
+        # session-injection cache (auto_inject, 300s TTL) used to be invalidated
+        # only by the MCP update path, so a capture through ANY other route
+        # (store_batch, pipelines, direct capture()) left a stale — often
+        # empty — picture for up to 5 minutes. Invalidating here covers every
+        # write path; failures are ignored because this is bookkeeping only.
+        try:
+            from memall.mcp.federation_tools import invalidate_inject_cache
+            _who = (getattr(data, "agent_name", "") or "").strip()
+            if _who:
+                invalidate_inject_cache(_who)
+        except Exception:
+            pass
         return result
 
 

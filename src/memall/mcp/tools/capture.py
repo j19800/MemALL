@@ -53,6 +53,17 @@ def handle(arguments: dict) -> str:
 
     try:
         mid = do_capture(inp)
+        # A new memory changes what the next session should be told. `auto_inject`
+        # caches per agent (300s TTL) and only the update path used to invalidate
+        # it, so a session started after fresh captures could inject a stale
+        # (even empty) picture — measured: 4 memories stored, injection empty.
+        try:
+            from memall.mcp.federation_tools import invalidate_inject_cache
+            _who = (payload.get("agent_name") or "").strip()
+            if _who:
+                invalidate_inject_cache(_who)
+        except Exception:
+            pass
         out = {"id": int(mid), "status": getattr(mid, "status", "ok")}
         if hasattr(mid, "to_dict"):
             d = mid.to_dict()

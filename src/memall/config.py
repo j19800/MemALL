@@ -130,6 +130,16 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         # *excluded*, only demoted below the protected top slice.  Hard
         # exclusion makes the most relevant entries unreachable and search
         # drifts further off with every query.
+        # Quality gate visibility. Memories that FAILED the quality gate are
+        # marked memory_status=REVIEW. Before this switch existed the gate only
+        # labelled them: measured 5 of 6 REVIEW rows still surfaced in normal
+        # search, so sub-quality content (normalised JSON dumps etc.) competed
+        # with real memories. Default False = REVIEW rows are hidden from
+        # retrieval; callers can pass include_review=True to inspect pending
+        # items deliberately.
+        "review_visibility": {
+            "include_by_default": False,
+        },
         "seen_tracking": {
             "enabled": False,
             # Results in the first N positions are never reordered.

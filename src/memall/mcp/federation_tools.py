@@ -637,11 +637,21 @@ def auto_inject(agent_name: str) -> dict:
             _kbs = "','".join(KB_SOURCE_PIPELINES)
             _kbm = "COALESCE(json_extract(metadata, '$.source_pipeline'), '')"
             _kb_excl = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
+            # Session restore needs the *content that matters*, not one storage
+            # level. Requiring level='L4' matched nothing for typical captures
+            # (they land at the default P2), so a session restarted with an
+            # empty L4 block even though decisions and preferences were on
+            # disk — measured: 3 memories stored, 0 injected. Select by
+            # CATEGORY semantics instead, and accept L4 rows as well.
             rows = conn.execute(
                 "SELECT id, subject, content, summary, metadata, arc_status, created_at "
                 "FROM memories "
-                "WHERE level = 'L4' AND LOWER(agent_name) = LOWER(?) "
+                "WHERE (level = 'L4' OR COALESCE(category,'') IN "
+                "       ('decision','preference','fix','reflection','task')) "
+                "AND LOWER(agent_name) = LOWER(?) "
                 f"AND {_kb_excl} "
+                "AND COALESCE(memory_status,'') NOT IN ('archived','deleted') "
+                "AND COALESCE(memory_status,'') NOT LIKE '%REVIEW%' "
                 "AND LENGTH(TRIM(content)) > 5 "
                 "ORDER BY created_at DESC LIMIT 20",
                 (agent_name,),

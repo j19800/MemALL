@@ -121,3 +121,82 @@ def test_slot_reuse_triggers_resolve_decisions():
         print("PASS: test_slot_reuse_triggers_resolve_decisions")
     finally:
         cleanup_temp_db(db, orig)
+
+
+def test_review_gated_memories_are_hidden_from_search_by_default():
+    """The quality gate must FILTER, not merely label.
+
+    Measured before: 5 of 6 memory_status=REVIEW rows surfaced in normal
+    search, so sub-quality content competed with accepted memories.
+    """
+    db, orig = init_temp_db()
+    try:
+        from memall.core.db import get_conn
+        from memall.core.models import MemoryInput
+        from memall.core.thin_waist import capture, retrieve
+        good = int(capture(MemoryInput(
+            content="PostgreSQL 主库选型决策，事务稳定可靠，团队已确认。",
+            level="L4", category="decision", agent_name="rv", project="p")))
+        bad = int(capture(MemoryInput(
+            content="PostgreSQL 待复核内容 a=1，b=2，c=3，d=4。",
+            level="L4", category="general", agent_name="rv", project="p")))
+        c = get_conn()
+        c.execute("UPDATE memories SET memory_status='REVIEW' WHERE id=?", (bad,))
+        c.commit()
+        c.close()
+
+        def ids(**kw):
+            r = retrieve("PostgreSQL", viewer="rv", include_content=True, **kw) or []
+            return [m.id for m in (r if isinstance(r, list) else [r])]
+
+        default_ids = ids()
+        assert good in default_ids, default_ids
+        assert bad not in default_ids, f"REVIEW row must be hidden: {default_ids}"
+
+        # Explicit opt-in still exposes pending items (human review workflow).
+        assert bad in ids(include_review=True)
+        print("PASS: test_review_gated_memories_are_hidden_from_search_by_default")
+    finally:
+        cleanup_temp_db(db, orig)
+
+
+def test_session_start_injects_recent_decisions_after_capture():
+    """A new session must surface what was just learned.
+
+    Two defects measured before: (a) the injection query required level='L4'
+    while captures default to P2, so it matched nothing; (b) auto_inject caches
+    per agent for 300s and only the update path invalidated it, so a session
+    started after fresh captures could inject a stale empty picture.
+    """
+    db, orig = init_temp_db()
+    try:
+        from memall.mcp.adapter import handle_call
+
+        def sess():
+            # Go through the MCP handler: cache invalidation lives there.
+            raw = handle_call("memall_system", {
+                "action": "session_start", "agent_name": "sess_agent", "auto_inject": True})
+            return json.loads(raw)
+
+        # Prime the cache with an empty picture, then confirm a capture
+        # invalidates it (the original bug: only the MCP update path did).
+        assert not (sess().get("l4_recent") or [])
+
+        from memall.core.thin_waist import capture
+        from memall.core.models import MemoryInput
+        for content, cat in [
+            ("项目决定使用 PostgreSQL 作为主数据库，事务稳定团队熟悉。", "decision"),
+            ("用户偏好深色主题界面，字体使用 14px 字号。", "preference"),
+            ("修复了登录接口 500 的 bug，已加回归测试覆盖。", "fix"),
+        ]:
+            capture(MemoryInput(content=content, level="P2", category=cat,
+                               agent_name="sess_agent", project="p"))
+
+        out = sess()
+        recent = out.get("l4_recent") or []
+        assert len(recent) >= 1, f"session must inject recent decisions, got {out.get('injection')}"
+        blob = json.dumps(out.get("injection") or {}, ensure_ascii=False)
+        assert "PostgreSQL" in blob or "深色主题" in blob, blob[:300]
+        print("PASS: test_session_start_injects_recent_decisions_after_capture")
+    finally:
+        cleanup_temp_db(db, orig)
