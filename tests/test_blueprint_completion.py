@@ -919,3 +919,70 @@ def test_p4_read_audit_redacts_snapshots_for_untrusted_readers():
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
         cleanup_temp_db(db, orig)
+
+
+def test_p4_rollback_cas_compares_metadata_semantically():
+    """Regression: CAS used raw string equality on `metadata`, so a JSON
+    round-trip that reordered keys (or NULL vs '' memory_status) produced a
+    FALSE 'state diverged' refusal and made rollback unusable even though no
+    one had modified the row. Found via real MCP-protocol end-to-end testing.
+    """
+    import os, tempfile
+    db, orig = init_temp_db()
+    tmp = tempfile.mkdtemp()
+    try:
+        from memall.core.db import get_conn
+        from memall.pipeline import maintenance as m
+        _cfg_set("maintenance.enabled", True)
+        _cfg_set("maintenance.conflict_review", True)
+        _cfg_set("maintenance.snapshot_before_write", True)
+        _cfg_set("maintenance.archive_dir", tmp)
+        _cfg_set("maintenance.audit_log", os.path.join(tmp, "audit.jsonl"))
+
+        c = get_conn()
+        c.execute(
+            "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, occurred_at, created_at, updated_at, memory_status, metadata) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            ("CAS 语义比较回归测试内容足够长通过质量门禁校验。", "h_cas_sem", "L4", "t", "general",
+             "c", _now(), _now(), _now(), "CONFLICT",
+             json.dumps({"resolve": {"status": "ACCEPTED"}, "z": 1, "a": 2})),
+        )
+        c.commit()
+        mid = int(c.execute("SELECT id FROM memories WHERE content_hash='h_cas_sem'").fetchone()[0])
+        c.close()
+
+        m.run_maintenance(actions=["conflict_review"], dry_run=False)
+        au = m.read_audit(limit=50)
+        mine = [e for e in au["entries"]
+                if e.get("action") == "conflict_review" and e.get("memory_id") == mid]
+        assert mine, au
+
+        # Simulate a benign JSON round-trip: same content, different key order.
+        c = get_conn()
+        row = c.execute("SELECT metadata FROM memories WHERE id=?", (mid,)).fetchone()[0]
+        parsed = json.loads(row)
+        c.execute("UPDATE memories SET metadata=? WHERE id=?",
+                  (json.dumps(dict(reversed(list(parsed.items())))), mid))
+        c.commit()
+        c.close()
+
+        rb = m.rollback_from_audit({k: mine[0][k] for k in ("ts", "memory_id", "action")})
+        assert rb.get("ok") is True, rb
+        assert rb.get("source") == "server-side-audit-log"
+
+        # A REAL divergence must still be refused.
+        c = get_conn()
+        cur = json.loads(c.execute("SELECT metadata FROM memories WHERE id=?", (mid,)).fetchone()[0])
+        cur["someone_else_wrote"] = True
+        c.execute("UPDATE memories SET metadata=? WHERE id=?", (json.dumps(cur), mid))
+        c.commit()
+        c.close()
+        rb2 = m.rollback_from_audit({k: mine[0][k] for k in ("ts", "memory_id", "action")})
+        assert rb2.get("ok") is False, rb2
+        assert "diverged" in str(rb2.get("error")), rb2
+        print("PASS: test_p4_rollback_cas_compares_metadata_semantically")
+    finally:
+        _reset()
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+        cleanup_temp_db(db, orig)

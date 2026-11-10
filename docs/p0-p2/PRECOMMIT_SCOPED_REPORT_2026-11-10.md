@@ -131,3 +131,58 @@ git diff --name-only
     (b) P3 验收测试顺序依赖 —— `get_config()` 热重载吞掉测试注入值，`_cfg_set` 固定 `_last_mtime_check` 后稳定。
 - 本轮新增/修复的安全项：伪造 rollback 任意写、read_audit 跨身份泄露、maintenance 无授权边界、actions 越过 config 门、project 过滤丢失、假通过断言、_resolve_decision 早退缺审计。
 - py_compile 全部改动文件 OK；工作区自检（导入/`read_audit(redact=True)` 默认/rollback 服务端校验/默认全 off）通过。
+
+## 端到端（E2E）测试（2026-11-10 晚）
+### 方法
+- **真实 CLI**：`memall init` 在隔离 DB（`MEMALL_DB_PATH`）建库 → 49 迁移 / 39 表；`memall capture` ×3（各触发 on_capture pipeline）→ `memall search` 正确按 bm25 返回。
+- **MCP 全链路（确定性）**：关闭后台任务（`bg_registry.set_enabled(False)`）避免锁竞争，经 `handle_call` 走 `memall_write` / `memall_read` / `memall_system` 覆盖主链路 + 本轮所有新增能力。
+- **结果：23 passed, 0 failed**（capture×3 / search / retrieve cognitive 字段 / connect / traverse / timeline / continuity 契约 / kb_excluded / kb_ingest / KB 不进 continuity / P3 config-only 有信号且召回不变 / 低权限 run 被拒 / supervisor run / resolve.status→REVIEW / audit 脱敏无正文 / rollback 服务端快照 / 回滚精确恢复 / 伪造回滚被拒 / 受害行未篡改 / mode=audit 段齐备）。
+
+### E2E 暴露的真实问题（既有，非本轮引入）
+`tests/test_e2e.py`（仓库自带脚本）在完整 pipeline 开启时**超时**（400s 未完成）：因每次 capture 触发 `on_capture` 轻量 pipeline，与主流程在同一 SQLite 上争写锁，日志出现 **17 次 `database is locked`**、单次 pipeline 耗时约 151s。`capture` 自带 5 次重试与 `bg_registry` 有界线程池，最终能完成，但脚本级 E2E 因此非确定。
+- 影响：仅「自带 e2e 脚本」与任何期望秒级完成的端到端自动化；生产 capture 有重试兜底、不丢写。
+- 建议（登记未改）：给 `on_capture` pipeline 加 config 开关（如 `scheduler.on_capture_pipeline_enabled`），或在测试夹具里 `bg_registry.set_enabled(False)`；并把 `tests/test_e2e.py` 改为默认禁用后台 pipeline。
+
+### 本轮结论
+端到端主链路与全部新增能力在真实 DB + MCP 层验证通过；未发现新增功能的 E2E 缺陷。E2E 发现的是既有架构特性（后台 pipeline 与前台写入争锁），已登记。
+
+## 真实 MCP 协议接入测试（2026-11-10 深夜）
+> 用户问「是否完整接入 memall MCP 并调用 MCP 工具测试」——此前只测到 `handle_call`(adapter) / 工具函数 / CLI 层，**未走 MCP 协议**。本轮补做。
+
+### 方法
+启动真实 server 子进程 `python -m memall.mcp.server`（stdio JSON-RPC），客户端按 MCP 规范发：
+`initialize`（含 `agent_name` 绑定会话身份）→ `notifications/initialized` → `tools/list` → `tools/call`。
+
+### 结果
+- **握手**：`serverInfo.name=memall`、`protocolVersion=2025-03-26`、`capabilities=['tools']`。
+- **tools/list**：8 个工具 — `memall_read / memall_write / memall_system / memall_msg / memall_discussion / memall_federation / memall_persona / memall_hooks_recent`。
+- **tools/call 主链路**：capture 返回 `{"id":2,"status":"ok","quality":{...}}`；search 命中 1 条。
+- **新增能力（协议层）12 passed / 0 failed**：capture、search、continuity_pack 契约 + `kb_excluded`、kb_ingest、**KB 不进 continuity**、低权限 maintenance 被拒、status/audit 只读开放、`mode=audit` 段齐备。
+- **服务端预置配置后**（`~/.memall/memall.yaml` + `HOME` 隔离）：P3 **config-only 经 MCP 协议生效**（有 `utility_rerank_signal` 且召回非空）。
+- **P4 写入路径（supervisor 会话握手）8 passed / 0 failed**：run → `resolve.status→REVIEW` → audit 脱敏无正文 → rollback 走服务端快照 → marker 回滚 → `memory_status` 恢复 → 伪造回滚被拒 → 受害行未篡改。
+
+### MCP 协议测试中发现并修复的真 bug
+**`rollback_from_audit` 的 CAS 用原始字符串比较 `metadata`**：JSON 键序变化（任何 dumps→loads→dumps 往返）或 `memory_status` 的 NULL vs `''`，都会让它误判「state diverged」并**拒绝合法回滚**——即上一轮的安全修复在真实链路里把回滚做成不可用。
+- 修复（`src/memall/pipeline/maintenance.py`）：CAS 改为**语义比较**——`metadata` 解析后比较 dict、`memory_status` 归一化 None/''。真正的分歧仍拒绝。
+- 新增回归 `test_p4_rollback_cas_compares_metadata_semantically`：键序变换后回滚成功；真改写后仍被拒。`test_blueprint_completion.py` → **21 passed**。
+
+### 过程中的测试侧教训（非产品缺陷）
+- `traverse` 要 `node_id`（不是 `start_id`）、`timeline`/`traverse` 都要 `agent_name`。
+- P3 需 ≥`min_interactions`(默认2) 条证据才生效；1 条时正确不生效。
+- MCP 层 `identify()` 会用**握手绑定身份**覆盖 per-call `agent_name`，所以测 supervisor 路径必须以 supervisor 身份重连。
+- 回滚必须用「该行的**最新**审计记录」；拿陈旧记录被 CAS 正确拒绝。
+
+### MCP 协议 E2E 已固化为自动化测试
+新增 `tests/test_mcp_protocol_e2e.py`（子进程 + stdio JSON-RPC 客户端，3 tests / **全通过，97.64s**）：
+1. `test_mcp_stdio_handshake_and_tools_list` — initialize 握手（serverInfo/protocolVersion/capabilities）+ tools/list 断言必备工具。
+2. `test_mcp_stdio_capture_search_and_new_capabilities` — capture/search/continuity 契约/kb_excluded/KB 隔离/**P3 config-only 经协议生效**/mode=audit 段。
+3. `test_mcp_stdio_maintenance_authorization_and_rollback` — 低权限会话被拒、只读开放、supervisor run、audit 脱敏无正文、rollback 服务端快照、伪造被拒且未篡改。
+
+### MCP 真机测试又暴露并修复一个 CAS 设计缺陷
+把回滚 CAS 从「整份 metadata 语义相等」收窄为「**只守护该策略实际写入的字段**」（`resolve.status` + `cognitive_maintenance` 的 action 序列/计数）。
+- 原因：真机后台 pipeline 在 maintenance 之后持续 enrich metadata（`ingest_mode`/`pinned_fields`/`quality`…），整份比对会让**每一次合法回滚都被永久拒绝**。只读单测（无后台写入）测不出，只有真机 MCP 链路能暴露。
+- 真正的分歧仍拒绝（有人重新 resolve 或重新打 marker → `_guarded_view` 不等 → refuse）。
+- 验证：`test_blueprint_completion.py` **21 passed**；`test_mcp_protocol_e2e.py` **3 passed**。
+
+### 全量回归（CAS 收窄后）
+`pytest tests/ -q` → **618 passed, 2 skipped, 1 failed**。唯一失败 `test_capture_thread_inference.py::test_thread_inference_links_child_to_root`（`database is locked`），隔离连跑 3 次全过（4 passed ×3）→ 并发连跑的既有锁竞争 flake，与本轮改动无关。

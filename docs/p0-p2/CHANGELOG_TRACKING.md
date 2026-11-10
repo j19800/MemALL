@@ -265,3 +265,10 @@
 - 提交态（`git write-tree` 导出 493 文件）自洽：导入 OK、`read_audit(redact=True)` 默认脱敏、rollback 服务端校验、默认全 off、竞态防护在位、排除项未混入。
 - 验收：定向 20 passed、混合子集 40 passed、**全量 618 passed / 2 skipped / 0 failed / 0 errors**（历史首次零失败）。
 - 工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪。**未 push**。
+
+### ✅ 真实 MCP 协议接入测试 + CAS 修复已落地提交（2026-11-11 凌晨，本地 commit，未 push）
+- **commit `44e979c`**：`fix(memall): real MCP-protocol E2E + narrow rollback CAS to policy-owned fields`（5 files, 470+/6-）。
+- 新增 `tests/test_mcp_protocol_e2e.py`（3 tests，真子进程 stdio JSON-RPC，~98s 全通过）。
+- 修复：回滚 CAS 从「整份 metadata 相等」收窄为「只守护策略自有字段（resolve.status + marker 序列）」，解决真机后台 enrich 导致合法回滚被永久拒绝。
+- 验收：blueprint 21 passed、MCP 协议 3 passed、全量 618 passed/2 skipped/1 failed（唯一失败为既有并发 flake，隔离 3 次全过）。
+- 工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪。**未 push**。

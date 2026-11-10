@@ -503,16 +503,51 @@ def rollback_from_audit(entry: dict) -> dict:
         if not cur:
             return {"ok": False, "error": "memory row no longer exists"}
 
-        # CAS: the row must still be in the state the audit `after` recorded.
-        # If anything wrote it since, refuse instead of clobbering.
+        # CAS: guard only the fields THIS maintenance action actually wrote
+        # (resolve.status + the cognitive_maintenance marker), not the whole
+        # metadata document. Rationale (found by real MCP-protocol E2E):
+        # background pipeline hooks keep enriching `metadata` after a
+        # maintenance pass (ingest_mode, pinned_fields, quality, ...), so a
+        # whole-document equality check permanently refused every legitimate
+        # rollback. Guarding the action's own fields still refuses a real
+        # divergence (someone re-resolving or re-marking the row) while
+        # tolerating unrelated enrichment.
+        def _norm_status(v):
+            return "" if v is None else str(v)
+
         want_status = after.get("memory_status")
-        if want_status is not None and str(cur["memory_status"] if hasattr(cur, "keys") else cur[1]) != str(want_status):
+        have_status = cur["memory_status"] if hasattr(cur, "keys") else cur[1]
+        if want_status is not None and _norm_status(have_status) != _norm_status(want_status):
             return {"ok": False, "error": "state diverged from audit 'after'; rollback refused",
                     "memory_id": mid}
+
+        def _norm_meta(v):
+            if v is None:
+                return {}
+            if isinstance(v, dict):
+                return v
+            try:
+                parsed = json.loads(v)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+
+        def _guarded_view(meta: dict) -> dict:
+            """Only the fields a maintenance pass owns."""
+            res = meta.get("resolve")
+            res = res if isinstance(res, dict) else {}
+            marks = meta.get("cognitive_maintenance")
+            marks = marks if isinstance(marks, list) else []
+            return {
+                "resolve_status": res.get("status"),
+                "marker_actions": [m.get("action") if isinstance(m, dict) else m for m in marks],
+                "marker_count": len(marks),
+            }
+
         want_meta = after.get("metadata")
-        if isinstance(want_meta, str) and want_meta:
-            have = (cur["metadata"] if hasattr(cur, "keys") else cur[0]) or ""
-            if str(have) != str(want_meta):
+        if want_meta is not None:
+            have_raw = cur["metadata"] if hasattr(cur, "keys") else cur[0]
+            if _guarded_view(_norm_meta(have_raw)) != _guarded_view(_norm_meta(want_meta)):
                 return {"ok": False, "error": "state diverged from audit 'after'; rollback refused",
                         "memory_id": mid}
 

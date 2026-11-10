@@ -203,3 +203,15 @@
 - [ ] 严格双人独立签字仍未达成（subagent 三轮均未完整收尾）；本轮为 lead 对抗式实测 + 独立脚本。
 - [x] 既有 flake 根因修复：列补齐 TOCTOU 竞态（`duplicate column name`）→ 两处 ALTER 精确忽略该错误；8 线程并发实测 0 错误。
 - [x] 测试顺序依赖修复：config 热重载吞掉测试注入值 → `_cfg_set` 固定 `_last_mtime_check`；20 passed。
+
+## E2E 测试发现（2026-11-10 晚）
+- [x] 确定性 E2E（关后台任务）23 passed / 0 failed，覆盖主链路与本轮全部新增能力。
+- [ ] 【既有】`on_capture` 轻量 pipeline 与前台写入争 SQLite 写锁：`tests/test_e2e.py` 在 pipeline 开启时超时（17 次 `database is locked`，单次 pipeline ~151s）。建议加 config 开关或在夹具禁用 `bg_registry`；并把自带 e2e 脚本改为默认禁用后台 pipeline。
+- [ ] `tests/test_e2e.py` 无可配置的后台开关，导致脚本级 E2E 非确定（capture 有 5 次重试，不丢写）。
+- [x] 真实 MCP 协议接入测试（stdio JSON-RPC：initialize/tools-list/tools-call）——8 工具、主链路 + 新增能力全部通过。
+- [x] MCP 链路暴露并修复：`rollback_from_audit` CAS 用字符串比较导致 JSON 键序变化时误拒合法回滚 → 改语义比较 + 回归测试。
+- [ ] MCP 协议测试目前是临时脚本（手工 /tmp），未纳入 `tests/` 自动化；建议补一个 `tests/test_mcp_protocol_e2e.py`（子进程 + JSON-RPC 客户端）。
+- [x] MCP 协议 E2E 已固化：`tests/test_mcp_protocol_e2e.py`（3 tests，子进程 stdio JSON-RPC，全通过）。
+- [x] CAS 收窄为「只守护策略自有字段」，修复真机后台 enrich 导致合法回滚被永久拒绝的问题。
+- [ ] 既有 flake：`test_capture_thread_inference.py` 在全量连跑时偶发 `database is locked`（隔离 3 次全过）；根因是并发写锁，建议后续给该测试降低并发或加重试。
+- [ ] 4 个审查 subagent 全部中途失败（三次尝试，累计 4 个），`subagent` 通道在长任务上不可靠；已改用 lead 对抗式复现 + 真机协议测试替代。
