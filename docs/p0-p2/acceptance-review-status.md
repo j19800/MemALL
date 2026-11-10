@@ -47,10 +47,18 @@
 另修：MCP `handle_retrieve` 增强结果缺 **per-result** utility 信号（只有顶层 map）→ 已挂到每个 item，与 fts5 payload 一致。
 另修：`tests/test_blueprint_completion.py` 里 2 个「假通过」断言（P3 验收测试仍传 flag、P4 回滚断言带 `or ...=={}` 永真分支）→ 改严。
 
-## 5. 待闭环
-- [ ] 修复后全量回归（`pytest tests/`，默认收集）结果确认。
-- [ ] 所有修复 + 文档落地本地 commit（不 push）。
-- [ ] 若需「正式通过代码审查」结论，需重新跑一个完整收尾的独立审查（本轮两个 agent 均未完整收尾）。
+## 5. 第二轮独立审查（用户「再跑一次独立审查」）
+- 启动 2 个窄任务 subagent（正确性/安全性、验收/测试质量），**仍均未完整收尾**（消息通道无法催办）。
+- 兜底：lead 以第二视角逐项实测，产出完整分级报告 `independent-review-report.md`：
+  - 【严重】无（当前工作区）；【中等】1 项且为 `retrieve()` 基线既有信任过滤（非本轮引入，登记不改）；【轻微】3 项（audit 投影不含 content、子开关 True 被双门拦截、subagent 流程缺口）。
+  - 6 类正确性/安全性检查点全部通过；ADR 5 条验收句全部真实通过；config 开关不改变召回集合。
+  - 测试：默认收集 615 = 613 passed + 2 skipped，无漏跑/无假通过；提交态导出 492 文件自洽。
+- 结论：**代码通过正确性与安全性审查、5 条验收句全部通过、测试覆盖完整**；保留项为「严格双人独立签字」未达成（subagent 未收尾）与既有信任过滤负债。
+
+## 6. 已闭环
+- [x] 修复后全量回归（`pytest tests/`，默认收集）→ 613 passed/2 skipped/0 failed/0 errors。
+- [x] 所有修复 + 文档落地本地 commit `5bc7198`（不 push）。
+- [x] 第二轮独立审查（见 §5 + `independent-review-report.md`）。
 
 ## 6. 已知偏差（非验收不符，透明登记）
 - P3 配置键前缀用 `quality.utility.*`（蓝图写顶层 `utility.*`），但 `tracking_enabled` 验收键按字面保留且已严格生效。

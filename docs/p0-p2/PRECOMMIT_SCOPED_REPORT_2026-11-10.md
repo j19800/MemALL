@@ -115,3 +115,9 @@ git diff --name-only
 - 详见 `docs/p0-p2/acceptance-review-status.md`。
 
 ✅ 独立审查复核 + 验收修复轮次落地：commit `dc4d847`（13 files, 497+/65-），本地未 push。工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪。
+
+## 第二轮独立审查（2026-11-10）
+- 默认收集 `pytest tests/ --collect-only -q` -> **615 tests collected**；全量 **613 passed, 2 skipped, 0 failed, 0 errors**（613+2=615，无漏跑）。
+- 6 类正确性/安全性逐点实测 + 5 条 ADR 验收句独立脚本复核：全部通过；config 开关不改变召回集合（OFF=2 / ON=2）。
+- 提交态 `git write-tree` 导出 492 文件自洽（导入/默认 off/排除项）。
+- 详见 `independent-review-report.md`。

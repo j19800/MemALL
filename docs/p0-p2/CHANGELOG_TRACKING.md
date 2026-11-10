@@ -230,3 +230,14 @@
 - 提交态（`git write-tree` 导出 492 文件）自洽：关键模块/API 可导入、全部新 config 默认 off、`viewer_is_identity` 参数存在、排除项未混入。
 - 验收：蓝图契约 15 passed、全量 613 passed/2 skipped/0 failed/0 errors、ADR 5 条验收句逐条实测通过、config 开关不改变召回集合、py_compile OK。
 - 提交后工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪（按约束保留）。**未 push**。
+
+### 2026-11-10 第二轮独立审查（用户「再跑一次独立审查」）
+- 启动 2 个窄任务独立 subagent（正确性/安全性、验收/测试质量）；**仍均未完整收尾**（工具层无法催办/无最终报告）。
+- 兜底：lead 以第二视角逐项实测，产出正式分级报告 `docs/p0-p2/independent-review-report.md`（6 类检查点 + 5 条验收句 + 测试覆盖 + 提交态自洽），结论：无未修【严重】/【中等】缺陷、5 条验收句全通过、测试无漏跑/无假通过。
+- 唯一【中等】为 `retrieve()` 基线信任过滤（human 可读 private），非本轮改动引入，登记为既有负债不擅改。
+- 复核：默认收集 615 = 613 passed + 2 skipped；`git write-tree` 导出 492 文件自洽。
+- 文档：新增 `independent-review-report.md`、更新 `acceptance-review-status.md` §5/§6、`docs/p0-p2/README.md` 索引、`TECH_DEBT_LEDGER.md`。
+
+### ✅ 第二轮独立审查报告已落地提交（2026-11-10，本地 commit，未 push）
+- **commit `20c0985`**：`docs(memall): second independent code review report (lead second-pass, full closure)`（6 files, 101+/4-）。
+- 提交后工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪（按约束保留）。**未 push**。

@@ -17,6 +17,7 @@
 | [p4-deferred-design.md](p4-deferred-design.md) | P4 设计前置（历史：P4 曾 deferred；**本轮已实现**，见下对照表与 maintenance 模块） |
 | [blueprint-completion-matrix.md](blueprint-completion-matrix.md) | **ADR 0028 §2 逐条字面完成度对照表**（P0–P4 全条目 + 已知偏差登记） |
 | [acceptance-review-status.md](acceptance-review-status.md) | **验收与代码审查现状**（三问答案、5 条验收句实测、独立审查复核全过程、修掉的 5 个缺陷） |
+| [independent-review-report.md](independent-review-report.md) | **第二轮独立代码审查报告**（6 类正确性/安全性逐点 + 5 条验收句 + 测试覆盖；含 subagent 未收尾的透明说明） |
 | [COMMIT_CHECKLIST.md](COMMIT_CHECKLIST.md) | 提交范围、验收命令、排除项、阶段确认 |
 | [TECH_DEBT_LEDGER.md](TECH_DEBT_LEDGER.md) | P2-4 真异步队列、P2-3 收敛、P1 边界测试、P3 保守闭环债务 |
 | [PRECOMMIT_SCOPED_REPORT_2026-11-10.md](PRECOMMIT_SCOPED_REPORT_2026-11-10.md) | 各轮 scoped regression 实际结果（最新见文末「按蓝图补齐」轮次） |
