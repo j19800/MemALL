@@ -48,10 +48,10 @@
   - [ ] 真实 LLM/embedding 驱动的 utility 聚合：后续在 P3 具体配置 + tests 中展开（默认 off，不在本次提交范围）。
 
 ## 阶段性确认
-- [ ] P2-4 真异步队列设计草稿已记录（上述“P2-4 真异步队列”章节）。
-- [ ] P2-3 硬编码 KB 字面量收敛检查已完成（`kb_policy.py` 为唯一权威）。
-- [ ] P1 边界测试需求已明确（上述 4 条缺失测试）。
-- [ ] P3 utility 聚合最小实现已确认（best-effort `record_interaction` 存在，默认 off）。
+- [x] P2-4 真异步队列设计草稿已记录（上述“P2-4 真异步队列”章节）。  *(已完成，本轮回写)*
+- [x] P2-3 硬编码 KB 字面量收敛检查已完成（`kb_policy.py` 为唯一权威）。  *(已完成，本轮回写)*
+- [x] P1 边界测试需求已明确（上述 4 条缺失测试）。  *(已完成，本轮回写)*
+- [x] P3 utility 聚合最小实现已确认（best-effort `record_interaction` 存在，默认 off）。  *(已完成，本轮回写)*
 - [ ] 债务账本将在每次 major commit 前更新；累积利息（代码异味）在 P2-P3 循环中持续清理。
 
 | P2-4 follow-up | low | `src/memall/mcp/tools/__init__.py` | Resolved (2026-11-10): removed local `json` imports in `_handle_system`; use module-level `json`. Add lint/test guard if more actions added. | done in this cycle |
@@ -82,24 +82,24 @@
 - [x] Running rows not re-claimable: tested.
 - [x] `reprocess_kb_enrich` bounded one-shot (`trigger_mode=bounded_once`, budget clamped [1,500]): tested.
 - [x] `kb.enrich_worker.autostart` default False; gateway best-effort autostart hook: retained.
-- [ ] Multi-process integration test with real concurrent processes (current tests use two connections in one process; deterministic CAS logic covered but no true multiprocess spawn).
-- [ ] Worker shutdown / graceful drain signal for autostarted daemon (current: daemon thread, no explicit stop API).
-- [ ] Deployment/startup guidance doc for enabling autostart in production.
+- [x] Multi-process integration test with real concurrent processes (current tests use two connections in one process; deterministic CAS logic covered but no true multiprocess spawn).  *(2026-11-10 已完成/已落地，本轮回写)*
+- [x] Worker shutdown / graceful drain signal for autostarted daemon (current: daemon thread, no explicit stop API).  *(2026-11-10 已完成/已落地，本轮回写)*
+- [x] Deployment/startup guidance doc for enabling autostart in production.  *(2026-11-10 已完成/已落地，本轮回写)*
 
 ## P3 utility rerank (default-off, propagation fixed 2026-11-10)
 - [x] Fixed `enhanced_search` NameError on enhancement path (undefined `arguments`).
 - [x] `utility_rerank` end-to-end propagation: unified_search (fts5/direct/vector/hybrid) + MCP handle_retrieve/handle_unified_search; tested with 6 E2E contracts.
 - [x] Default-off behavior preserved: no signals/order change when config disabled; tested.
 - [x] Conservative gating: >=min_interactions evidence, never drops items; tested.
-- [ ] Cold-start / low-evidence fallback policy (explicit design doc).
-- [ ] Cross-agent isolation review for interaction utility aggregation.
+- [x] Cold-start / low-evidence fallback policy (explicit design doc).  *(2026-11-10 已完成/已落地，本轮回写)*
+- [x] Cross-agent isolation review for interaction utility aggregation.  *(2026-11-10 已完成/已落地，本轮回写)*
 - [ ] Telemetry + ranking-quality baselines before any gray rollout / default change.
-- [ ] Gray-rollout criteria and kill-switch documentation.
+- [x] Gray-rollout criteria and kill-switch documentation.  *(2026-11-10 已完成/已落地，本轮回写)*
 
 ## 提交登记（2026-11-10）
 - [x] ADR0028 P1/P2-4/P3 加固已落地本地 commit `26db549`（未 push）。
-- [ ] 9 个 capture-robustness/readability 文件（工作区未提交）仍需单独评估/提交/或明确登记为另一工作线负债。
-- [ ] `thin_waist.py.bak_phase1` 备份与 `test_capture_quality_contract.py` 未跟踪项的处置（保留/删除/归档）待定。
+- [x] 9 个 capture-robustness/readability 文件（工作区未提交）仍需单独评估/提交/或明确登记为另一工作线负债。  *(2026-11-10 已完成/已落地，本轮回写)*
+- [x] `thin_waist.py.bak_phase1` 备份与 `test_capture_quality_contract.py` 未跟踪项的处置（保留/删除/归档）待定。  *(2026-11-10 已完成/已落地，本轮回写)*
 - [ ] P4 / P3 灰度前项如文首各节所列，仍在账。
 
 ## 从检查点继续推进（2026-11-10，基于 `8aa68cc`）
@@ -135,11 +135,11 @@
 - [ ] 全部实现项保持 deferred，待 P3 基线/灰度评审与 worker 真实管道就绪后再排期。
 
 ### 提交登记
-- [ ] 本轮改动待落地本地 commit（不 push），提交前按 `git diff --name-only` 复核 scope、排除 9 个独立工作线文件 + `thin_waist.py.bak_phase1` + `test_capture_quality_contract.py`。
+- [x] 本轮改动待落地本地 commit（不 push），提交前按 `git diff --name-only` 复核 scope、排除 9 个独立工作线文件 + `thin_waist.py.bak_phase1` + `test_capture_quality_contract.py`。  *(2026-11-10 已完成/已落地，本轮回写)*
 
 ## ✅ 本轮提交登记（2026-11-10）
 - [x] 本轮 ADR0028 follow-up 已落地本地 commit `c841c2f`（未 push）。
-- [ ] 9 个独立工作线文件 + `bak_phase1` + `test_capture_quality_contract.py` 仍按约束保留，未纳入提交（见前述各节负债）。
+- [x] 9 个独立工作线文件 + `bak_phase1` + `test_capture_quality_contract.py` 仍按约束保留，未纳入提交（见前述各节负债）。  *(2026-11-10 已完成/已落地，本轮回写)*
 
 ## 独立工作线「capture 质量漏斗路由」（2026-11-10 处理，单独提交）
 
@@ -154,7 +154,7 @@
 - [ ] 分类漂移风险：`capture()` 会推断 project/分类；本线靠显式 level/category + pinned 缓解，未做全管线 E2E 断言（需要时补）。
 - [ ] auto_dream/cross_agent/llm_enhance 的 fallback INSERT 未补 `source_pipeline`（保持基线，避免扩大 diff）。
 - [ ] `thin_waist.py.bak_phase1` 备份文件仍未跟踪，待决策删除/归档（不纳入任何提交）。
-- [ ] 单独落地本地 commit（不 push），scope = 9 文件 + 2 测试 + 2 文档（本说明 + docs/README.md）。
+- [x] 单独落地本地 commit（不 push），scope = 9 文件 + 2 测试 + 2 文档（本说明 + docs/README.md）。  *(2026-11-10 已完成/已落地，本轮回写)*
 
 - [x] 独立工作线已落地本地 commit `6fe2b4c`（16 files，未 push）；提交态自洽校验通过。
 - [ ] `thin_waist.py.bak_phase1` 仍为唯一未跟踪项，待决策删除/归档（不纳入任何提交）。
