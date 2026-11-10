@@ -272,3 +272,13 @@
 - 修复：回滚 CAS 从「整份 metadata 相等」收窄为「只守护策略自有字段（resolve.status + marker 序列）」，解决真机后台 enrich 导致合法回滚被永久拒绝。
 - 验收：blueprint 21 passed、MCP 协议 3 passed、全量 618 passed/2 skipped/1 failed（唯一失败为既有并发 flake，隔离 3 次全过）。
 - 工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪。**未 push**。
+
+### ✅ 第四轮：两份独立审查全部核实 + flake 归零（2026-11-11 凌晨，本地 commit，未 push）
+- **commit `50d9d2e`**：`fix(memall): close all findings from two independent reviews + eliminate both full-suite flakes`（13 files, 566+/39-）。
+- 两份独立审查报告（针对 `5bc7198` 与 `f1af71b`，均在已提交快照上工作）逐条在当前 HEAD 复现，仍成立的 10 项全部修复。
+- **严重修复**：`snapshot_before_write=False` 清空整行 metadata（数据丢失）；整数 `task_id` 静默丢 7 个 P3 字段；`mode=audit` 越权读 private；两个全量 flake（迁移 TOCTOU、rollback CAS 被后台 enrich 干扰）。
+- **测试盲区**：P3「排序受 utility 影响」此前无任何断言（sort 变异 21/21 全过）→ 新增排序合同测试并双向变异验证（删除 sort → 新测试 FAIL）。
+- **验证**：连续两次全量 **623 passed / 2 skipped / 0 failed / 0 errors**（862.30s、859.44s）；blueprint 22 passed；py_compile OK；提交态导出 497 文件自检通过。
+- 审查员确认无 SQL 注入、无路径穿越、无连接泄漏、bounded 真实有效。
+- 审查签字定性为**有条件通过**；flakes 已修并验证稳定，其余待办如实登记在 `TECH_DEBT_LEDGER.md`。
+- 工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪。**未 push**。

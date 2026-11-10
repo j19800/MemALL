@@ -186,3 +186,38 @@ git diff --name-only
 
 ### 全量回归（CAS 收窄后）
 `pytest tests/ -q` → **618 passed, 2 skipped, 1 failed**。唯一失败 `test_capture_thread_inference.py::test_thread_inference_links_child_to_root`（`database is locked`），隔离连跑 3 次全过（4 passed ×3）→ 并发连跑的既有锁竞争 flake，与本轮改动无关。
+
+## 第四轮：两份独立审查报告全部核实 + flake 归零（2026-11-11 凌晨）
+### 全量回归（连跑两次，验证稳定性）
+| 轮次 | 结果 | 耗时 |
+|---|---|---|
+| 第 1 次 | **623 passed, 2 skipped, 0 failed, 0 errors** | 862.30s |
+| 第 2 次 | **623 passed, 2 skipped, 0 failed, 0 errors** | 859.44s |
+
+此前多次出现的 1 error / 1 failed 已消除（迁移竞态 + rollback CAS 两个 flake 根因已修）。
+
+### 本轮修复（均为独立审查实测报出、我复现后修）
+| # | 问题 | 级别 |
+|---|---|---|
+| M3 | `snapshot_before_write=False` 时清空整行 metadata（数据丢失） | 严重 |
+| S5 | 整数 `task_id` 抛 TypeError 被吞 → 静默丢 7 个 P3 字段 | 严重 |
+| F1 | 迁移 `duplicate column name` 级联 → 无关测试报 `no such column`（flake） | 严重 |
+| F2 | rollback CAS 被后台 enrich 干扰 → 误拒合法回滚（flake） | 严重 |
+| M1 | `memall_system` schema 缺 5 个 maintenance 字段 → 标准客户端剥参数 | 中 |
+| M5 | `maintenance_status().archive_dir` 报错目录 | 中 |
+| M7 | `mode=audit` 被 validator 拒绝 / schema 误导 | 中 |
+| 严重1 | `mode=audit` 越权读 private 行 | 严重 |
+| 中等3 | `aggregate_utility_ledger` tuple 连接崩溃 | 中 |
+| 轻微10 | `agent_name_filter` 未声明被剥离 | 轻 |
+| 测试盲区 | P3「排序受 utility 影响」无任何断言（sort 变异 21/21 全过） | 严重（测试） |
+
+### 测试补强
+- 新增 `test_p3_ordering_actually_changes_with_utility`：断言高 utility 记忆**真的跃居第一**、关掉回到基线、召回不变。
+- **双向变异验证**：删除 `results.sort(...)` → 新测试 FAIL（`got [1,2], expected 2 first`）；恢复后 PASS。证明该测试真能抓住缺陷。
+- `tests/test_blueprint_completion.py` 现 22 passed。
+
+### 审查员明确确认「无真实漏洞」
+- SQL 注入：`dims` 白名单 + 参数绑定，实测注入被过滤。
+- 路径穿越：`session_id` 白名单，实测 `../../etc/passwd` 被折叠且不越界。
+- 连接泄漏：全部 `try/finally close`。
+- bounded：`run_maintenance` cap/budget/LIMIT 实测有效。

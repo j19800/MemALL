@@ -155,6 +155,11 @@ class RetrieveInput(BaseModel):
     continuity: bool = False
     # ADR 0028 P4: read-only audit surface (mode=audit).
     mode: Optional[str] = Field(None, max_length=40)
+    # Explicit AUTHOR content filter (agent_name on this surface is the viewer
+    # session identity). Must be declared here or validate_tool_input's
+    # exclude_unset dump silently strips it, making the "explicit filter wins"
+    # branch in handle_retrieve unreachable over MCP.
+    agent_name_filter: Optional[str] = Field(None, max_length=200)
     viewer: Optional[str] = Field(None, max_length=200)
 
 
@@ -337,9 +342,15 @@ class RecordInteractionInput(BaseModel):
 
 class UnifiedSearchInput(BaseModel):
     """search / chat / hybrid_search — the unified-search engine router."""
-    query: str = Field(..., min_length=1, max_length=5000)
+    # Optional so mode=audit (a pure read-only audit view, no query needed) can
+    # be validated; every searchable mode still requires it and
+    # handle_unified_search rejects a blank query for those.
+    query: Optional[str] = Field(None, max_length=5000)
     top_k: int = Field(10, ge=1, le=500)
-    mode: str = Field("auto", pattern=r"^(auto|direct|fts5|vector|hybrid)$")
+    # `audit` is the read-only audit surface. handle_unified_search forwards
+    # mode=audit to the same implementation action=retrieve uses, so the shared
+    # memall_read schema never advertises a value the validator rejects.
+    mode: str = Field("auto", pattern=r"^(auto|direct|fts5|vector|hybrid|audit)$")
     rrf_k: int = Field(60, ge=1, le=200)
     category: Optional[str] = Field(None, max_length=100)
     level: Optional[str] = Field(None, pattern=r"^(P[0-2]|L(10|11|[1-9]))$")

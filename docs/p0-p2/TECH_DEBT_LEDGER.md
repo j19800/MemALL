@@ -215,3 +215,28 @@
 - [x] CAS 收窄为「只守护策略自有字段」，修复真机后台 enrich 导致合法回滚被永久拒绝的问题。
 - [ ] 既有 flake：`test_capture_thread_inference.py` 在全量连跑时偶发 `database is locked`（隔离 3 次全过）；根因是并发写锁，建议后续给该测试降低并发或加重试。
 - [ ] 4 个审查 subagent 全部中途失败（三次尝试，累计 4 个），`subagent` 通道在长任务上不可靠；已改用 lead 对抗式复现 + 真机协议测试替代。
+
+## 第三方审查（两份完整报告）核实与修复（2026-11-11）
+- [x] M3 `snapshot_before_write=False` 清空整行 metadata（严重数据丢失）→ 始终读当前 metadata，快照开关只影响审计。
+- [x] M5 `maintenance_status().archive_dir` 报错目录 → 返回真实 arch，并暴露 audit_log。
+- [x] M7 `mode=audit` 被 validator 拒绝/schema 误导 → UnifiedSearchInput 放行 audit、query 改可选、handle_unified_search 委派；普通模式仍校验 query。
+- [x] M1 `memall_system` schema 缺 maintenance 字段 → 补齐 5 个（payload 与 msg 合并）。
+- [x] S5 整数 `task_id` 静默丢 7 个 P3 字段 → 先 str 再切片；fallback 仅对缺列生效。
+- [x] **P3 排序合同测试盲区** → 新增 `test_p3_ordering_actually_changes_with_utility`，并用 sort 变异双向验证（删除后新测试 FAIL）。
+- [x] 确认此前已修：S1/S2/S3/S4、mode=audit 越权、aggregate_utility_ledger tuple、agent_name_filter。
+- [ ] M4 已处理行被反复选中 + 审计日志无轮转。
+- [ ] M6 `_ensure_interaction_columns` 在纯 get_conn() 老库路径不可达。
+- [ ] `_paths()` 依赖 cwd；`dry_run` 仍写审计行（与 docstring 不符）。
+- [ ] `resolve.decision` vs ADR `resolve.status` 命名偏差；`low_utility_archive` 未查效用账簿。
+- [ ] `test_kb_ingest_p2_expanded.py:510,955` 的 `or True` 永真断言（范围外）。
+
+## 复核 agent 最终结论处置（2026-11-11）
+- [x] 接受「审查签字=有条件通过」的定性；不再宣称单次全绿即稳定。
+- [x] F1 迁移竞态 flake 修复：`duplicate column name` 视为已达成 + `valid_from`/`invalid_at` 入补列兜底。
+- [x] F2 rollback CAS flake 修复：CAS 收窄为策略自有字段。
+- [ ] 审计日志无轮转 / `dry_run` 仍写审计行。
+- [ ] 批量 `_mark` 失败不进 summary.errors（静默）。
+- [ ] `aggregate_utility_ledger` 用 ISO 字符串字典序比较时间（脆弱）。
+- [ ] `resolve.decision` vs ADR `resolve.status` 命名偏差。
+- [ ] `low_utility_archive` 未查效用账簿（名不副实）。
+- [ ] `archive_session` 允许 `.`/`..` 组合文件名（安全无穿越，仅整洁）。

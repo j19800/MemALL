@@ -986,3 +986,72 @@ def test_p4_rollback_cas_compares_metadata_semantically():
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
         cleanup_temp_db(db, orig)
+
+
+def test_p3_ordering_actually_changes_with_utility():
+    """ADR 0028 P3 acceptance: high-utility memories must rank FIRST.
+
+    Regression guard for a real测试盲区 found by independent review: every P3
+    test only asserted that `utility_rerank_signal` EXISTS, never that the
+    ORDER changes. Mutation check: deleting the `results.sort(...)` line in
+    `_apply_utility_rerank` (still emitting signals, never reordering) left all
+    tests green — so the acceptance clause "排序会受 utility 影响（高 utility
+    靠前）" was unprotected.
+
+    This test pins the ORDER: memory B is behind A on relevance, gets clicks,
+    and must overtake A when the switch is on; it must fall back behind A when
+    the switch is off.
+    """
+    db, orig = init_temp_db()
+    try:
+        from memall.core.db import get_conn
+        from memall.core.models import MemoryInput
+        from memall.core.thin_waist import capture, unified_search
+        from memall.search.enhancements import record_interaction
+
+        # Two memories on the same topic; A is a slightly better text match.
+        a = int(capture(MemoryInput(
+            content="PostgreSQL PostgreSQL 主库选型决策，事务稳定，团队熟悉。",
+            level="L4", category="decision", agent_name="ord_agent", project="ord")))
+        b = int(capture(MemoryInput(
+            content="PostgreSQL 主库选型决策补充说明，事务稳定，团队熟悉。",
+            level="L4", category="decision", agent_name="ord_agent", project="ord")))
+
+        def order():
+            out = json.loads(unified_search({
+                "query": "PostgreSQL 主库选型", "mode": "fts5",
+                "agent_name": "ord_agent", "limit": 10}))
+            return [r.get("memory_id") for r in (out.get("results") or [])]
+
+        base = order()
+        assert set(base) == {a, b}, base
+
+        # Give the WORSE-ranked memory strong utility evidence.
+        worse = base[-1]
+        c = get_conn()
+        for _ in range(5):
+            record_interaction(c, query="PostgreSQL 主库选型", memory_id=worse,
+                               action="click", agent_name="ord_agent", accepted=True)
+        c.close()
+
+        # Switch off -> baseline order preserved, no signals.
+        _reset()
+        off = order()
+        assert off == base, f"config off must not reorder: {off} != {base}"
+
+        # Switch on (config-only, no flag) -> the high-utility memory leads.
+        _cfg_set("quality.utility.tracking_enabled", True)
+        on = order()
+        assert set(on) == {a, b}, f"recall must not change: {on}"
+        assert on[0] == worse, (
+            f"high-utility memory must rank first: got {on}, expected {worse} first "
+            f"(baseline {base})")
+
+        # And back off -> returns to baseline (no sticky reordering).
+        _cfg_set("quality.utility.tracking_enabled", False)
+        back = order()
+        assert back == base, f"turning the switch off must restore baseline: {back}"
+        print("PASS: test_p3_ordering_actually_changes_with_utility")
+    finally:
+        _reset()
+        cleanup_temp_db(db, orig)

@@ -735,11 +735,25 @@ def record_interaction(
         from datetime import datetime, timezone
 
         now = datetime.now(timezone.utc).isoformat()
+
+        def _s(v, n: int) -> str:
+            """Coerce to str BEFORE slicing.
+
+            `(task_id or "")[:200]` raised TypeError when task_id was an int
+            (the MCP `task_id` field is oneOf[int,str] because it doubles as an
+            L5 card id), and the blanket `except` below then retried the LEGACY
+            9-column INSERT — silently persisting the row with accepted/slot_key
+            dropped. Integer task_id therefore lost the whole P3 feedback.
+            """
+            if v is None:
+                return ""
+            return str(v)[:n]
+
         base = (
             (query or "")[:2000], memory_id, action,
             max(0, int(dwell_ms or 0)), rank_position,
-            (agent_name or "")[:200], (owner or "")[:200],
-            (session_id or "")[:200], now,
+            _s(agent_name, 200), _s(owner, 200),
+            _s(session_id, 200), now,
         )
         try:
             conn.execute(
@@ -748,15 +762,22 @@ def record_interaction(
                 " task_id, accepted, rejected, corrected, ignored, slot_key, source_pipeline, scope) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 base + (
-                    (task_id or "")[:200],
+                    _s(task_id, 200),
                     int(bool(accepted)), int(bool(rejected)),
                     int(bool(corrected)), int(bool(ignored)),
-                    (slot_key or "")[:200], (source_pipeline or "")[:200],
-                    (scope or "")[:200],
+                    _s(slot_key, 200), _s(source_pipeline, 200),
+                    _s(scope, 200),
                 ),
             )
-        except Exception:
-            # Legacy DB without the P3 columns: retry with the original shape.
+        except sqlite3.OperationalError as exc:
+            # ONLY the "old DB lacks the P3 columns" case falls back to the
+            # legacy shape. Any other failure (constraint, disk, type) must
+            # surface as False instead of being disguised as a legacy DB —
+            # a BEFORE INSERT trigger aborting the statement used to return
+            # True while silently writing accepted=0/task_id=''.
+            if "no column named" not in str(exc).lower() and "no such column" not in str(exc).lower():
+                logger.debug("enhancements: record_interaction failed", exc_info=True)
+                return False
             conn.execute(
                 "INSERT INTO search_interactions "
                 "(query, memory_id, action, dwell_ms, rank_position, agent_name, owner, session_id, created_at) "
@@ -840,7 +861,17 @@ def aggregate_utility_ledger(conn, agent_name: str = "", days: int = 30,
         agent_name = (agent_name or "")[:200]
         days = max(1, min(int(days or 30), 365))
         limit = max(1, min(int(limit or 500), 5000))
-        cols = {r["name"] for r in conn.execute("PRAGMA table_info(search_interactions)").fetchall()}
+        # PRAGMA rows are (cid, name, type, ...) tuples, or sqlite3.Row when the
+        # connection sets a row_factory. Support BOTH: using r["name"]
+        # unconditionally raised TypeError on a plain sqlite3 connection and the
+        # outer except turned it into ok:False (this function is exported and can
+        # be called with an external connection).
+        cols = set()
+        for _r in conn.execute("PRAGMA table_info(search_interactions)").fetchall():
+            try:
+                cols.add(_r["name"])
+            except (TypeError, KeyError, IndexError):
+                cols.add(_r[1])
         has_feedback = {"accepted", "rejected", "corrected", "ignored"}.issubset(cols)
         dim_cols = [d for d in dims if d in cols]
 

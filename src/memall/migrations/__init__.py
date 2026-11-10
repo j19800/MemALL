@@ -108,8 +108,22 @@ def _exec_migration_script(file_path: Path, conn) -> dict:
     try:
         module.apply(conn)
     except Exception as e:
-        return {"status": "error", "migration_id": migration_id,
-                "reason": f"Migration script failed: {e}"}
+        # "duplicate column name" means the desired end state already exists:
+        # a concurrent process (gateway / scheduler / MCP server / CLI / test
+        # fixture) applied the same DDL between our schema_version check and
+        # this call. Treat it as applied instead of failing the migration —
+        # otherwise the failure cascades: later migrations (027/034/035/037/038
+        # need memory_status, 031 needs valid_from) then run against a
+        # half-built schema and UNRELATED tests fail with "no such column".
+        # This was the intermittent full-suite failure seen across many runs.
+        if "duplicate column name" in str(e).lower():
+            logger.debug(
+                "migrations: %s DDL already applied elsewhere (%s); marking applied",
+                migration_id, e,
+            )
+        else:
+            return {"status": "error", "migration_id": migration_id,
+                    "reason": f"Migration script failed: {e}"}
 
     # Record as applied
     now = datetime.now(timezone.utc).isoformat()

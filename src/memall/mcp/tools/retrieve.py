@@ -77,6 +77,13 @@ def _handle_retrieve_audit(arguments: dict) -> str:
     Never mutates. Returns compact lists so a human can audit automatic
     maintenance decisions. Best-effort: a missing table/column degrades to
     an explicit empty section instead of failing the call.
+
+    SECURITY: every memory-derived section goes through the SAME WHERE builder
+    and trust filter as `retrieve()`. An earlier version ran raw SELECTs with
+    no visibility predicate (the caller's agent_name was only echoed into the
+    payload), so an unregistered viewer could read other agents' `private`
+    CONFLICT rows and maintenance-marked rows through this audit surface.
+    Found by independent review and reproduced against a public-only viewer.
     """
     from memall.core.db import get_conn
     agent_name = (arguments.get("agent_name") or arguments.get("viewer") or "")[:200]
@@ -84,47 +91,65 @@ def _handle_retrieve_audit(arguments: dict) -> str:
     out = {"mode": "audit", "agent_name": agent_name,
            "conflicts": [], "history": [], "evidence": [],
            "maintenance": None, "ok": True}
-    conn = get_conn()
+    conn = None
     try:
-        # Conflicts / review items (memory_status markers).
-        try:
+        from memall.core.thin_waist import _build_retrieve_where, _filter_by_trust
+
+        conn = get_conn()
+
+        def _visible(extra: str, params: list) -> list:
+            """Rows the caller may actually read (trust + visibility applied)."""
+            where, wparams, _ = _build_retrieve_where(
+                conn, None, agent_name or None, {"include_archived": False})
+            where.append(extra)
             rows = conn.execute(
-                "SELECT id, subject, memory_status, metadata, updated_at FROM memories "
-                "WHERE COALESCE(memory_status,'') LIKE '%CONFLICT%' "
-                "OR COALESCE(memory_status,'') LIKE '%REVIEW%' "
-                "ORDER BY updated_at DESC LIMIT ?", (limit,),
+                f"SELECT id, subject, memory_status, metadata, updated_at "
+                f"FROM memories WHERE {' AND '.join(where)} "
+                f"ORDER BY updated_at DESC LIMIT ?",
+                [*wparams, *params, limit],
             ).fetchall()
+            items = [
+                {"id": r["id"], "subject": r["subject"],
+                 "memory_status": r["memory_status"],
+                 "_meta": _meta_dict(r["metadata"]),
+                 "updated_at": r["updated_at"]}
+                for r in rows
+            ]
+            if agent_name:
+                items = _filter_by_trust(conn, items, agent_name)
+            return items
+
+        # Conflicts / review items (memory_status markers), trust-filtered.
+        try:
+            rows = _visible(
+                "(COALESCE(memory_status,'') LIKE '%CONFLICT%' "
+                "OR COALESCE(memory_status,'') LIKE '%REVIEW%')", [])
             out["conflicts"] = [
                 {"id": r["id"], "subject": r["subject"],
                  "memory_status": r["memory_status"], "updated_at": r["updated_at"]}
                 for r in rows
             ]
         except Exception:
-            pass
-        # History: memories carrying cognitive_maintenance markers.
+            out["conflicts_degraded"] = True
+        # History: cognitive_maintenance markers, trust-filtered.
         try:
-            rows = conn.execute(
-                "SELECT id, subject, metadata, updated_at FROM memories "
-                "WHERE metadata LIKE '%cognitive_maintenance%' "
-                "ORDER BY updated_at DESC LIMIT ?", (limit,),
-            ).fetchall()
+            rows = _visible("metadata LIKE '%cognitive_maintenance%'", [])
             for r in rows:
-                meta = _meta_dict(r["metadata"])
-                markers = meta.get("cognitive_maintenance") or []
+                markers = r["_meta"].get("cognitive_maintenance") or []
                 out["history"].append({
                     "id": r["id"], "subject": r["subject"],
                     "updated_at": r["updated_at"],
                     "actions": [m.get("action") for m in markers if isinstance(m, dict)],
                 })
         except Exception:
-            pass
-        # Evidence: recent audit-log lines (append-only).
+            out["history_degraded"] = True
+        # Evidence: recent audit-log lines (append-only, redacted).
         try:
             from memall.pipeline.maintenance import read_audit
             au = read_audit(limit=limit)
             out["evidence"] = au.get("entries", [])[:limit]
         except Exception:
-            pass
+            out["evidence_degraded"] = True
         # Maintenance status / config gates.
         try:
             from memall.pipeline.maintenance import maintenance_status
@@ -132,10 +157,11 @@ def _handle_retrieve_audit(arguments: dict) -> str:
         except Exception:
             pass
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
     return json.dumps(out, ensure_ascii=False)
 
 
@@ -256,6 +282,11 @@ def handle_hybrid_search(arguments: dict) -> str:
 
 def handle_unified_search(arguments: dict) -> str:
     """Unified search — auto-routes between FTS5, vector, and hybrid engines."""
+    # mode=audit is the read-only audit surface (implemented once, for
+    # action=retrieve). Delegate here too, so the shared memall_read schema
+    # never advertises a mode this entry point cannot honour.
+    if str(arguments.get("mode") or "") == "audit":
+        return _handle_retrieve_audit(arguments)
     if not (arguments.get("query") or "").strip():
         return json.dumps({"error": "query is required (non-empty string)"}, ensure_ascii=False)
     from memall.core.thin_waist import unified_search

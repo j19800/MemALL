@@ -263,6 +263,11 @@ registry.register(ToolDef(
         "action": {"type": "string", "enum": ["retrieve", "search", "unified_search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "batch_search", "trace", "traverse", "timeline", "fed_query", "fed_conflicts", "recap", "continuity_pack", "task_list", "goal_status"]},
         "query": {"type": "string", "description": "Search query"},
         "queries": {"type": "array", "items": {"type": "string"}, "description": "Queries for batch_search"},
+        # `audit` is a read-only audit surface implemented ONLY for
+        # action=retrieve (handle_retrieve). It is declared in RetrieveInput so
+        # that action accepts it; search/unified_search keep the classic mode
+        # vocabulary, otherwise this shared schema would advertise a value their
+        # validator rejects (misleading clients).
         "mode": {"type": "string", "enum": ["auto", "direct", "fts5", "vector", "hybrid", "audit"]},
         "top_k": {"type": "integer"},
         "rrf_k": {"type": "integer"},
@@ -294,6 +299,7 @@ registry.register(ToolDef(
         "context_boost": {"type": "boolean", "description": "Boost results matching the active project / category"},
         "utility_rerank": {"type": "boolean", "description": "ADR0028 P3: conservative interaction-utility rerank (default off, config-gated)"},
         "continuity": {"type": "boolean", "description": "ADR0028 P1: attach validity-aware continuity pack (default off, config-gated)"},
+        "agent_name_filter": {"type": "string", "description": "Explicit AUTHOR content filter (agent_name on this surface is the viewer session identity)"},
         "session_id": {"type": "string", "description": "Enable per-session novelty demotion for repeat queries"},
     }, "required": ["action"]},
     handler=_handle_read,
@@ -698,6 +704,15 @@ registry.register(ToolDef(
         "include_distill": {"type": "boolean"},
         "include_integrate": {"type": "boolean"},
         "include_persona": {"type": "boolean"},
+        # maintenance (action=maintenance) — MUST be declared: a schema-aware
+        # MCP client filters arguments against these properties, so omitting
+        # them silently stripped `entry`/`payload`/`actions` and made
+        # rollback/archive unusable over the standard client path.
+        "maintenance_sub_action": {"type": "string", "enum": ["status", "run", "audit", "archive", "rollback"], "description": "maintenance only"},
+        "actions": {"type": "array", "items": {"type": "string"}, "description": "maintenance run: subset of canonicalize|conflict_review|expire|low_utility_archive|theme_profile|policy_adaptation"},
+        "max_actions": {"type": "integer", "description": "maintenance run: per-run cap (1..500)"},
+        "entry": {"type": "object", "description": "maintenance rollback: {ts, memory_id, action} from a prior audit record"},
+        "payload": {"type": "object", "description": "maintenance archive: JSON anchor payload to persist"},
         "timeout": {"type": "integer"},
         "limit": {"type": "integer"},
         "group_id": {"type": "integer"},
@@ -770,7 +785,7 @@ registry.register(ToolDef(
         "action": {"type": "string", "enum": ["send", "inbox", "ack", "status"]},
         "agent_name": {"type": "string", "description": "Calling agent (also the bus identity)"},
         "to": {"type": "string", "description": "Recipient agent (send action)"},
-        "payload": {"type": "object", "description": "Message payload — prefer {memory_id: N}"},
+        "payload": {"type": "object", "description": "maintenance archive: JSON anchor payload; memall_msg: message payload — prefer {memory_id: N}"},
         "type": {"type": "string", "description": "Message type: task | ack | report | verdict | msg"},
         "ids": {"type": "array", "items": {"type": "integer"},
                 "description": "Message ids to mark read (ack action)"},

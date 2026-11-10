@@ -119,7 +119,13 @@ def _mark(conn, mem_id: int, action: str, marker: dict,
     """
     before = _snapshot_row(conn, mem_id) if _cfg("snapshot_before_write", True) else {}
     try:
-        raw = before.get("metadata")
+        # ALWAYS read the current metadata, even when snapshotting is disabled.
+        # With `snapshot_before_write=False` the old code took `before={}` as the
+        # source and then WROTE a metadata document containing only the marker —
+        # wiping resolve/slot_key/quality/user fields (real data loss, found by
+        # independent review). Snapshotting only controls what the AUDIT keeps.
+        cur_row = _snapshot_row(conn, mem_id)
+        raw = cur_row.get("metadata") if cur_row else None
         meta = {}
         if isinstance(raw, dict):
             meta = dict(raw)
@@ -572,11 +578,15 @@ def rollback_from_audit(entry: dict) -> dict:
 
 def maintenance_status() -> dict:
     """Read-only status/observability for the maintenance surface."""
-    _, audit = _paths()
+    arch, audit = _paths()
     return {
         "enabled": bool(_cfg("enabled", False)),
         "source_pipeline": str(_cfg("source_pipeline", _MAINTENANCE_PIPELINE)),
-        "archive_dir": str(audit.parent),
+        # Report the REAL archive directory (archive_session writes here). The
+        # previous version returned `audit.parent`, which is a different config
+        # key — status showed a path nothing was ever written to.
+        "archive_dir": str(arch),
+        "audit_log": str(audit),
         "audit_log_exists": audit.exists(),
         "snapshot_before_write": bool(_cfg("snapshot_before_write", True)),
         "policies": {a: bool(_cfg(a, False)) for a in (

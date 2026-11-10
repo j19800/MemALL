@@ -642,6 +642,12 @@ def _ensure_missing_columns(conn):
         "accumulate_key": "TEXT DEFAULT NULL",
         "creator": "TEXT NOT NULL DEFAULT ''",
         "stream": "TEXT NOT NULL DEFAULT 'knowledge'",
+        # Temporal validity (migration 031). Present in SCHEMA_SQL for fresh
+        # DBs, but a lost/locked 031 left old databases without them and every
+        # continuity query then failed with "no such column: valid_from".
+        # Re-asserting here covers the columns the P1 contract depends on.
+        "valid_from": "TEXT DEFAULT NULL",
+        "invalid_at": "TEXT DEFAULT NULL",
     }
     for col, typedef in additions.items():
         if col not in existing:
