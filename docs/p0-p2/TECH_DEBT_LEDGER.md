@@ -240,3 +240,12 @@
 - [ ] `resolve.decision` vs ADR `resolve.status` 命名偏差。
 - [ ] `low_utility_archive` 未查效用账簿（名不副实）。
 - [ ] `archive_session` 允许 `.`/`..` 组合文件名（安全无穿越，仅整洁）。
+
+## 结果验收修复（2026-11-11，commit 4302a11）
+- [x] 智能化：分类准确率 1/5 → 5/5（保守规则分类器，仅调用方未指定时生效，显式意图优先）。
+- [x] 自进化：槽位改为主题级稳定标识 → UPDATE/SUPERSEDE/CONFLICT/REVIEW 链路打通。
+- [x] 新增 `tests/test_memory_intelligence.py`（4 tests）守护两项合同。
+- [ ] `review` 门禁只标注不拦截（默认不参与检索尚未实现）。
+- [ ] `session_start` 注入几乎为空（决策/偏好/经验未进上下文）。
+- [ ] 不可读内容仍入库；JSON 被归一化成键值串骗过可读性检查。
+- [ ] subject 机械前缀 + 60 字符硬截断，列表可辨识度低。

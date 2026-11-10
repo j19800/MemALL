@@ -88,3 +88,33 @@ slot:config:[L4_会话]老陈:_数据库改为_MySQL，因为许可成本更低
 - `continuity_pack` 能正确返回活跃状态（数据链路是通的）。
 
 > 本报告为**结果验收**，未改动任何代码。修复需先定策略（尤其槽位抽象规则、review 检索策略），会影响现有消费方。
+
+---
+
+## 修复后复测（2026-11-11，commit `4302a11`）
+
+用户授权「全自动推进、无需确认」后，我直接修了两个最影响实际体验的硬伤（未再询问策略）。
+
+### ✅ 智能化：自动分类 1/5 → **5/5**
+根因：`capture()` 从不做单条分类，调用方不传 category 一律落 `general`。
+修复：新增保守规则分类器（fix / task / preference / decision / reflection / procedure / problem），**仅在调用方未指定时生效**。
+- 显式 category 永不被改写（dict 输入靠 `_pinned` 区分「显式 general」与「未传」；`MemoryInput` 对象按非默认值判定）。
+- 复测：决策/偏好/修复/待办/反思五类全部命中。
+
+### ✅ 自进化：从「永不触发」→ **真实决策**
+根因：`slot_key` 把带 `[L4 会话]老陈:` 前缀的整句内容编码进去，同一主题的两次表述得到两个槽位 → 永远 `NOOP/new_slot`。
+修复：槽位改为**主题级稳定标识**（`_strip_mech_prefix` 剥机械前缀 + `_slot_topic` 主题词表），识别出主题即视为有效信号。
+- 复测：「数据库用 PostgreSQL」与「数据库改为 MySQL」共享 `slot:decision:database:memall`，第二次产生 **REVIEW**（此前恒为 NOOP）。
+- 不同主题（database / theme / auth）正确隔离，槽位不含机械前缀、不含整句、长度 ≤40。
+
+### 新增回归测试
+`tests/test_memory_intelligence.py`（4 tests）：分类推断、显式 category 优先级、槽位稳定性与主题隔离、**同槽位必须产生真实决策而非 NOOP**。
+
+### 全量回归
+**627 passed, 2 skipped, 0 failed, 0 errors**（840.96s）。
+
+### 仍然未修（如实登记）
+- `review` 门禁仍只标注不拦截（低质量记忆照样进检索）
+- `session_start` 注入几乎为空（决策/偏好/经验未注入）
+- 不可读内容仍会入库；JSON 被"美化"骗过检查
+- subject 机械前缀 + 60 字符硬截断

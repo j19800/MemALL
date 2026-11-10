@@ -776,6 +776,36 @@ def _category_validity(cat: str, min_len: int) -> tuple[bool, str]:
     return True, ""
 
 
+# Rule-based category inference for callers that pass no category. Without it
+# EVERY capture landed in "general": measured 1/5 accuracy on obvious cases
+# (a project decision, a user preference, a bug fix and a TODO all became
+# "general"), which also starved the downstream consumers that key off
+# category (session injection, task routing, continuity buckets). Deliberately
+# conservative: only fires when the caller left the default, and only on
+# unambiguous lexical signals.
+_CATEGORY_RULES = (
+    ("fix",        ("修复", "修好", "bug", "报错", "崩溃", "挂了", "hotfix", "regression", "回归测试")),
+    ("task",       ("待办", "todo", "明天", "下周", "截止", "deadline", "要完成", "记得", "跟进")),
+    ("preference", ("偏好", "喜欢", "习惯", "倾向", "prefer", "不喜欢", "讨厌")),
+    ("decision",   ("决定", "决策", "选型", "采用", "选定", "改为", "改用", "定下来", "architecture", "decision")),
+    ("reflection", ("反思", "复盘", "教训", "总结一下", "回顾", "retrospective")),
+    ("procedure",  ("步骤", "流程", "先", "然后", "最后", "step", "runbook", "操作手册")),
+    ("problem",    ("问题", "故障", "异常", "失败", "卡住")),
+)
+
+
+def _infer_category(text: str) -> str | None:
+    """Best-effort category from content; None when no confident signal."""
+    low = (text or "").lower()
+    if not low.strip():
+        return None
+    for cat, keys in _CATEGORY_RULES:
+        for k in keys:
+            if k in low:
+                return cat
+    return None
+
+
 def _validate_category(data: MemoryInput) -> None:
     """Reject or coerce structurally invalid categories at the write entry.
 
@@ -969,6 +999,7 @@ def _capture_normalize_and_validate(
     # as such was flipped to fix/testing by a keyword rule, so the whole
     # reminder chain returned zero (audit P1-16, reproduced live).
     explicit = set(overrides)
+    _input_was_object = isinstance(data, MemoryInput)
     if isinstance(data, dict):
         explicit |= {k for k, v in data.items() if v not in (None, "")}
     elif isinstance(data, MemoryInput):
@@ -1016,6 +1047,26 @@ def _capture_normalize_and_validate(
     _check_disabled_identity_raw(data)
 
     data.agent_name = normalize_agent_name(data.agent_name)
+    # Infer a category ONLY when the caller supplied NONE. `_pinned` records the
+    # fields the caller set deliberately (computed above from dict keys /
+    # overrides), so an explicit category="general" is preserved rather than
+    # being silently re-guessed — the caller's contract wins over keyword rules.
+    _pinned_fields = {f for f in (getattr(data, "_pinned", "") or "").split(",") if f}
+    # `_pinned` can only distinguish explicit-vs-default for DICT input (it is
+    # built from the dict's keys). A constructed MemoryInput has no provenance,
+    # so there we fall back to "non-default value means deliberate", matching
+    # _capture_normalize_and_validate's own rule. Net effect: MCP/dict callers
+    # that pass category="general" explicitly keep it; positional
+    # MemoryInput(...) callers with the default get the inference.
+    _explicit_cat = ("category" in _pinned_fields) or (
+        _input_was_object and bool(getattr(data, "category", ""))
+        and (getattr(data, "category", "") or "").strip().lower() != "general"
+    )
+    if (not _explicit_cat
+            and (getattr(data, "category", "") or "general").strip().lower() == "general"):
+        _guessed = _infer_category(getattr(data, "content", "") or "")
+        if _guessed:
+            data.category = _guessed
     _validate_category(data)
     # level must land inside the canonical enum before it reaches the INSERT:
     # the DB CHECK rejects anything else with IntegrityError, and this is the
@@ -1245,27 +1296,94 @@ def _ensure_metadata_dict(data: MemoryInput) -> dict:
 
 
 
-def _slot_key_for_memory(data: MemoryInput, content: str) -> str | None:
-    """Phase 2 rules-first slot key for state/decision/config-like memories.
-    Returns None when no stable slot can be inferred (avoid noisy conflicts)."""
-    subj = (getattr(data, "subject", "") or "").strip()
-    proj = (getattr(data, "project", "") or "").strip()
-    cat = (getattr(data, "category", "") or "").strip()
-    low = content.lower()
-    # State/config signals
-    if any(k in content for k in ["端口", "port", "地址", "url", "路径", "path", "配置", "config", "密码", "key", "token", "账号", "环境变量", "host", "数据库"]):
-        base = re.sub(r"\s+", "_", subj)[:60] if subj else (re.sub(r"\s+", "_", proj)[:40] if proj else None)
-        if not base:
-            # use first key-like token
-            m = re.search(r"([A-Za-z_][A-Za-z0-9_.:-]{1,40}|[\u4e00-\u9fff]{2,12}(?:配置|端口|地址|路径|账号|密码|key|token))", content)
-            base = re.sub(r"\s+", "_", m.group(1))[:60] if m else None
-        return f"slot:config:{base}" if base else "slot:config:generic"
-    # Decision signals
-    if any(k in content for k in ["决定", "决策", "选型", "采用", "使用", "方案", "architecture", "decision", "choose", "选用"]):
-        base = re.sub(r"\s+", "_", (subj or proj or cat))[:60]
-        if base:
-            return f"slot:decision:{base}"
+_SLOT_MECH_PREFIX_RE = re.compile(
+    r"^\s*(?:\[(?:L\d+|P\d+)[^\]]*\])\s*"          # [L4 会话] / [P2 原始]
+    r"|^\s*(?:老陈|system|agent)\s*[:：]\s*"           # owner prefix leaked in
+)
+
+# Topic vocabulary: a slot key must name a STABLE SUBJECT, never the whole
+# sentence. Without this, "数据库用 PostgreSQL" and "数据库改为 MySQL" produced
+# two different slots, so resolve() always returned new_slot and the whole
+# self-evolution chain (UPDATE/SUPERSEDE/CONFLICT/REVIEW) never fired.
+_SLOT_TOPICS = (
+    ("database",  ("数据库", "主库", "postgres", "mysql", "sqlite", "oracle", "mongo", "redis 库")),
+    ("cache",     ("缓存", "cache", "redis", "memcache", "valkey")),
+    ("gateway",   ("网关", "gateway", "api 网关", "入口")),
+    ("api_style", ("api 风格", "rest", "graphql", "接口风格", "rpc")),
+    ("auth",      ("认证", "鉴权", "auth", "token", "jwt", "oauth", "登录")),
+    ("deploy",    ("部署", "deploy", "发布", "上线", "blue-green", "灰度")),
+    ("queue",     ("队列", "queue", "kafka", "rabbit", "消息")),
+    ("storage",   ("存储", "storage", "oss", "s3", "对象存储")),
+    ("language",  ("编程语言", "language", "python", "go ", "java", "typescript")),
+    ("theme",     ("主题", "theme", "深色", "浅色", "dark", "light")),
+    ("editor",    ("编辑器", "editor", "vim", "vscode", "emacs")),
+)
+
+
+def _strip_mech_prefix(text: str) -> str:
+    """Remove level labels / owner prefixes that must never enter a slot key."""
+    out = (text or "").strip()
+    for _ in range(3):
+        new_out = _SLOT_MECH_PREFIX_RE.sub("", out, count=1).strip()
+        if new_out == out:
+            break
+        out = new_out
+    return out
+
+
+def _slot_topic(content: str, data: MemoryInput) -> str | None:
+    """Stable topic id for a memory (e.g. ``database``), or None."""
+    hay = f"{_strip_mech_prefix(getattr(data, 'subject', '') or '')} {content}".lower()
+    for topic, keys in _SLOT_TOPICS:
+        for k in keys:
+            if k in hay:
+                return topic
     return None
+
+
+def _slot_key_for_memory(data: MemoryInput, content: str) -> str | None:
+    """Rules-first slot key for state/decision/config-like memories.
+
+    A slot key is the IDENTITY of a changing fact, so it must be stable across
+    re-statements: ``数据库用 PostgreSQL`` and ``数据库改为 MySQL`` are the SAME
+    slot (``slot:config:database``) with different values. An earlier version
+    derived the key from the (already label-prefixed) subject, which encoded the
+    whole sentence into the slot — every statement became a brand-new slot,
+    ``_resolve_decision`` always returned NOOP/new_slot, and
+    UPDATE/SUPERSEDE/CONFLICT/REVIEW were unreachable.
+
+    Returns None when no stable slot can be inferred (avoids noisy conflicts).
+    """
+    proj = _strip_mech_prefix(getattr(data, "project", "") or "")
+    low = (content or "").lower()
+
+    is_config = any(k in low for k in (
+        "端口", "port", "地址", "url", "路径", "path", "配置", "config",
+        "密码", "password", "key", "token", "账号", "环境变量", "host",
+    ))
+    is_decision = any(k in low for k in (
+        "决定", "决策", "选型", "采用", "使用", "方案", "architecture",
+        "decision", "choose", "选用", "改为", "改用",
+    ))
+    topic = _slot_topic(content, data)
+    # A recognised TOPIC is itself sufficient evidence of a stateful fact
+    # ("数据库用 PostgreSQL" has no decision keyword but is clearly a database
+    # choice). Requiring an extra trigger word left such statements slot-less,
+    # so a later "改为 MySQL" could never supersede them.
+    if not (is_config or is_decision or topic):
+        return None
+
+    kind = "config" if is_config else "decision"
+    if topic:
+        scope = f":{proj}" if proj and proj.lower() not in ("", "general") else ""
+        return f"slot:{kind}:{topic}{scope}"
+    # No topic recognised: fall back to project scope only. Deliberately NOT
+    # the sentence — a content-derived key can never match a later restatement.
+    if proj:
+        return f"slot:{kind}:{proj}"
+    cat = _strip_mech_prefix(getattr(data, "category", "") or "")
+    return f"slot:{kind}:{cat}" if cat and cat != "general" else f"slot:{kind}:generic"
+
 
 def _extract_machine_hints(data: MemoryInput) -> dict:
     """Phase 2 machine-lite: cheap rule-based hints for consumption/routing. No LLM."""
