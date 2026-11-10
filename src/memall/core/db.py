@@ -179,7 +179,16 @@ CREATE TABLE IF NOT EXISTS search_interactions (
     agent_name TEXT NOT NULL DEFAULT '',
     owner TEXT NOT NULL DEFAULT '',
     session_id TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- ADR 0028 P3: richer feedback signals (appended, all nullable/defaulted).
+    task_id TEXT NOT NULL DEFAULT '',
+    accepted INTEGER NOT NULL DEFAULT 0,
+    rejected INTEGER NOT NULL DEFAULT 0,
+    corrected INTEGER NOT NULL DEFAULT 0,
+    ignored INTEGER NOT NULL DEFAULT 0,
+    slot_key TEXT NOT NULL DEFAULT '',
+    source_pipeline TEXT NOT NULL DEFAULT '',
+    scope TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_interactions_agent ON search_interactions(agent_name);
@@ -645,6 +654,36 @@ def _ensure_missing_columns(conn):
             conn.execute(f"ALTER TABLE memories ADD COLUMN {col} {typedef}")
 
 
+def _ensure_interaction_columns(conn):
+    """ADR 0028 P3: append richer feedback columns to old search_interactions
+    tables. Idempotent; every column is NOT NULL with a safe default so no
+    existing row is invalidated. Kept as a safety net because SCHEMA_SQL only
+    applies to fresh databases (``CREATE TABLE IF NOT EXISTS``).
+    """
+    try:
+        cur = conn.execute("PRAGMA table_info(search_interactions)")
+        existing = {r["name"] for r in cur.fetchall()}
+    except Exception:
+        return
+    additions = {
+        "task_id": "TEXT NOT NULL DEFAULT ''",
+        "accepted": "INTEGER NOT NULL DEFAULT 0",
+        "rejected": "INTEGER NOT NULL DEFAULT 0",
+        "corrected": "INTEGER NOT NULL DEFAULT 0",
+        "ignored": "INTEGER NOT NULL DEFAULT 0",
+        "slot_key": "TEXT NOT NULL DEFAULT ''",
+        "source_pipeline": "TEXT NOT NULL DEFAULT ''",
+        "scope": "TEXT NOT NULL DEFAULT ''",
+    }
+    for col, typedef in additions.items():
+        if col not in existing:
+            if not col.isidentifier() or ";" in typedef:
+                raise ValueError(
+                    f"unsafe column definition in _ensure_interaction_columns: {col!r} {typedef!r}"
+                )
+            conn.execute(f"ALTER TABLE search_interactions ADD COLUMN {col} {typedef}")
+
+
 def init_db(conn=None, migrate=True, db_path_for_backup: str = ""):
     close = False
     if conn is None:
@@ -655,6 +694,8 @@ def init_db(conn=None, migrate=True, db_path_for_backup: str = ""):
         # Safety net: add any columns that may not have survived executescript.
         # Must commit here so subsequent migrations see the DDL changes.
         _ensure_missing_columns(conn)
+        # ADR 0028 P3: append feedback columns to pre-existing interaction tables.
+        _ensure_interaction_columns(conn)
         conn.commit()
         # Only execute FTS5 triggers if they haven't been set up yet
         _ensure_fts_triggers(conn)
@@ -689,6 +730,8 @@ def init_db(conn=None, migrate=True, db_path_for_backup: str = ""):
         # and every later write fails.  Re-assert the expected columns after
         # migrating so a skipped migration cannot corrupt the schema.
         _ensure_missing_columns(conn)
+        # ADR 0028 P3: re-assert interaction feedback columns after migrations too.
+        _ensure_interaction_columns(conn)
         conn.commit()
         # A table-rebuilding migration (021 / 028) DROPs ``memories``, which takes
         # the AFTER INSERT/UPDATE/DELETE FTS5 triggers with it.  On a fresh DB the

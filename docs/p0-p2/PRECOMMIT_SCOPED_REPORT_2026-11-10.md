@@ -93,3 +93,16 @@ git diff --name-only
 对照上轮 592 passed：+6 = 本轮新增 `test_capture_quality_workline.py` 6 测试；0 failed / 0 errors。确认 9 文件工作线 + 2 个 bug 修复无回归。
 
 ✅ 独立工作线落地：commit `6fe2b4c`（16 files, 662+/176-），本地未 push。工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪。
+
+## 「按蓝图补齐」轮次验收（2026-11-10）
+- `tests/test_blueprint_completion.py -q` -> **12 passed**（P1/P3/P4 字面条目契约）。
+- 扩展 scoped（15 文件：blueprint_completion + kb_ingest_p2/expanded + kb_enrich_worker_p2 + utility_rerank_p3 + capture_resolve_engine + capture_quality_workline/contract + session/session_sweep + cluster + e2e + ops + reflect + config）-> **125 passed in 136.32s (exit 0)**。
+- `py_compile` 全部改动文件 -> OK。
+- 全量回归结果见本报告后续追加（后台任务）。
+
+### 「按蓝图补齐」轮次全量回归（最终结果）
+`pytest tests/ -q --ignore=smoke_test --ignore=stress_test --ignore=benchmark --ignore=quality_test --disable-warnings --tb=line`
+-> **610 passed, 2 skipped, 192 warnings in 807.01s (exit 0)**。
+对照上轮 598 passed：+12 = `tests/test_blueprint_completion.py` 12 测试；0 failed / 0 errors。确认 P1/P3/P4 全部补齐项无回归。
+
+✅「按蓝图补齐」轮次落地：commit `3ee3372`（21 files, 1452+/41-），本地未 push。工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪。

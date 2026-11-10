@@ -704,12 +704,27 @@ def record_interaction(
     agent_name: str = "",
     owner: str = "",
     session_id: str = "",
+    # ADR 0028 P3: richer feedback signals (all optional, additive).
+    task_id: str = "",
+    accepted: bool = False,
+    rejected: bool = False,
+    corrected: bool = False,
+    ignored: bool = False,
+    slot_key: str = "",
+    source_pipeline: str = "",
+    scope: str = "",
 ) -> bool:
     """Persist a search interaction (click / dwell / impression / copy / skip).
 
     Best-effort: returns ``False`` instead of raising when the table is
     missing or the payload is invalid, so the read path can never be broken
     by telemetry.  ``memory_id`` may be ``None`` for query-only impressions.
+
+    ADR 0028 P3 adds optional feedback signals (task_id / accepted / rejected
+    / corrected / ignored) and ledger dimensions (slot_key / source_pipeline /
+    scope). All default to empty/false so existing callers are unaffected. On
+    an old DB lacking the new columns the INSERT falls back to the legacy
+    column list (non-fatal).
     """
     if action not in ("click", "dwell", "impression", "copy", "skip"):
         logger.debug("enhancements: ignoring unknown interaction action %r", action)
@@ -719,22 +734,35 @@ def record_interaction(
     try:
         from datetime import datetime, timezone
 
-        conn.execute(
-            "INSERT INTO search_interactions "
-            "(query, memory_id, action, dwell_ms, rank_position, agent_name, owner, session_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                (query or "")[:2000],
-                memory_id,
-                action,
-                max(0, int(dwell_ms or 0)),
-                rank_position,
-                (agent_name or "")[:200],
-                (owner or "")[:200],
-                (session_id or "")[:200],
-                datetime.now(timezone.utc).isoformat(),
-            ),
+        now = datetime.now(timezone.utc).isoformat()
+        base = (
+            (query or "")[:2000], memory_id, action,
+            max(0, int(dwell_ms or 0)), rank_position,
+            (agent_name or "")[:200], (owner or "")[:200],
+            (session_id or "")[:200], now,
         )
+        try:
+            conn.execute(
+                "INSERT INTO search_interactions "
+                "(query, memory_id, action, dwell_ms, rank_position, agent_name, owner, session_id, created_at, "
+                " task_id, accepted, rejected, corrected, ignored, slot_key, source_pipeline, scope) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                base + (
+                    (task_id or "")[:200],
+                    int(bool(accepted)), int(bool(rejected)),
+                    int(bool(corrected)), int(bool(ignored)),
+                    (slot_key or "")[:200], (source_pipeline or "")[:200],
+                    (scope or "")[:200],
+                ),
+            )
+        except Exception:
+            # Legacy DB without the P3 columns: retry with the original shape.
+            conn.execute(
+                "INSERT INTO search_interactions "
+                "(query, memory_id, action, dwell_ms, rank_position, agent_name, owner, session_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                base,
+            )
         conn.commit()
         return True
     except Exception:
@@ -787,6 +815,119 @@ def aggregate_interaction_utility(conn, agent_name: str = "", days: int = 30, li
         logger.debug("enhancements: aggregate_interaction_utility failed", exc_info=True)
         return {"ok": False, "error": str(e)[:200], "agent_name": agent_name, "by_memory": []}
 
+
+def aggregate_utility_ledger(conn, agent_name: str = "", days: int = 30,
+                             limit: int = 500, dims: Optional[List[str]] = None) -> Dict[str, Any]:
+    """ADR 0028 P3: persistent utility ledger aggregated by dimension.
+
+    Groups ``search_interactions`` by ``slot_key`` / ``source_pipeline`` /
+    ``scope`` (and optionally ``task_id``), counting the feedback signals
+    (accepted / rejected / corrected / ignored) plus interaction actions, and
+    computes a conservative ``utility_score``. Read-only; nothing here changes
+    ranking by itself — consumers (resolve policy / rerank) must opt in.
+
+    On a legacy DB without the P3 columns it degrades to a per-memory
+    aggregation keyed by ``memory_id`` (ok=True, dims available reflect that).
+    """
+    if conn is None:
+        return {"ok": False, "error": "no_connection", "by_dimension": []}
+    dims = dims or ["slot_key", "source_pipeline", "scope"]
+    allowed = {"slot_key", "source_pipeline", "scope", "task_id"}
+    dims = [d for d in dims if d in allowed]
+    if not dims:
+        dims = ["slot_key"]
+    try:
+        agent_name = (agent_name or "")[:200]
+        days = max(1, min(int(days or 30), 365))
+        limit = max(1, min(int(limit or 500), 5000))
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(search_interactions)").fetchall()}
+        has_feedback = {"accepted", "rejected", "corrected", "ignored"}.issubset(cols)
+        dim_cols = [d for d in dims if d in cols]
+
+        if not dim_cols:
+            # Legacy fallback: aggregate by memory_id only.
+            return _legacy_utility_ledger(conn, agent_name, days, limit)
+
+        sel = ", ".join(dim_cols)
+        fb = ""
+        if has_feedback:
+            fb = """,
+                       SUM(CASE WHEN action='click' THEN 1 ELSE 0 END) AS clicks,
+                       SUM(CASE WHEN action='copy' THEN 1 ELSE 0 END) AS copies,
+                       SUM(CASE WHEN action='dwell' THEN 1 ELSE 0 END) AS dwells,
+                       SUM(CASE WHEN action='skip' THEN 1 ELSE 0 END) AS skips,
+                       SUM(CASE WHEN action='impression' THEN 1 ELSE 0 END) AS impressions,
+                       COALESCE(SUM(accepted),0) AS accepted,
+                       COALESCE(SUM(rejected),0) AS rejected,
+                       COALESCE(SUM(corrected),0) AS corrected,
+                       COALESCE(SUM(ignored),0) AS ignored"""
+        rows = conn.execute(
+            f"""SELECT {sel}, COUNT(*) AS interactions{fb}
+                  FROM search_interactions
+                 WHERE (? = '' OR agent_name = ?)
+                   AND created_at >= datetime('now', ?)
+                 GROUP BY {sel}
+                 ORDER BY interactions DESC
+                 LIMIT ?""",
+            (agent_name, agent_name, f"-{days} days", limit),
+        ).fetchall()
+        out = []
+        for r in rows:
+            keys = r.keys() if hasattr(r, "keys") else []
+            d = {k: r[k] for k in keys} if keys else {}
+            if not keys:
+                d = {c: r[i] for i, c in enumerate(dim_cols)}
+                d["interactions"] = r[len(dim_cols)]
+            a = int(d.get("accepted", 0) or 0)
+            rj = int(d.get("rejected", 0) or 0)
+            co = int(d.get("corrected", 0) or 0)
+            ig = int(d.get("ignored", 0) or 0)
+            cl = int(d.get("clicks", 0) or 0)
+            cp = int(d.get("copies", 0) or 0)
+            dw = int(d.get("dwells", 0) or 0)
+            sk = int(d.get("skips", 0) or 0)
+            # Conservative: positive adoption signals add, negative subtract.
+            d["utility_score"] = (a * 5 + co * 3 + cl * 3 + cp * 4 + dw
+                                  - rj * 5 - ig * 1 - sk * 2)
+            d["feedback"] = {"accepted": a, "rejected": rj, "corrected": co, "ignored": ig}
+            out.append(d)
+        return {
+            "ok": True, "agent_name": agent_name, "days": days,
+            "dims": dim_cols, "by_dimension": out, "count": len(out),
+            "utility_score_formula": "accepted*5+corrected*3+clicks*3+copies*4+dwells-rejected*5-ignored-skips*2",
+        }
+    except Exception as e:
+        logger.debug("enhancements: aggregate_utility_ledger failed", exc_info=True)
+        return {"ok": False, "error": str(e)[:200], "by_dimension": []}
+
+
+def _legacy_utility_ledger(conn, agent_name, days, limit):
+    """Fallback when the P3 interaction columns are absent (old DB)."""
+    try:
+        rows = conn.execute(
+            """SELECT memory_id,
+                      SUM(CASE WHEN action='click' THEN 1 ELSE 0 END) AS clicks,
+                      SUM(CASE WHEN action='copy' THEN 1 ELSE 0 END) AS copies,
+                      SUM(CASE WHEN action='skip' THEN 1 ELSE 0 END) AS skips,
+                      COUNT(*) AS interactions
+                 FROM search_interactions
+                WHERE memory_id IS NOT NULL AND (? = '' OR agent_name = ?)
+                  AND created_at >= datetime('now', ?)
+                GROUP BY memory_id ORDER BY interactions DESC LIMIT ?""",
+            (agent_name, agent_name, f"-{days} days", limit),
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(zip(("memory_id", "clicks", "copies", "skips", "interactions"), tuple(r)))
+            d["utility_score"] = int(d["clicks"]) * 3 + int(d["copies"]) * 4 - int(d["skips"]) * 2
+            out.append(d)
+        return {"ok": True, "agent_name": agent_name, "days": days,
+                "dims": ["memory_id"], "by_dimension": out, "count": len(out),
+                "legacy": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200], "by_dimension": []}
+
+
 # ── Orchestration ────────────────────────────────────────────────────
 
 
@@ -838,6 +979,27 @@ def _apply_utility_rerank(
     return results
 
 
+def build_continuity_enhancement(agent_name: str = "", project: str = "",
+                                 limit: int = 8, include_conflicts: bool = False) -> Dict[str, Any]:
+    """ADR 0028 P1: assemble a validity-aware continuity pack for the search path.
+
+    Read-only; delegates to ``session.build_continuity_pack`` (the single
+    authority for KB exclusion / temporal validity). Best-effort: any failure
+    returns an explicit ``ok=False`` shape, never raises into retrieval.
+    """
+    try:
+        from memall.pipeline.session import build_continuity_pack
+        pack = build_continuity_pack(
+            agent_name=agent_name, viewer=agent_name, project=project,
+            limit=max(1, min(int(limit or 8), 100)),
+            include_conflicts=bool(include_conflicts),
+        )
+        return {"ok": True, "continuity_pack": pack}
+    except Exception as e:
+        logger.debug("enhancements: continuity pack assembly failed: %s", e)
+        return {"ok": False, "error": str(e)[:200], "continuity_pack": None}
+
+
 def apply_enhancements(
     results: List[Dict[str, Any]],
     query: str,
@@ -848,6 +1010,8 @@ def apply_enhancements(
     personalize: bool = False,
     context_boost: bool = False,
     utility_rerank: bool = False,
+    continuity: bool = False,
+    project: str = "",
 ) -> Dict[str, Any]:
     """Apply the enabled post-retrieval enhancements to *results*.
 
@@ -890,7 +1054,14 @@ def apply_enhancements(
         )
 
     # P3 conservative utility rerank (explicit flag + config gate; default off).
-    if utility_rerank and get_config("search.utility_rerank.enabled", False):
+    # ADR 0028 acceptance key: `quality.utility.tracking_enabled=True` must
+    # also make retrieve ordering utility-aware. OR it with the older
+    # `search.utility_rerank.enabled` switch so neither deployment breaks;
+    # both default False, so the feature stays off unless explicitly enabled.
+    _utility_on = bool(get_config("search.utility_rerank.enabled", False)) or bool(
+        get_config("quality.utility.tracking_enabled", False)
+    )
+    if utility_rerank and _utility_on:
         out["results"] = _apply_utility_rerank(
             out["results"],
             conn,
@@ -916,6 +1087,16 @@ def apply_enhancements(
             r["highlights"] = highlight_matches(r.get("content") or "", query)
         out["explained"] = True
 
+    # ADR 0028 P1: opt-in continuity pack auto-assembly (default off).
+    # Additive payload field; never mutates result ordering or drops items.
+    if continuity and get_config("search.continuity.enabled", False):
+        ce = build_continuity_enhancement(
+            agent_name=agent_name, project=project,
+            limit=int(get_config("search.continuity.limit", 8) or 8),
+            include_conflicts=bool(get_config("search.continuity.include_conflicts", False)),
+        )
+        out["continuity"] = ce
+
     return out
 
 
@@ -932,5 +1113,8 @@ __all__ = [
     "apply_context_boost",
     "record_interaction",
     "apply_enhancements",
+    "build_continuity_enhancement",
+    "aggregate_interaction_utility",
+    "aggregate_utility_ledger",
     "load_synonyms",
 ]

@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Tuple
 from pydantic import BaseModel, ValidationError
 
 from memall.mcp.models import (
-    KBIngestInput, KBEnrichActionInput,
+    KBIngestInput, KBEnrichActionInput, MaintenanceInput,
     AdaptiveInput, AskInput, BatchCaptureInput, BatchSearchInput, CaptureInput, ConnectInput, DBInput,
     DigestInput, DiscussionAmendInput, DiscussionCreateInput, DiscussionRespondInput,
     DiscussionStatusInput, DistillListInput, DistillSummarizeInput,
@@ -140,6 +140,7 @@ _ACTION_MODELS: dict[tuple[str, str], type[BaseModel]] = {
     ("memall_system", "kb_enrich_stats"): KBEnrichActionInput,
     ("memall_system", "kb_reprocess"): KBEnrichActionInput,
     ("memall_system", "kb_enrich_stop"): KBEnrichActionInput,
+    ("memall_system", "maintenance"): MaintenanceInput,
     # digest/hot take no parameters — validate empty payloads only
     ("memall_system", "digest"): DigestInput,
     ("memall_system", "每日摘要"): DigestInput,

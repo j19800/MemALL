@@ -14,13 +14,15 @@
 | [p2-kb-boundary-hardening.md](p2-kb-boundary-hardening.md) | P2：`kb_policy` 权威、KB 边界硬化、异步 enrich 骨架 |
 | [p2-4-worker-deployment.md](p2-4-worker-deployment.md) | P2-4 durable worker 部署/启停/观测/多进程语义（autostart 默认 off） |
 | [p3-utility-rerank-rollout.md](p3-utility-rerank-rollout.md) | P3 冷启动回退、跨 agent 隔离、度量基线/灰度/kill-switch（默认 off 不改） |
-| [p4-deferred-design.md](p4-deferred-design.md) | P4 延迟项的设计前置（canonicalization/conflict review/归档/审计等，仅登记） |
+| [p4-deferred-design.md](p4-deferred-design.md) | P4 设计前置（历史：P4 曾 deferred；**本轮已实现**，见下对照表与 maintenance 模块） |
+| [blueprint-completion-matrix.md](blueprint-completion-matrix.md) | **ADR 0028 §2 逐条字面完成度对照表**（P0–P4 全条目 + 已知偏差登记） |
 | [COMMIT_CHECKLIST.md](COMMIT_CHECKLIST.md) | 提交范围、验收命令、排除项、阶段确认 |
 | [TECH_DEBT_LEDGER.md](TECH_DEBT_LEDGER.md) | P2-4 真异步队列、P2-3 收敛、P1 边界测试、P3 保守闭环债务 |
-| [PRECOMMIT_SCOPED_REPORT_2026-11-10.md](PRECOMMIT_SCOPED_REPORT_2026-11-10.md) | 各轮 scoped regression 实际结果（最新 70 passed） |
+| [PRECOMMIT_SCOPED_REPORT_2026-11-10.md](PRECOMMIT_SCOPED_REPORT_2026-11-10.md) | 各轮 scoped regression 实际结果（最新见文末「按蓝图补齐」轮次） |
 | [CHANGELOG_TRACKING.md](CHANGELOG_TRACKING.md) | 每轮改动逐条可追溯记录 |
-| `tests/test_utility_rerank_p3.py`（代码） | P3 默认关闭效用重排 E2E 传播契约（6 passed） |
-| `tests/test_kb_enrich_worker_p2.py`（代码） | P2-4 durable worker/CAS 契约（16 passed） |
+| `tests/test_blueprint_completion.py`（代码） | 蓝图补齐契约（P1/P3/P4，12 passed） |
+| `tests/test_utility_rerank_p3.py`（代码） | P3 默认关闭效用重排 E2E 传播契约（10 passed） |
+| `tests/test_kb_enrich_worker_p2.py`（代码） | P2-4 durable worker/CAS 契约（20 passed） |
 
 ## 关联
 - 主计划：[ADR/0028-memory-cognitive-loop-implementation-plan.md](../../ADR/0028-memory-cognitive-loop-implementation-plan.md)

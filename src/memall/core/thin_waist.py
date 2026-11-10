@@ -1122,6 +1122,28 @@ def _capture_inject_metadata(
             existing_meta["source"] = "capture_api"
         data.metadata = existing_meta
 
+    # ADR 0028 P1: opt-in conversation.session_end provenance injection.
+    # Callers set metadata.session_end_context=True plus the session fields;
+    # capture() then normalises them into a stable, explicitly-labelled shape.
+    try:
+        if isinstance(data.metadata, dict) and data.metadata.get("session_end_context"):
+            if get_config("session.conversation_session_end_inject", False):
+                # Explicit overwrite: the Day1 readability block earlier in
+                # capture() already set a default source_pipeline; when the
+                # caller opts in to conversation.session_end provenance it
+                # must win (setdefault would silently keep the default).
+                data.metadata["source_pipeline"] = "conversation.session_end"
+                for k in ("session_id", "thread_id", "project", "agent_name"):
+                    v = data.metadata.get(k)
+                    if v in (None, ""):
+                        v = getattr(data, k, "") or ""
+                    data.metadata[k] = v
+                data.metadata["conversation_session_end"] = True
+            # marker is internal only; never persisted as a public field
+            data.metadata.pop("session_end_context", None)
+    except Exception as e:
+        logger.debug("capture: session_end provenance inject skipped: %s", e)
+
     # Record which classification fields the caller set deliberately so the
     # rule-based classifiers (event_processor._inline_classify on every
     # new-memory event, and classify_step on batch runs) never rewrite them.
@@ -1392,9 +1414,70 @@ def _find_active_slot_memory(conn, slot_key: str, agent_name: str, exclude_hash:
         return r
     return None
 
+def _utility_resolve_policy(conn, slot_key: str) -> dict:
+    """ADR 0028 P3: read-only utility-driven resolve adjustment.
+
+    Looks up the slot's utility ledger and returns an *adjustment* dict:
+      - ``enabled``: whether both config gates are on
+      - ``utility_score``: aggregated score for the slot (0 if no data)
+      - ``merge_threshold`` / ``update_threshold``: similarity thresholds
+      - ``force_review``: low-utility/high-conflict slots get REVIEW
+      - ``_meta``: audit record (what was applied and why)
+
+    Never mutates history; the caller records the adjustment in the new
+    memory's ``resolve._meta.utility_policy`` so every automatic decision is
+    auditable and can be rolled back by disabling the config gates.
+    """
+    off = {"enabled": False, "utility_score": 0, "merge_threshold": 0.88,
+           "update_threshold": 0.55, "force_review": False, "_meta": {"applied": False}}
+    try:
+        if not get_config("quality.utility.tracking_enabled", False):
+            return off
+        if not get_config("quality.utility.resolve_enabled", False):
+            return off
+        if not slot_key:
+            return off
+        from memall.search.enhancements import aggregate_utility_ledger
+        led = aggregate_utility_ledger(
+            conn, agent_name="", dims=["slot_key"],
+            days=int(get_config("quality.utility.window_days", 30) or 30), limit=500,
+        )
+        score = 0
+        if led.get("ok"):
+            for row in led.get("by_dimension") or []:
+                if row.get("slot_key") == slot_key:
+                    score = int(row.get("utility_score", 0) or 0)
+                    break
+        factor = float(get_config("quality.utility.slot_weight_factor", 0.15) or 0.15)
+        factor = max(0.0, min(factor, 0.5))
+        # Positive utility -> relax thresholds (more auto-merge). Negative ->
+        # tighten (more conservative), and force REVIEW if configured.
+        adj = factor * (1 if score >= 0 else -1) * min(abs(score), 20) / 20.0
+        merge = max(0.60, min(0.95, 0.88 - adj))
+        update = max(0.30, min(0.80, 0.55 - adj * 0.5))
+        force_review = bool(score < 0 and get_config("quality.utility.low_utility_review", True))
+        relax = bool(score > 0 and get_config("quality.utility.high_utility_relax", True))
+        return {
+            "enabled": True, "utility_score": score,
+            "merge_threshold": round(merge, 4), "update_threshold": round(update, 4),
+            "force_review": force_review, "high_utility_relax": relax,
+            "_meta": {
+                "applied": True, "slot_key": slot_key, "utility_score": score,
+                "slot_weight_factor": factor, "merge_threshold": round(merge, 4),
+                "update_threshold": round(update, 4),
+                "force_review": force_review, "high_utility_relax": relax,
+                "engine": "utility_policy_v1",
+            },
+        }
+    except Exception as e:
+        logger.debug("capture: utility resolve policy skipped: %s", e)
+        return off
+
+
 def _resolve_decision(conn, data: MemoryInput, h: str, now: str) -> dict:
     """Rules-first resolver. Returns decision metadata; does not mutate history destructively."""
     slot_key = _resolve_slot_key(data)
+    policy = _utility_resolve_policy(conn, slot_key or "")
     result = {
         "decision": "NOOP",
         "slot_key": slot_key,
@@ -1423,16 +1506,27 @@ def _resolve_decision(conn, data: MemoryInput, h: str, now: str) -> dict:
     except Exception:
         sim = 0.0
     contradict = any(k in new for k in ["不再", "废弃", "改为", "替换为", "instead", "deprecated", "replaced", "不使用"]) and any(k in old for k in ["使用", "采用", "配置", "是", "为"])
+    merge_t = policy.get("merge_threshold", 0.88)
+    update_t = policy.get("update_threshold", 0.55)
     if contradict:
         decision = "SUPERSEDE" if sim < 0.92 else "UPDATE"
-    elif sim >= 0.88:
+    elif sim >= merge_t:
         decision = "MERGE"
-    elif sim >= 0.55:
+    elif sim >= update_t:
         decision = "UPDATE"
     else:
         # same slot, different meaning: could be conflict; default REVIEW to be safe/non-destructive
         decision = "CONFLICT" if slot_key.startswith("slot:config:") else "REVIEW"
-    result.update({"decision": decision, "reason": f"slot_match sim={sim:.2f}", "target_id": existing["id"], "similarity": round(sim, 3)})
+    # ADR 0028 P3: low-utility/high-conflict slots are forced to REVIEW
+    # (non-destructive; never auto-supersedes on weak evidence).
+    if policy.get("enabled") and policy.get("force_review") and decision in ("MERGE", "UPDATE", "SUPERSEDE"):
+        decision = "REVIEW"
+    reason = f"slot_match sim={sim:.2f}"
+    if policy.get("enabled"):
+        reason += f" utility={policy.get('utility_score')} merge_t={merge_t} update_t={update_t}"
+    result.update({"decision": decision, "reason": reason,
+                   "target_id": existing["id"], "similarity": round(sim, 3),
+                   "utility_policy": policy.get("_meta", {})})
     return result
 
 def _apply_resolve_metadata(data: MemoryInput, resolution: dict, now: str) -> MemoryInput:
@@ -1446,7 +1540,11 @@ def _apply_resolve_metadata(data: MemoryInput, resolution: dict, now: str) -> Me
         "version": resolution.get("version", 1),
         "valid_from": resolution.get("valid_from", now),
         "invalid_at": resolution.get("invalid_at"),
-        "_meta": {"engine": "rules_phase2", "version": 1},
+        "_meta": {
+            "engine": "rules_phase2", "version": 1,
+            # ADR 0028 P3: audit the utility-driven adjustment (if any).
+            "utility_policy": resolution.get("utility_policy") or {"applied": False},
+        },
     }
     if resolution.get("slot_key"):
         meta["slot_key"] = resolution["slot_key"]
@@ -2381,8 +2479,10 @@ def unified_search(arguments: dict) -> str:
     personalize = bool(arguments.get("personalize", False))
     context_boost = bool(arguments.get("context_boost", False))
     utility_rerank = bool(arguments.get("utility_rerank", False))
+    continuity = bool(arguments.get("continuity", False))
+    project = arguments.get("project", "") or ""
     wants_enhancements = any(
-        (facet_fields, expand_query, suggest, explain, cluster, personalize, context_boost, utility_rerank)
+        (facet_fields, expand_query, suggest, explain, cluster, personalize, context_boost, utility_rerank, continuity)
     )
 
     if mode == "auto":
@@ -2410,10 +2510,11 @@ def unified_search(arguments: dict) -> str:
             personalize=personalize,
             context_boost=context_boost,
             utility_rerank=utility_rerank,
+            continuity=continuity,
+            project=project,
             owner=arguments.get("owner"),
             agent_name_filter=arguments.get("agent_name_filter"),
             category=arguments.get("category"),
-            project=arguments.get("project"),
             level=arguments.get("level"),
             source_pipeline=arguments.get("source_pipeline"),
             occurred_at=arguments.get("occurred_at"),
@@ -2447,7 +2548,7 @@ def unified_search(arguments: dict) -> str:
             "results": items,
             "total": result.get("total", len(items)),
         }
-        for key in ("facets", "suggestions", "clusters", "explanations", "expanded_query", "utility_rerank_signals"):
+        for key in ("facets", "suggestions", "clusters", "explanations", "expanded_query", "utility_rerank_signals", "continuity"):
             if key in result:
                 payload[key] = result[key]
         return json.dumps(payload, ensure_ascii=False)
@@ -2548,7 +2649,7 @@ def unified_search(arguments: dict) -> str:
                 result, arguments,
                 expand_query=expand_query, suggest=suggest, explain=explain,
                 cluster=cluster, personalize=personalize, context_boost=context_boost,
-                utility_rerank=utility_rerank,
+                utility_rerank=utility_rerank, continuity=continuity, project=project,
             )
         if isinstance(result, dict) and isinstance(result.get("results"), list):
             result["results"] = _seen_postprocess(result["results"], arguments, top_k=top_k)
@@ -2579,7 +2680,7 @@ def unified_search(arguments: dict) -> str:
             result, arguments,
             expand_query=expand_query, suggest=suggest, explain=explain,
             cluster=cluster, personalize=personalize, context_boost=context_boost,
-            utility_rerank=utility_rerank,
+            utility_rerank=utility_rerank, continuity=continuity, project=project,
         )
     if isinstance(result, dict) and isinstance(result.get("results"), list):
         result["results"] = _seen_postprocess(result["results"], arguments, top_k=top_k)
@@ -2717,10 +2818,14 @@ def _apply_enhancements_inplace(result: dict, arguments: dict, **flags) -> None:
             personalize=flags.get("personalize", False),
             context_boost=flags.get("context_boost", False),
             utility_rerank=flags.get("utility_rerank", False),
+            continuity=flags.get("continuity", False),
+            project=flags.get("project", "") or "",
         )
     result["results"] = enhanced.get("results") or results
     if enhanced.get("clusters"):
         result["clusters"] = enhanced["clusters"]
+    if enhanced.get("continuity") is not None:
+        result["continuity"] = enhanced["continuity"]
     if enhanced.get("explained"):
         result["explained"] = True
     if flags.get("expand_query") and get_config("search.query_expansion.enabled", False):
@@ -3081,6 +3186,8 @@ def enhanced_search(
     personalize: bool = False,
     context_boost: bool = False,
     utility_rerank: bool = False,
+    continuity: bool = False,
+    project: str = "",
     agent_name_filter: Optional[str] = None,
     **filters,
 ) -> dict:
@@ -3195,7 +3302,7 @@ def enhanced_search(
             out["suggestions"] = suggest_queries(conn, query, limit=10)
 
         # ── Post-retrieval enhancements (need dict-shaped results) ──
-        if explain or cluster or personalize or context_boost or utility_rerank:
+        if explain or cluster or personalize or context_boost or utility_rerank or continuity:
             # Carry the retrieval rank into the dicts: retrieve() already
             # ordered by bm25, so position i *is* the relevance signal.
             # Without a score the enhancements were inert on this path —
@@ -3232,8 +3339,12 @@ def enhanced_search(
                 personalize=personalize,
                 context_boost=context_boost,
                 utility_rerank=utility_rerank,
+                continuity=continuity,
+                project=project,
             )
             out["clusters"] = enhanced.get("clusters") or []
+            if enhanced.get("continuity") is not None:
+                out["continuity"] = enhanced["continuity"]
             out["explained"] = bool(enhanced.get("explained"))
             # Re-order the Memory objects to match the enhanced ordering.
             order = [d.get("memory_id") for d in enhanced.get("results") or []]

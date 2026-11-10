@@ -1,7 +1,7 @@
 # P4 延迟项 — 设计前置（仅登记，不实现）
 
-> **文档状态**：现行（2026-11-10）。ADR 0028 P4 保持 **deferred**：本轮只记录设计前置与依赖，不展开实现。
-> 关联：[ADR/0028-memory-cognitive-loop-implementation-plan.md](../../ADR/0028-memory-cognitive-loop-implementation-plan.md)（P4 段）、[TECH_DEBT_LEDGER.md](TECH_DEBT_LEDGER.md)。
+> **文档状态**：**部分过时（历史设计前置）** — 2026-11-10「按蓝图补齐」轮次已把 P4 以 opt-in / 非破坏性方式**实现**（`src/memall/pipeline/maintenance.py` + `memall_system action=maintenance` + `mode=audit` + `ADR/archived_sessions/` + 审计/回滚）。本文保留作为设计推演记录，但「deferred / 仅登记」不再是事实。
+> 现行对照见 [blueprint-completion-matrix.md](blueprint-completion-matrix.md)；关联：[ADR/0028-...](../../ADR/0028-memory-cognitive-loop-implementation-plan.md)、[TECH_DEBT_LEDGER.md](TECH_DEBT_LEDGER.md)。
 
 ## 准入条件（P4 启动前必须全部满足）
 

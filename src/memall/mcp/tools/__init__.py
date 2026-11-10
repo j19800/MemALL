@@ -178,11 +178,19 @@ registry.register(ToolDef(
         "interaction_type": {"type": "string", "enum": ["click", "dwell", "impression", "copy", "skip"], "description": "Kind of search interaction (record_interaction)"},
         "dwell_ms": {"type": "integer", "description": "Dwell time in ms (record_interaction, interaction_type=dwell)"},
         "rank_position": {"type": "integer", "description": "1-based rank of the clicked result (record_interaction)"},
+        # ADR 0028 P3: feedback signals + ledger dimensions (additive).
+        "accepted": {"type": "boolean", "description": "P3 feedback: user accepted this memory"},
+        "rejected": {"type": "boolean", "description": "P3 feedback: user rejected this memory"},
+        "corrected": {"type": "boolean", "description": "P3 feedback: user corrected this memory"},
+        "ignored": {"type": "boolean", "description": "P3 feedback: user ignored this memory"},
+        "slot_key": {"type": "string", "description": "P3 utility ledger dimension: slot_key"},
+        "source_pipeline": {"type": "string", "description": "P3 utility ledger dimension: source_pipeline"},
+        "scope": {"type": "string", "description": "P3 utility ledger dimension: scope"},
         # task_claim / task_resolve / task_block — the card's memory id and
         # the resolve/block payload.  Undeclared fields are stripped by the
         # validator before the handler sees them (the F3 class of defect), so
         # they must be on the schema or task_id would silently vanish.
-        "task_id": {"type": "integer", "description": "L5 task card id (task_claim/task_resolve/task_block)"},
+        "task_id": {"oneOf": [{"type": "integer"}, {"type": "string"}], "description": "L5 task card id (task_claim/task_resolve/task_block) or P3 feedback task ref (record_interaction)"},
         "result": {"type": "string", "description": "Closure evidence stored on resolve (task_resolve)"},
         "reason": {"type": "string", "description": "Why the card is blocked, needs a human (task_block)"},
         "doc_id": {"type": "string", "description": "kb_ingest: stable document id/path/url"},
@@ -255,7 +263,7 @@ registry.register(ToolDef(
         "action": {"type": "string", "enum": ["retrieve", "search", "unified_search", "chat", "nl_search", "自然语言搜索", "vector_search", "hybrid_search", "batch_search", "trace", "traverse", "timeline", "fed_query", "fed_conflicts", "recap", "continuity_pack", "task_list", "goal_status"]},
         "query": {"type": "string", "description": "Search query"},
         "queries": {"type": "array", "items": {"type": "string"}, "description": "Queries for batch_search"},
-        "mode": {"type": "string", "enum": ["auto", "direct", "fts5", "vector", "hybrid"]},
+        "mode": {"type": "string", "enum": ["auto", "direct", "fts5", "vector", "hybrid", "audit"]},
         "top_k": {"type": "integer"},
         "rrf_k": {"type": "integer"},
         "category": {"type": "string"},
@@ -284,6 +292,8 @@ registry.register(ToolDef(
         "cluster": {"type": "boolean", "description": "Group results into topic clusters"},
         "personalize": {"type": "boolean", "description": "Rank results by per-agent interaction affinity"},
         "context_boost": {"type": "boolean", "description": "Boost results matching the active project / category"},
+        "utility_rerank": {"type": "boolean", "description": "ADR0028 P3: conservative interaction-utility rerank (default off, config-gated)"},
+        "continuity": {"type": "boolean", "description": "ADR0028 P1: attach validity-aware continuity pack (default off, config-gated)"},
         "session_id": {"type": "string", "description": "Enable per-session novelty demotion for repeat queries"},
     }, "required": ["action"]},
     handler=_handle_read,
@@ -439,6 +449,32 @@ def _handle_system(args: dict) -> str:
     action = args.pop("action", "")
     if action == "run_pipeline":
         return pipeline.handle(args)
+    elif action == "maintenance":
+        # ADR 0028 P4: long-term governance maintenance (opt-in, non-destructive).
+        from memall.pipeline import maintenance as _maint
+        sub = args.pop("maintenance_sub_action", None) or args.pop("sub_action", "status")
+        try:
+            if sub == "run":
+                out = _maint.run_maintenance(
+                    actions=args.get("actions"),
+                    dry_run=bool(args.get("dry_run", False)),
+                    max_actions=args.get("max_actions"),
+                )
+            elif sub == "audit":
+                out = _maint.read_audit(limit=int(args.get("limit", 50) or 50))
+            elif sub == "archive":
+                out = _maint.archive_session(
+                    args.get("session_id", "") or "",
+                    payload=args.get("payload") or {},
+                    agent_name=args.get("agent_name", "") or "",
+                )
+            elif sub == "rollback":
+                out = _maint.rollback_from_audit(args.get("entry") or {})
+            else:  # status (default)
+                out = _maint.maintenance_status()
+        except Exception as e:
+            out = {"ok": False, "error": str(e)[:200]}
+        return json.dumps(out, ensure_ascii=False)
     elif action == "distill":
         sub = args.pop("distill_sub_action", None) or args.pop("sub_action", "list")
         args["action"] = sub
@@ -610,7 +646,7 @@ registry.register(ToolDef(
     name="memall_system",
     description="Pipeline, sessions, gateway, hub sync, DB maintenance, security, adaptive, onboarding, reflection, index rebuild, daily digest, hot topics, KB enrich worker. Actions: run_pipeline | distill | gateway | hub_connect | hub_sync | session_start | session_end | session_summary | db | security | adaptive | onboarding | reflect | index_rebuild | digest (每日摘要/日报/总结) | hot (热门/热点/热榜) | kb_enrich_stats | kb_reprocess | kb_enrich_stop",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["run_pipeline", "distill", "gateway", "hub_connect", "hub_sync", "session_start", "session_end", "session_summary", "db", "security", "adaptive", "onboarding", "reflect", "index_rebuild", "digest", "每日摘要", "日报", "总结", "hot", "热门", "热点", "热榜", "kb_enrich_stats", "kb_reprocess", "kb_enrich_stop"]},
+        "action": {"type": "string", "enum": ["run_pipeline", "distill", "gateway", "hub_connect", "hub_sync", "session_start", "session_end", "session_summary", "db", "security", "adaptive", "onboarding", "reflect", "index_rebuild", "digest", "每日摘要", "日报", "总结", "hot", "热门", "热点", "热榜", "kb_enrich_stats", "kb_reprocess", "kb_enrich_stop", "maintenance"]},
         # Per-action sub-action vocabularies.  Each action accepts ONLY its own
         # field — a single shared ``sub_action`` enum used to mix seven
         # vocabularies, so almost every declared value was invalid for almost

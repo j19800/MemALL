@@ -841,13 +841,29 @@ def session_end(session_id: str, auto_extract: bool = False) -> dict:
                 if lines:
                     summary += "\n" + "\n".join(lines)
                 try:
+                    _cont_meta = {
+                        "source": "session_end",
+                        "session_id": session_id or "",
+                        "thread_id": "",
+                        "project": "",
+                        "agent_name": agent_name or "",
+                        "continuity_pack": True,
+                        "ingest_mode": "continuity_extract",
+                        "source_pipeline": "session.end",
+                        "quality_gate": "bypass",
+                        # ADR 0028 P1: opt-in blueprint provenance. When
+                        # session.conversation_session_end_inject is enabled,
+                        # capture() rewrites source_pipeline to
+                        # conversation.session_end and fills session fields.
+                        "session_end_context": True,
+                    }
                     capture(MemoryInput(
                         content=summary[:2000],
                         category="continuity",
                         level="L4",
                         agent_name=agent_name or "",
                         subject=f"continuity:{agent_name or 'agent'}:{(session_id or '')[:8]}",
-                        metadata='{"source":"session_end","session_id":"' + (session_id or '') + '","continuity_pack":true,"ingest_mode":"continuity_extract","source_pipeline":"session.end","quality_gate":"bypass"}',
+                        metadata=json.dumps(_cont_meta, ensure_ascii=False),
                     ))
                     result["continuity_captured"] = True
                 except Exception as _ice:

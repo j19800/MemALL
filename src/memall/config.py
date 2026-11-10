@@ -115,6 +115,14 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
             "window_days": 30,
             "min_interactions": 2,
         },
+        # ADR 0028 P1: opt-in continuity pack auto-assembly on the search path.
+        # Default OFF; when enabled + continuity flag passed, enrich the result
+        # payload with a validity-aware continuity pack for the agent/project.
+        "continuity": {
+            "enabled": False,
+            "limit": 8,
+            "include_conflicts": False,
+        },
         # Per-session "already returned" tracking.  A repeat query within one
         # session gets the same top-k both times and teaches the agent nothing;
         # this surfaces novelty on the second call instead.
@@ -316,6 +324,22 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
             "max_pure_id_ratio": 0.6,
         },
         "observability": {"log_every_n": 50},
+        # ADR 0028 P3: utility feedback loop (default OFF / conservative).
+        # `tracking_enabled` is the master switch for the utility-driven
+        # resolve policy + ranking influence (blueprint acceptance key).
+        # `slot_weight_factor` scales how strongly slot utility adjusts the
+        # resolve similarity thresholds. `min_utility_for_auto_ingest` is a
+        # conservative floor for any future auto-ingest policy (not enforced
+        # yet — documented so deployments can plan).
+        "utility": {
+            "tracking_enabled": False,
+            "slot_weight_factor": 0.15,
+            "min_utility_for_auto_ingest": 3,
+            "resolve_enabled": False,
+            "low_utility_review": True,
+            "high_utility_relax": True,
+            "window_days": 30,
+        },
     },
     "session": {
         # Debt patrol 2026-11-08: improve_step / identity_step were wired into
@@ -324,6 +348,11 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         # every start, so it must be an explicit operator decision.
         "auto_improve": False,
         "auto_identity": False,
+        # ADR 0028 P1: at session_end, auto-inject session/thread/project/agent
+        # provenance (source_pipeline=conversation.session_end) into the
+        # continuity capture. Default OFF (preserves the existing session.end
+        # pipeline string); opt-in for the blueprint-literal behavior.
+        "conversation_session_end_inject": False,
     },
     "scheduler": {
         "forget_interval": 86400,
@@ -365,6 +394,24 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "summary": {"trigger_after": 10, "max_sources": 20},
         "entity": {"auto_extract": True, "extract_triples": False, "entity_boost": 1.5},
         "kg": {"auto_extract": True, "min_level": "L6", "max_triples": 20, "traverse_depth": 1},
+    },
+    # ADR 0028 P4: long-term governance maintenance (opt-in, non-destructive).
+    # Every pass is append-only / mark-only: no silent physical deletion of
+    # key evidence. Snapshots + audit log make each automatic action
+    # inspectable and reversible by disabling the gates.
+    "maintenance": {
+        "enabled": False,
+        "source_pipeline": "cognitive.loop.maintenance",
+        "archive_dir": "ADR/archived_sessions",
+        "audit_log": "ADR/archived_sessions/audit.jsonl",
+        "snapshot_before_write": True,
+        "canonicalize": False,
+        "conflict_review": False,
+        "expire": False,
+        "low_utility_archive": False,
+        "theme_profile": False,
+        "policy_adaptation": False,
+        "max_actions_per_run": 50,
     },
     "logging": {
         "level": "INFO",

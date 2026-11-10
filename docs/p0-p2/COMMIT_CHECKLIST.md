@@ -139,3 +139,16 @@ PYTHONPATH=.:src ./.venv/bin/python -m pytest \
 - 提交集 = 本轮 19 个 ADR0028 主线文件；9 个独立工作线文件 + `bak_phase1` + `test_capture_quality_contract.py` 保留在工作区未暂存。
 - 提交态自洽：`git write-tree` 导出 485 文件，关键模块/validator/MCP 链通过，排除项未混入。
 - 验收：定向 P1 3 / P2-4 20 / P3 10；scoped 81 passed；全量 592 passed/2 skipped/0 failed/0 errors。
+
+## 「按蓝图补齐」轮次（2026-11-10，本轮待提交）
+- 代码：`config.py`、`core/db.py`、`core/thin_waist.py`、`search/enhancements.py`、`pipeline/session.py`、`pipeline/maintenance.py`（新）、`mcp/models.py`、`mcp/validator.py`、`mcp/tools/__init__.py`、`mcp/tools/retrieve.py`。
+- 测试：`tests/test_blueprint_completion.py`（新）。
+- 文档：`ADR/0028-*`、`docs/p0-p2/{blueprint-completion-matrix.md(新),README.md,p4-deferred-design.md,CHANGELOG_TRACKING.md,TECH_DEBT_LEDGER.md,TRANSFORMATION_DOC.md,PRECOMMIT_SCOPED_REPORT_2026-11-10.md,COMMIT_CHECKLIST.md}`。
+- 验收：蓝图契约 12 passed；扩展 scoped 125 passed；全量见报告最新条目；py_compile OK。
+- 门禁：只暂存上述 ADR0028 主线文件；排除 `thin_waist.py.bak_phase1`（唯一未跟踪项）；本地 commit，不 push。
+
+## ✅「按蓝图补齐」轮次已落地提交（2026-11-10）
+- **commit `3ee3372`**（本地，未 push）：21 files, 1452+/41-。
+- 提交集 = 10 代码 + 1 新测试 + 10 文档/台账；`thin_waist.py.bak_phase1` 排除、仍为唯一未跟踪项。
+- 提交态自洽：`git write-tree` 导出 491 文件，导入/默认 off/validator/排除项全部验证通过。
+- 验收：12 / 125 / 610 passed（全量 0 failed），py_compile OK。

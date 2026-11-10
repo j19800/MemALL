@@ -126,3 +126,8 @@ PYTHONPATH=.:src ./.venv/bin/python -m pytest   tests/test_kb_ingest_p2.py tests
 - **P3**（默认 off 不改）：冷启动/低证据回退、跨 agent 隔离、权重钳制/永不丢项测试（+4，共 10 passed）；策略文档 `p3-utility-rerank-rollout.md`（度量基线/灰度/Kill-Switch）。
 - **P4**：设计前置文档 `p4-deferred-design.md`（8 项，仅登记不实现）。
 - **验收**：scoped 9 文件 **81 passed**；详见 `PRECOMMIT_SCOPED_REPORT_2026-11-10.md`。
+
+## 「按蓝图补齐」轮次（2026-11-10，本地未提交）
+- 逐条对照 ADR 0028 §2 字面改动表，把此前「等价替代 / 明确 deferred」的条目真正补齐：**P1** conversation.session_end 注入 + continuity 搜索开关；**P3** 反馈列/维度效用账簿/quality.utility.* 配置/效用驱动 resolve（可审计）/tracking_enabled 验收键；**P4** 从 deferred 改为 opt-in 非破坏性实现（maintenance 模块/audit/归档锚点/快照回滚/include_archived）。
+- 全部新增能力 default-off / config-gated / additive / non-destructive；逐条对照见 `blueprint-completion-matrix.md`。
+- 验收：`tests/test_blueprint_completion.py` 12 passed；扩展 scoped 15 文件 125 passed；全量见报告最新条目。

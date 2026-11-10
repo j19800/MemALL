@@ -150,6 +150,11 @@ class RetrieveInput(BaseModel):
     cluster: bool = False
     personalize: bool = False
     context_boost: bool = False
+    # ADR 0028 P1/P3 enhancement flags (both default off, config-gated).
+    utility_rerank: bool = False
+    continuity: bool = False
+    # ADR 0028 P4: read-only audit surface (mode=audit).
+    mode: Optional[str] = Field(None, max_length=40)
     viewer: Optional[str] = Field(None, max_length=200)
 
 
@@ -308,6 +313,19 @@ class RecordInteractionInput(BaseModel):
     agent_name: Optional[str] = Field(None, max_length=200)
     owner: Optional[str] = Field(None, max_length=200)
     session_id: Optional[str] = Field(None, max_length=200)
+    # ADR 0028 P3: richer feedback signals + ledger dimensions. All optional
+    # and additive; declared so validate_tool_input(exclude_unset=True) does
+    # not strip them before the handler runs. `task_id` is a free-form ref
+    # here (str or int) — unlike the L5 card id used by TaskClaim/Resolve,
+    # which have their own models.
+    task_id: Optional[Union[int, str]] = None
+    accepted: bool = False
+    rejected: bool = False
+    corrected: bool = False
+    ignored: bool = False
+    slot_key: Optional[str] = Field(None, max_length=200)
+    source_pipeline: Optional[str] = Field(None, max_length=200)
+    scope: Optional[str] = Field(None, max_length=200)
 
     def resolved_type(self) -> str:
         """Interaction kind, ignoring the MCP routing value in ``action``."""
@@ -351,6 +369,9 @@ class UnifiedSearchInput(BaseModel):
     cluster: bool = Field(False, description="Group results into topic clusters")
     personalize: bool = Field(False, description="Rank by per-agent interaction affinity")
     context_boost: bool = Field(False, description="Boost results matching the active project/category")
+    # ADR 0028 P1/P3: opt-in, default-off, additionally config-gated.
+    utility_rerank: bool = Field(False, description="Conservative interaction-utility rerank (default off)")
+    continuity: bool = Field(False, description="Attach validity-aware continuity pack (default off)")
     # Per-session novelty demotion (requires search.seen_tracking.enabled):
     # repeat queries within one session surface unseen results lower down
     # instead of returning the identical top-k twice.  Never excludes.
@@ -920,6 +941,27 @@ class IndexRebuildInput(BaseModel):
 class DigestInput(BaseModel):
     """digest/hot take no parameters; this model only guards payload shape."""
     model_config = {"extra": "ignore"}
+
+
+class MaintenanceInput(BaseModel):
+    """ADR 0028 P4: memall_system action=maintenance.
+
+    sub_action: status (default) | run | audit | archive | rollback.
+    All writes are opt-in/non-destructive (maintenance.enabled gate).
+    """
+    model_config = {"extra": "ignore"}
+    maintenance_sub_action: Optional[str] = Field(
+        None, pattern=r"^(status|run|audit|archive|rollback)$")
+    sub_action: Optional[str] = Field(
+        None, pattern=r"^(status|run|audit|archive|rollback)$")
+    actions: Optional[List[str]] = None
+    dry_run: bool = False
+    max_actions: Optional[int] = Field(None, ge=1, le=500)
+    limit: int = Field(50, ge=1, le=500)
+    session_id: Optional[str] = Field(None, max_length=200)
+    agent_name: Optional[str] = Field(None, max_length=200)
+    payload: Optional[Dict[str, Any]] = None
+    entry: Optional[Dict[str, Any]] = None
 
 
 class KBEnrichActionInput(BaseModel):

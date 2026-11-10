@@ -158,3 +158,20 @@
 
 - [x] 独立工作线已落地本地 commit `6fe2b4c`（16 files，未 push）；提交态自洽校验通过。
 - [ ] `thin_waist.py.bak_phase1` 仍为唯一未跟踪项，待决策删除/归档（不纳入任何提交）。
+
+## 「按蓝图补齐」轮次（2026-11-10，逐条对照 ADR 0028 §2）
+
+- [x] P1：`conversation.session_end` provenance 注入（opt-in，默认 off）。
+- [x] P1：`enhancements.continuity` 开关自动组装包（全链路 + config gate，默认 off）。
+- [x] P3：`search_interactions` 8 新列 + 老库 safety net；`record_interaction` 反馈/维度扩展 + MCP/validator/schema 打通。
+- [x] P3：按 `slot_key`/`source_pipeline`/`scope` 聚合的效用账簿 + `utility_score`。
+- [x] P3：`quality.utility.*` 配置 + 效用驱动 resolve（阈值调整/强制 REVIEW/审计 `resolve._meta.utility_policy`）。
+- [x] P3：验收键 `quality.utility.tracking_enabled=True` 时 retrieve 排序受 utility 影响，关闭无影响。
+- [x] P4：从 deferred 改为实现（opt-in/非破坏性）：`maintenance.py`、MCP `action=maintenance`、`mode=audit`、`ADR/archived_sessions/`、审计日志 + before 快照 + rollback、`include_archived` 复用。
+- [x] 逐条对照表 `docs/p0-p2/blueprint-completion-matrix.md`；`p4-deferred-design.md` 状态行标注「部分过时（历史设计前置）」。
+- [ ] 已知偏差（非欠账，登记）：P3 配置键前缀 `quality.utility.*` vs 蓝图顶层 `utility.*`；P4 为非破坏性标记而非静默改写 `resolve.decision`；P1 注入 opt-in。若需严格消除偏差可加配置别名 / 显式 resolve.status 改写策略。
+- [ ] P3 灰度前置（遥测/基线/白名单/改默认）与 P2-4 worker 真实 handler 仍按各节在账（这些是「启用前/增强」负债，不是蓝图 §2 交付缺口）。
+- [ ] `thin_waist.py.bak_phase1` 备份处置仍待决策（不纳入任何提交）。
+
+- [x] 「按蓝图补齐」轮次已落地本地 commit `3ee3372`（21 files，未 push）；提交态自洽校验通过。
+- [ ] `thin_waist.py.bak_phase1` 仍为唯一未跟踪项，待决策删除/归档（不纳入任何提交）。

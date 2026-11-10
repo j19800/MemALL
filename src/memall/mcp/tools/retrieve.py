@@ -39,7 +39,7 @@ def _cognitive_fields(obj) -> dict:
     }
 
 # Enhancement flags shared by handle_retrieve / handle_unified_search.
-_ENHANCE_FLAGS = ("expand_query", "suggest", "explain", "cluster", "personalize", "context_boost", "utility_rerank")
+_ENHANCE_FLAGS = ("expand_query", "suggest", "explain", "cluster", "personalize", "context_boost", "utility_rerank", "continuity")
 
 
 def _split_facet_fields(arguments: dict):
@@ -62,8 +62,79 @@ def _wants_enhancements(arguments: dict) -> bool:
     return any(bool(arguments.get(f)) for f in _ENHANCE_FLAGS)
 
 
+def _handle_retrieve_audit(arguments: dict) -> str:
+    """ADR 0028 P4: mode=audit — read-only conflicts/history/evidence surface.
+
+    Never mutates. Returns compact lists so a human can audit automatic
+    maintenance decisions. Best-effort: a missing table/column degrades to
+    an explicit empty section instead of failing the call.
+    """
+    from memall.core.db import get_conn
+    agent_name = (arguments.get("agent_name") or arguments.get("viewer") or "")[:200]
+    limit = max(1, min(int(arguments.get("limit", 20) or 20), 200))
+    out = {"mode": "audit", "agent_name": agent_name,
+           "conflicts": [], "history": [], "evidence": [],
+           "maintenance": None, "ok": True}
+    conn = get_conn()
+    try:
+        # Conflicts / review items (memory_status markers).
+        try:
+            rows = conn.execute(
+                "SELECT id, subject, memory_status, metadata, updated_at FROM memories "
+                "WHERE COALESCE(memory_status,'') LIKE '%CONFLICT%' "
+                "OR COALESCE(memory_status,'') LIKE '%REVIEW%' "
+                "ORDER BY updated_at DESC LIMIT ?", (limit,),
+            ).fetchall()
+            out["conflicts"] = [
+                {"id": r["id"], "subject": r["subject"],
+                 "memory_status": r["memory_status"], "updated_at": r["updated_at"]}
+                for r in rows
+            ]
+        except Exception:
+            pass
+        # History: memories carrying cognitive_maintenance markers.
+        try:
+            rows = conn.execute(
+                "SELECT id, subject, metadata, updated_at FROM memories "
+                "WHERE metadata LIKE '%cognitive_maintenance%' "
+                "ORDER BY updated_at DESC LIMIT ?", (limit,),
+            ).fetchall()
+            for r in rows:
+                meta = _meta_dict(r["metadata"])
+                markers = meta.get("cognitive_maintenance") or []
+                out["history"].append({
+                    "id": r["id"], "subject": r["subject"],
+                    "updated_at": r["updated_at"],
+                    "actions": [m.get("action") for m in markers if isinstance(m, dict)],
+                })
+        except Exception:
+            pass
+        # Evidence: recent audit-log lines (append-only).
+        try:
+            from memall.pipeline.maintenance import read_audit
+            au = read_audit(limit=limit)
+            out["evidence"] = au.get("entries", [])[:limit]
+        except Exception:
+            pass
+        # Maintenance status / config gates.
+        try:
+            from memall.pipeline.maintenance import maintenance_status
+            out["maintenance"] = maintenance_status()
+        except Exception:
+            pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return json.dumps(out, ensure_ascii=False)
+
+
 def handle_retrieve(arguments: dict) -> str:
     from memall.core.thin_waist import retrieve, enhanced_search
+    # ADR 0028 P4: read-only audit surface (conflicts / history / evidence).
+    if str(arguments.get("mode") or "") == "audit":
+        return _handle_retrieve_audit(arguments)
     if _wants_enhancements(arguments):
         # Route through the enhancement layer; drop routing-only keys.
         args = dict(arguments)
@@ -76,7 +147,7 @@ def handle_retrieve(arguments: dict) -> str:
             **_cognitive_fields(m),
         } for m in result["results"]]
         payload = {"results": items, "total": result.get("total", len(items))}
-        for key in ("facets", "suggestions", "clusters", "explanations", "expanded_query"):
+        for key in ("facets", "suggestions", "clusters", "explanations", "expanded_query", "continuity", "utility_rerank_signals"):
             if key in result:
                 payload[key] = result[key]
         return json.dumps(payload, ensure_ascii=False)
@@ -268,6 +339,15 @@ def handle_record_interaction(arguments: dict) -> str:
             agent_name=arguments.get("agent_name", "") or "",
             owner=arguments.get("owner", "") or "",
             session_id=arguments.get("session_id", "") or "",
+            # ADR 0028 P3: richer feedback signals + ledger dimensions.
+            task_id=arguments.get("task_id", "") or "",
+            accepted=bool(arguments.get("accepted", False)),
+            rejected=bool(arguments.get("rejected", False)),
+            corrected=bool(arguments.get("corrected", False)),
+            ignored=bool(arguments.get("ignored", False)),
+            slot_key=arguments.get("slot_key", "") or "",
+            source_pipeline=arguments.get("source_pipeline", "") or "",
+            scope=arguments.get("scope", "") or "",
         )
     finally:
         conn.close()

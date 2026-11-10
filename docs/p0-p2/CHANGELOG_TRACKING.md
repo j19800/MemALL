@@ -175,3 +175,37 @@
 - 提交态（`git write-tree` 导出 488 文件）自洽：9 模块 + 依赖全可导入、无残留 `weight=`、`bak_phase1` 未混入。
 - 验收：相关子集 55 passed、全量 598 passed/2 skipped/0 failed/0 errors、py_compile OK。
 - **未 push**。
+
+### 2026-11-10「按蓝图补齐」轮次（基于 `630b437` / `0a6af93` 之上，本地未提交）
+
+> 用户指出「阶段完成度」不等于「蓝图 §2 每一条字面改动都实施完毕」。本轮逐条核对并补齐 P1/P3/P4 的缺口；完整逐条对照见 `blueprint-completion-matrix.md`。
+
+**P1（2 条补齐）**
+- `thin_waist._capture_inject_metadata`：opt-in `session.conversation_session_end_inject` 时把 `source_pipeline` 覆写为 `conversation.session_end` 并填 session/thread/project/agent 字段（用赋值而非 setdefault，因 Day1 readability 块会先设默认 `capture_api`）；`session_end` continuity capture 带 `session_end_context` marker。
+- `enhancements.build_continuity_enhancement()` + `apply_enhancements(continuity=...)`：搜索路径自动组装 validity-aware 包；`unified_search`/`enhanced_search`/`_apply_enhancements_inplace`/MCP `handle_retrieve`/`handle_unified_search` 全链路转发；新增 `search.continuity.enabled`（默认 False）+ `UnifiedSearchInput`/`RetrieveInput` 的 `utility_rerank`/`continuity`/`mode` 字段 + MCP schema 声明。
+
+**P3（4 条补齐，此前为最大偏差）**
+- `db.py`：`search_interactions` 新增 8 列（`task_id`/`accepted`/`rejected`/`corrected`/`ignored`/`slot_key`/`source_pipeline`/`scope`），含 `_ensure_interaction_columns()` 老库 safety net（init_db 两处调用）；SCHEMA_SQL 同步。
+- `enhancements.record_interaction`：扩展可选反馈/维度参数，老库自动降级到 legacy INSERT；MCP `handle_record_interaction` + `RecordInteractionInput` + validator + schema（`task_id` 改 `oneOf[int,str]`）全打通。
+- `enhancements.aggregate_utility_ledger()`：按 `slot_key`/`source_pipeline`/`scope`（可选 `task_id`）聚合反馈信号 + `utility_score`，含 legacy 降级。
+- `config.py`：新增 `quality.utility.*`（`tracking_enabled`/`slot_weight_factor`/`min_utility_for_auto_ingest`/`resolve_enabled`/`low_utility_review`/`high_utility_relax`/`window_days`，全部默认 False/保守）。
+- `thin_waist._utility_resolve_policy()`：双门（tracking_enabled + resolve_enabled）→ 读 slot 效用账簿 → 调整 merge/update 阈值、低效用强制 REVIEW；`_resolve_decision` 应用并把审计 `_meta` 写入 `resolve._meta.utility_policy`（只影响新记忆决策，不改写历史）。
+- 验收键：`apply_enhancements` 的 utility rerank 门控 OR 上 `quality.utility.tracking_enabled`（两键默认 False）。
+- 修复：MCP schema/validator 此前未声明 `utility_rerank`，端到端会剥离——本轮补齐 `RetrieveInput`/`UnifiedSearchInput` + schema。
+
+**P4（从 deferred 改为实现，opt-in/非破坏性）**
+- 新增 `src/memall/pipeline/maintenance.py`：`run_maintenance()`（`cognitive.loop.maintenance` 入口，6 类策略，bounded）、`archive_session()`（`ADR/archived_sessions/session_*.jsonl` append-only 锚点）、`_append_audit()`（含 `before` 快照的 JSONL 审计日志）、`read_audit()`、`rollback_from_audit()`、`maintenance_status()`。所有 pass **只打 metadata 标记 / 置 `memory_status='archived'`，不删行、不改 content**。
+- `config.py` 新增 `maintenance.*`（默认 `enabled=False`）。
+- MCP：`memall_system action=maintenance`（sub_action: status/run/audit/archive/rollback）+ `MaintenanceInput` model + validator 登记 + enum/schema；`handle_retrieve(mode=audit)` 只读审计面（conflicts/history/evidence/maintenance）；schema `mode` 增 `audit`。
+- 复用既有 `include_archived=True` 语义（蓝图验收要求）。
+
+**验收**：`tests/test_blueprint_completion.py` -> **12 passed**；扩展 scoped（15 文件）-> **125 passed in 136.32s**；全量见 `PRECOMMIT_SCOPED_REPORT_2026-11-10.md` 最新条目。py_compile OK。
+
+**已知偏差（诚实登记，非欠账）**：P3 配置键前缀用 `quality.utility.*`（蓝图写顶层 `utility.*`，但 `tracking_enabled` 验收键按字面保留）；P4 自动动作为非破坏性标记而非静默改写 `resolve.decision`；P1 注入为 opt-in。详见 `blueprint-completion-matrix.md`。
+
+### ✅「按蓝图补齐」轮次已落地提交（2026-11-10，本地 commit，未 push）
+- **commit `3ee3372`**：`feat(memall): complete ADR0028 blueprint literal items - P1/P3/P4 gap closure`（21 files, 1452+/41-）。
+- 提交态（`git write-tree` 导出 491 文件）自洽：关键模块/API 全可导入、全部新 config 键存在且默认 off、validator 全 action 识别、`bak_phase1` 未混入。
+- 验收：蓝图契约 12 passed、扩展 scoped 125 passed、全量 610 passed/2 skipped/0 failed/0 errors、py_compile OK。
+- 提交后工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪（按约束保留）。
+- **未 push**。

@@ -246,3 +246,18 @@ PYTHONPATH=.:src ./.venv/bin/python -m pytest \
 - **P3**：冷启动/低证据回退、跨 agent 隔离、权重钳制/永不丢项（`tests/test_utility_rerank_p3.py` 10 passed）；度量基线/灰度/Kill-Switch 文档 `docs/p0-p2/p3-utility-rerank-rollout.md`；`search.utility_rerank.enabled` 仍 False。
 - **P4**：设计前置 `docs/p0-p2/p4-deferred-design.md`（8 项，仅登记，保持 deferred）。
 - **验收**：scoped 9 文件 **81 passed**；详见 `docs/p0-p2/PRECOMMIT_SCOPED_REPORT_2026-11-10.md`。
+
+### 「按蓝图补齐」轮次（2026-11-10，基于 `630b437` / `0a6af93`，本地未提交）
+
+> 用户指出「按阶段目标粗估 90%」不等于「蓝图每一条字面改动都实施完毕」。本轮逐条核对 §2 的**字面改动表**，把此前用等价替代 / 明确 deferred 的部分真正补齐。完整逐条对照见 `docs/p0-p2/blueprint-completion-matrix.md`。
+
+- **P1**：补齐 `capture()` 的 `conversation.session_end` provenance 自动注入（opt-in `session.conversation_session_end_inject`，默认 False，保留既有 `session.end`）+ `enhancements.py` 的 `continuity` 开关自动组装 validity-aware 包（全链路转发到 unified_search/enhanced_search/MCP，`search.continuity.enabled` 默认 False）。
+- **P3**（此前最大偏差）：
+  - `search_interactions` 新增 `task_id`/`accepted`/`rejected`/`corrected`/`ignored`/`slot_key`/`source_pipeline`/`scope` 8 列（SCHEMA_SQL + 老库 safety net），`record_interaction` 扩展并向后兼容，MCP handler/validator/model/schema 全打通。
+  - 新增按 `slot_key`/`source_pipeline`/`scope` 聚合的 `aggregate_utility_ledger()` + `utility_score`。
+  - 新增 `quality.utility.*` 配置块（默认 False/保守）；`_utility_resolve_policy()` 实现效用驱动 resolve（低效用/高冲突强制 REVIEW、阈值收紧/放宽，审计写入 `resolve._meta.utility_policy`，不改写历史）。
+  - 验收键落地：`quality.utility.tracking_enabled=True` 时 retrieve 排序受 utility 影响，关闭无影响（OR 门控，两键默认都 False）。
+- **P4**（从 deferred 改为实现，仍 opt-in/非破坏性）：新模块 `src/memall/pipeline/maintenance.py`（`cognitive.loop.maintenance` 入口、6 类策略、append-only 审计 JSONL 含 before 快照、`rollback_from_audit()`、`archive_session()` 写 `ADR/archived_sessions/`）；MCP `memall_system action=maintenance`（run/status/audit/archive/rollback）+ `handle_retrieve(mode=audit)` 只读审计面；复用既有 `include_archived=True`。所有 pass 仅打 metadata 标记 / 置 archived，**不删行、不改 content**。
+- 验收：`tests/test_blueprint_completion.py` 12 passed；扩展 scoped 回归 + 全量回归见 `docs/p0-p2/PRECOMMIT_SCOPED_REPORT_2026-11-10.md` 最新条目。
+
+**已知偏差（诚实登记，非欠账）**：P3 配置键前缀用 `quality.utility.*`（蓝图写顶层 `utility.*`，`tracking_enabled` 验收键按字面保留）；P4 自动动作为非破坏性标记而非静默改写 `resolve.decision`；P1 注入为 opt-in。详见对照表「已知偏差」章节。

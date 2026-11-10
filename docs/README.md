@@ -11,7 +11,8 @@
 | [`../LAN-CLIENT-GUIDE.md`](../LAN-CLIENT-GUIDE.md) | **局域网接入全量参考手册**：所有参数、端点、坑位、CORS/限流/数据归属。查细节看这份，与教程分工不重叠 |
 | [mcp_tools_reference.md](mcp_tools_reference.md) | MCP 工具参考，自动生成，勿手改 |
 | [changelog_v0.1.4.md](changelog_v0.1.4.md) | 2026-06 版本快照 |
-| [p0-p2/README.md](p0-p2/README.md) | ADR 0028 改造：技术文档/提交清单/技术债务/验收报告（现行；`92863b6` → `8aa68cc` → `d314558`） |
+| [p0-p2/README.md](p0-p2/README.md) | ADR 0028 改造：技术文档/提交清单/技术债务/验收报告（现行；`92863b6` → `8aa68cc` → `d314558` → `630b437` → 本轮「按蓝图补齐」） |
+| [p0-p2/blueprint-completion-matrix.md](p0-p2/blueprint-completion-matrix.md) | ADR 0028 §2 逐条字面完成度对照表（P0–P4 全条目 + 已知偏差） |
 | [independent-workline/capture-quality-routing.md](independent-workline/capture-quality-routing.md) | 独立工作线：capture 质量漏斗路由 + readability 归一化（与 ADR0028 正交，单独提交） |
 
 > 两篇 LAN 文档**都保留在根目录**：教程面向"第一次接"，手册面向"查参数"。不合并，避免丢内容。
