@@ -82,11 +82,31 @@ def _snapshot_row(conn, mem_id: int) -> dict:
         return {}
 
 
+def _policy_status_rules(action: str, meta: dict) -> dict:
+    """ADR 0028 P4 acceptance: derive the rule-based updates for
+    ``metadata.resolve.status`` and ``memory_status`` for one policy.
+
+    Rules are deliberately conservative and non-destructive:
+      * conflict_review -> resolve.status='REVIEW' (needs human review)
+      * canonicalize / theme_profile / policy_adaptation -> resolve.status='REVIEW'
+      * expire / low_utility_archive -> memory_status='archived' (never deleted)
+    The prior values are preserved in the audit ``before`` snapshot, so
+    ``rollback_from_audit`` restores them exactly.
+    """
+    rules = {"resolve_status": None, "memory_status": None}
+    if action in ("conflict_review", "canonicalize", "theme_profile", "policy_adaptation"):
+        rules["resolve_status"] = "REVIEW"
+    if action in ("expire", "low_utility_archive"):
+        rules["memory_status"] = "archived"
+    return rules
+
+
 def _mark(conn, mem_id: int, action: str, marker: dict,
           set_archived: bool = False, audit: bool = True) -> dict:
-    """Apply ONE non-destructive action: add a metadata marker (+ optional
-    archived status), with a before-snapshot audit line. The UPDATE only
-    touches ``metadata`` / ``memory_status`` / ``updated_at`` — never content.
+    """Apply ONE non-destructive action: add a metadata marker, apply the
+    rule-based ``resolve.status`` / ``memory_status`` updates, with a
+    before-snapshot audit line. The UPDATE only touches ``metadata`` /
+    ``memory_status`` / ``updated_at`` — never content, never DELETE.
     """
     before = _snapshot_row(conn, mem_id) if _cfg("snapshot_before_write", True) else {}
     try:
@@ -106,11 +126,31 @@ def _mark(conn, mem_id: int, action: str, marker: dict,
             **marker,
         })
         meta["cognitive_maintenance"] = markers[-10:]  # bounded
+
+        # ADR 0028 P4: apply rule-based status updates (audited/rollbackable).
+        rules = _policy_status_rules(action, meta)
+        prev_resolve = meta.get("resolve")
+        if not isinstance(prev_resolve, dict):
+            prev_resolve = {}
+        applied = {}
+        if rules["resolve_status"]:
+            prev_resolve = dict(prev_resolve)
+            applied["resolve_status_before"] = prev_resolve.get("status")
+            prev_resolve["status"] = rules["resolve_status"]
+            resolved_meta = dict(meta)
+            resolved_meta["resolve"] = prev_resolve
+            meta = resolved_meta
+            applied["resolve_status_after"] = rules["resolve_status"]
+        new_memory_status = None
+        if set_archived or rules["memory_status"] == "archived":
+            new_memory_status = "archived"
+            applied["memory_status_after"] = "archived"
+
         new_meta = json.dumps(meta, ensure_ascii=False)
-        if set_archived:
+        if new_memory_status:
             conn.execute(
-                "UPDATE memories SET metadata=?, memory_status='archived', updated_at=? WHERE id=?",
-                (new_meta, _now(), mem_id),
+                "UPDATE memories SET metadata=?, memory_status=?, updated_at=? WHERE id=?",
+                (new_meta, new_memory_status, _now(), mem_id),
             )
         else:
             conn.execute(
@@ -121,10 +161,12 @@ def _mark(conn, mem_id: int, action: str, marker: dict,
             _append_audit({
                 "ts": _now(), "action": action, "memory_id": mem_id,
                 "source_pipeline": str(_cfg("source_pipeline", _MAINTENANCE_PIPELINE)),
-                "marker": marker, "set_archived": set_archived, "before": before,
+                "marker": marker, "set_archived": set_archived,
+                "rules_applied": applied, "before": before,
                 "after": _snapshot_row(conn, mem_id),
             })
-        return {"ok": True, "memory_id": mem_id, "action": action}
+        return {"ok": True, "memory_id": mem_id, "action": action,
+                "rules_applied": applied}
     except Exception as e:
         logger.debug("maintenance: mark failed for %s: %s", mem_id, e)
         return {"ok": False, "memory_id": mem_id, "action": action, "error": str(e)[:200]}
@@ -134,9 +176,12 @@ def _select_candidates(conn, action: str, limit: int) -> list[int]:
     """Read-only candidate selection, one policy per action."""
     try:
         if action == "conflict_review":
+            # Parentheses matter: SQL AND binds tighter than OR. Without them
+            # archived CONFLICT rows (which must be excluded) were re-selected.
             rows = conn.execute(
-                "SELECT id FROM memories WHERE COALESCE(memory_status,'') LIKE '%CONFLICT%' "
-                "OR COALESCE(memory_status,'') LIKE '%REVIEW%' "
+                "SELECT id FROM memories WHERE "
+                "(COALESCE(memory_status,'') LIKE '%CONFLICT%' "
+                "OR COALESCE(memory_status,'') LIKE '%REVIEW%') "
                 "AND COALESCE(memory_status,'') != 'archived' ORDER BY updated_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()

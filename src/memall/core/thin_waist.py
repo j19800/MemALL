@@ -29,6 +29,18 @@ from memall.core.lifecycle import (
 
 logger = logging.getLogger(__name__)
 
+
+def _utility_tracking_active() -> bool:
+    """ADR 0028 P3 acceptance: `quality.utility.tracking_enabled=True` is a
+    MASTER switch that makes retrieval utility-aware without any per-call
+    flag. Central helper so every search entrance gates consistently.
+    """
+    try:
+        return bool(get_config("quality.utility.tracking_enabled", False))
+    except Exception:
+        return False
+
+
 class CaptureId(int):
     """Backward-compatible capture return: behaves as int id, carries quality contract."""
     def __new__(cls, value, /, **meta):
@@ -2478,7 +2490,9 @@ def unified_search(arguments: dict) -> str:
     cluster = bool(arguments.get("cluster", False))
     personalize = bool(arguments.get("personalize", False))
     context_boost = bool(arguments.get("context_boost", False))
-    utility_rerank = bool(arguments.get("utility_rerank", False))
+    # ADR 0028 P3: tracking_enabled config is a master switch; when on, the
+    # utility rerank activates on every search entrance WITHOUT a call flag.
+    utility_rerank = bool(arguments.get("utility_rerank", False)) or _utility_tracking_active()
     continuity = bool(arguments.get("continuity", False))
     project = arguments.get("project", "") or ""
     wants_enhancements = any(
@@ -2514,6 +2528,7 @@ def unified_search(arguments: dict) -> str:
             project=project,
             owner=arguments.get("owner"),
             agent_name_filter=arguments.get("agent_name_filter"),
+            viewer_is_identity=True,  # agent_name here is the viewer, NOT an author filter
             category=arguments.get("category"),
             level=arguments.get("level"),
             source_pipeline=arguments.get("source_pipeline"),
@@ -3189,6 +3204,7 @@ def enhanced_search(
     continuity: bool = False,
     project: str = "",
     agent_name_filter: Optional[str] = None,
+    viewer_is_identity: bool = False,
     **filters,
 ) -> dict:
     """Retrieval with the query-enhancement layer applied.
@@ -3258,8 +3274,16 @@ def enhanced_search(
     # own identity (personalisation) and doubles as the retrieval filter when
     # no separate filter was given — so a direct enhanced_search(agent_name=X)
     # returns X's memories and its facets count the same population.
+    #
+    # `viewer_is_identity=True` is set by unified_search / handle_retrieve:
+    # there `agent_name` is the SESSION VIEWER, never an author filter. Using
+    # it as a content filter silently drops every memory written by someone
+    # else (regression found in independent review: config-only utility
+    # tracking made a 2-row fts5 recall become 0). Keep the legacy fallback
+    # only for direct callers that don't set this flag.
     effective_agent_filter = (
-        agent_name_filter if agent_name_filter is not None else (agent_name or None)
+        agent_name_filter if agent_name_filter is not None
+        else (None if viewer_is_identity else (agent_name or None))
     )
     retrieve_kwargs = dict(filters)
     retrieve_kwargs.setdefault("limit", limit)
@@ -3302,7 +3326,8 @@ def enhanced_search(
             out["suggestions"] = suggest_queries(conn, query, limit=10)
 
         # ── Post-retrieval enhancements (need dict-shaped results) ──
-        if explain or cluster or personalize or context_boost or utility_rerank or continuity:
+        if (explain or cluster or personalize or context_boost or utility_rerank
+                or continuity or _utility_tracking_active()):
             # Carry the retrieval rank into the dicts: retrieve() already
             # ordered by bm25, so position i *is* the relevance signal.
             # Without a score the enhancements were inert on this path —
@@ -3338,7 +3363,7 @@ def enhanced_search(
                 cluster=cluster,
                 personalize=personalize,
                 context_boost=context_boost,
-                utility_rerank=utility_rerank,
+                utility_rerank=utility_rerank or _utility_tracking_active(),
                 continuity=continuity,
                 project=project,
             )

@@ -662,7 +662,17 @@ def _ensure_interaction_columns(conn):
     """
     try:
         cur = conn.execute("PRAGMA table_info(search_interactions)")
-        existing = {r["name"] for r in cur.fetchall()}
+        rows = cur.fetchall()
+        # PRAGMA rows are `(cid, name, type, notnull, dflt, pk)`; depending on
+        # the connection's row_factory they may be tuples or sqlite3.Row.
+        # Using r["name"] unconditionally raised TypeError on plain sqlite3
+        # connections and was swallowed below -> columns silently never added.
+        existing = set()
+        for r in rows:
+            try:
+                existing.add(r["name"])
+            except (TypeError, KeyError, IndexError):
+                existing.add(r[1])
     except Exception:
         return
     additions = {

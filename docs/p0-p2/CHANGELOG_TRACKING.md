@@ -209,3 +209,24 @@
 - 验收：蓝图契约 12 passed、扩展 scoped 125 passed、全量 610 passed/2 skipped/0 failed/0 errors、py_compile OK。
 - 提交后工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪（按约束保留）。
 - **未 push**。
+
+### 2026-11-10 独立审查复核 + 验收修复轮次（基于 `f1af71b`，本地未提交）
+> 用户三问「所有功能测试都跑了吗/代码审查做了吗/符合验收标准吗」触发。诚实结论：此前**没做独立代码审查**、P3/P4 两条 ADR 验收句**实际未通过**（此前登记成「已知偏差」属自证）。
+
+**修掉 5 个真实缺陷 + 2 处一致性**
+1. P3 验收：config `quality.utility.tracking_enabled` 不是主开关（仍需 call flag）→ 新增 `thin_waist._utility_tracking_active()`，unified_search/enhanced_search/`_wants_enhancements`/apply_enhancements 全入口 config-only 生效。
+2. P4 验收：维护只加 marker 不改 `resolve.status`/`memory_status` → `maintenance._policy_status_rules()` + `_mark()` 按规则写值（ACCEPTED→REVIEW、ACTIVE→archived），before 快照可精确回滚。
+3. 【严重·独立审查报出】config-only 让 fts5 改走 enhanced_search，viewer 身份被当作者过滤 → 召回从 2 行变 0。修：`enhanced_search(viewer_is_identity=...)` 解耦 viewer/作者过滤；unified_search 与 handle_retrieve 增强路径传 True + 同步 agent_name→viewer 供 trust 过滤；handle_retrieve plain 路径统一语义；legacy 直接调用默认 False 保持原样。
+4. 【中等·复核】`db._ensure_interaction_columns` 用 `r["name"]` 读 PRAGMA，普通 sqlite3 连接（tuple 行）抛 TypeError 被吞 → 老库永远补不上新列。修：兼容 tuple/Row + 幂等回归测试。
+5. 【中等·SQL】`maintenance._select_candidates` conflict_review 查询 OR/AND 优先级缺括号 → 已归档 CONFLICT 行被重选。修：加括号。
+- 一致性：`handle_retrieve` 增强结果缺 per-result utility 信号 → 已挂到每个 item。
+- 测试：修 2 个「假通过」断言（P3 验收仍传 flag、P4 回滚 `or ...=={}` 永真分支）；新增 3 个回归测试（老库补列、config 开关不改变召回、handle_retrieve 召回/信号）。
+- 文档：新建 `acceptance-review-status.md`（诚实记录三问答案 + 全过程）；本文件/债务/报告/对照表同步。
+
+**验收**：蓝图契约 15 passed；全量 613 passed/2 skipped/0 failed/0 errors；py_compile OK。
+
+### ✅ 独立审查复核 + 验收修复轮次已落地提交（2026-11-10，本地 commit，未 push）
+- **commit `dc4d847`**：`fix(memall): acceptance + independent-review fixes for ADR0028 blueprint completion`（13 files, 497+/65-）。
+- 提交态（`git write-tree` 导出 492 文件）自洽：关键模块/API 可导入、全部新 config 默认 off、`viewer_is_identity` 参数存在、排除项未混入。
+- 验收：蓝图契约 15 passed、全量 613 passed/2 skipped/0 failed/0 errors、ADR 5 条验收句逐条实测通过、config 开关不改变召回集合、py_compile OK。
+- 提交后工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪（按约束保留）。**未 push**。

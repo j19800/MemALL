@@ -1053,15 +1053,15 @@ def apply_enhancements(
             weight=get_config("search.personalization.weight", 0.25),
         )
 
-    # P3 conservative utility rerank (explicit flag + config gate; default off).
-    # ADR 0028 acceptance key: `quality.utility.tracking_enabled=True` must
-    # also make retrieve ordering utility-aware. OR it with the older
-    # `search.utility_rerank.enabled` switch so neither deployment breaks;
-    # both default False, so the feature stays off unless explicitly enabled.
-    _utility_on = bool(get_config("search.utility_rerank.enabled", False)) or bool(
-        get_config("quality.utility.tracking_enabled", False)
-    )
-    if utility_rerank and _utility_on:
+    # P3 conservative utility rerank. ADR 0028 acceptance clause: with
+    # `quality.utility.tracking_enabled=True`, retrieve ordering MUST be
+    # utility-aware WITHOUT requiring a per-call flag. So the config keys are
+    # the authority; `utility_rerank` (call flag) remains an additional
+    # explicit opt-in for the legacy `search.utility_rerank.enabled` switch.
+    # Both config keys default False -> no effect when everything is off.
+    _tracking_on = bool(get_config("quality.utility.tracking_enabled", False))
+    _legacy_on = bool(get_config("search.utility_rerank.enabled", False))
+    if _tracking_on or (utility_rerank and _legacy_on):
         out["results"] = _apply_utility_rerank(
             out["results"],
             conn,

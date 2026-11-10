@@ -106,3 +106,12 @@ git diff --name-only
 对照上轮 598 passed：+12 = `tests/test_blueprint_completion.py` 12 测试；0 failed / 0 errors。确认 P1/P3/P4 全部补齐项无回归。
 
 ✅「按蓝图补齐」轮次落地：commit `3ee3372`（21 files, 1452+/41-），本地未 push。工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪。
+
+## 独立审查复核 + 验收修复轮次（2026-11-10，用户质疑后）
+- 定向 `tests/test_blueprint_completion.py -q` -> **15 passed**（含 3 个新回归：老库补列、召回不变、handle_retrieve 召回/per-result 信号）。
+- 全量 `pytest tests/ -q --disable-warnings --tb=line`（默认收集，无 --ignore）-> **613 passed, 2 skipped, 0 failed, 0 errors in 772.33s**。
+- `py_compile` 全部改动文件 OK。
+- 实测：ADR 5 条验收句（P0/P1/P2/P3/P4）逐条跑独立脚本，P3/P4 修复后均通过；config 开关不改变召回集合（独立审查报的回归已修）。
+- 详见 `docs/p0-p2/acceptance-review-status.md`。
+
+✅ 独立审查复核 + 验收修复轮次落地：commit `dc4d847`（13 files, 497+/65-），本地未 push。工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪。

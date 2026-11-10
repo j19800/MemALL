@@ -40,6 +40,39 @@ def _now():
 
 # ── P3-A: interaction feedback columns + record_interaction ──
 
+def test_p3_interaction_columns_old_db_migration():
+    """Regression: _ensure_interaction_columns must work on a legacy table
+    opened with a PLAIN sqlite3 connection (tuple rows), not just sqlite3.Row.
+    An earlier version used r['name'] unconditionally and silently swallowed
+    the TypeError, so old databases never received the P3 columns.
+    """
+    import os
+    import sqlite3
+    import tempfile
+    from memall.core.db import _ensure_interaction_columns
+    p = tempfile.mktemp(suffix=".db")
+    c = sqlite3.connect(p)  # deliberately NO row_factory
+    try:
+        c.execute(
+            "CREATE TABLE search_interactions (id INTEGER PRIMARY KEY, query TEXT, "
+            "memory_id INTEGER, action TEXT, dwell_ms INTEGER, rank_position INTEGER, "
+            "agent_name TEXT, owner TEXT, session_id TEXT, created_at TEXT)")
+        c.commit()
+        _ensure_interaction_columns(c)
+        c.commit()
+        cols = {r[1] for r in c.execute("PRAGMA table_info(search_interactions)").fetchall()}
+        need = {"task_id", "accepted", "rejected", "corrected", "ignored",
+                "slot_key", "source_pipeline", "scope"}
+        assert need.issubset(cols), sorted(need - cols)
+        # idempotent
+        _ensure_interaction_columns(c)
+        c.commit()
+        print("PASS: test_p3_interaction_columns_old_db_migration")
+    finally:
+        c.close()
+        os.unlink(p)
+
+
 def test_p3_interaction_feedback_columns_and_ledger_dims():
     db, orig = init_temp_db()
     try:
@@ -168,27 +201,59 @@ def test_p3_utility_resolve_metadata_audit_record_persisted():
 # ── P3-D: acceptance key quality.utility.tracking_enabled ──
 
 def test_p3_acceptance_tracking_enabled_makes_rerank_active():
+    """ADR 0028 P3 acceptance: `quality.utility.tracking_enabled=True` ALONE
+    (no per-call flag) makes retrieval utility-aware; off = no effect.
+
+    Regression guard: an earlier implementation still required the caller to
+    pass utility_rerank=True, which did NOT satisfy this clause. This test
+    asserts the config-only path at BOTH the enhancement layer and the real
+    search entrances (unified_search / handle_unified_search).
+    """
     db, orig = init_temp_db()
     try:
         from memall.core.db import get_conn
+        from memall.core.models import MemoryInput
+        from memall.core.thin_waist import capture, unified_search
+        from memall.mcp.tools.retrieve import handle_unified_search
         from memall.search.enhancements import apply_enhancements, record_interaction
         c = get_conn()
-        for _ in range(3):
-            record_interaction(c, query="q", memory_id=1, action="click", agent_name="t")
-        results = [{"memory_id": 1, "content": "a", "rrf_score": 0.3},
-                   {"memory_id": 2, "content": "b", "rrf_score": 0.4}]
-        # OFF (default): no signals
+        mid = int(capture(MemoryInput(
+            content="PostgreSQL database configuration decision content long enough to pass gate checks properly",
+            level="L4", category="general", agent_name="tester", project="p")))
+        for _ in range(4):
+            record_interaction(c, query="PostgreSQL", memory_id=mid, action="click", agent_name="tester")
+        results = [{"memory_id": mid, "content": "a", "rrf_score": 0.3},
+                   {"memory_id": 999, "content": "b", "rrf_score": 0.4}]
+
+        # OFF (default): even with an explicit flag, no signals.
         _reset()
         off = apply_enhancements([dict(r) for r in results], query="q", conn=c,
-                                 agent_name="t", utility_rerank=True)
+                                 agent_name="tester", utility_rerank=True)
         assert all("utility_rerank_signal" not in r for r in off["results"])
-        # Blueprint key ON: signals appear
+
+        # Config key ON, NO per-call flag anywhere.
         _cfg_set("quality.utility.tracking_enabled", True)
-        # Search rerank uses search.utility_rerank config for min_interactions;
-        # align its window with the tracking switch for this acceptance test.
-        on = apply_enhancements([dict(r) for r in results], query="q", conn=c,
-                                agent_name="t", utility_rerank=True)
-        assert any("utility_rerank_signal" in r for r in on["results"])
+        layer = apply_enhancements([dict(r) for r in results], query="q", conn=c,
+                                   agent_name="tester")  # deliberately NO utility_rerank
+        assert any("utility_rerank_signal" in r for r in layer["results"]), \
+            "config-only must activate utility rerank at enhancement layer"
+
+        # Real search entrances, still NO flag in the arguments.
+        u = json.loads(unified_search({"query": "PostgreSQL", "mode": "fts5",
+                                       "agent_name": "tester"}))
+        assert u.get("results"), "query should match the captured memory"
+        assert any("utility_rerank_signal" in r for r in u["results"]), \
+            "unified_search JSON must carry utility signals from config alone"
+        mu = json.loads(handle_unified_search({"query": "PostgreSQL", "mode": "fts5",
+                                               "agent_name": "tester"}))
+        assert any("utility_rerank_signal" in r for r in (mu.get("results") or [])), \
+            "MCP handle_unified_search must carry utility signals from config alone"
+
+        # Off again: no signals, no order influence.
+        _cfg_set("quality.utility.tracking_enabled", False)
+        back = json.loads(unified_search({"query": "PostgreSQL", "mode": "fts5",
+                                          "agent_name": "tester"}))
+        assert all("utility_rerank_signal" not in r for r in back.get("results", []))
         c.close()
         print("PASS: test_p3_acceptance_tracking_enabled_makes_rerank_active")
     finally:
@@ -282,50 +347,81 @@ def test_p4_maintenance_default_off_and_status():
 
 
 def test_p4_maintenance_run_is_non_destructive_audited_and_rollbackable():
+    """ADR 0028 P4 acceptance: after a maintenance run, `metadata.resolve.status`
+    and `memory_status` are updated BY RULE; archived rows stay (no silent
+    deletion); audit before-snapshot allows exact rollback.
+
+    Regression guard: an earlier implementation only appended a marker and
+    changed neither status, which did NOT satisfy the acceptance clause. The
+    test uses before-values DISTINCT from the rule targets so an unchanged
+    value cannot accidentally pass.
+    """
     import os, tempfile
     db, orig = init_temp_db()
     tmp_arch = tempfile.mkdtemp()
     try:
         from memall.core.db import get_conn
         from memall.pipeline import maintenance as m
-        # redirect archive/audit to a temp dir to avoid polluting the repo
         _cfg_set("maintenance.archive_dir", tmp_arch)
         _cfg_set("maintenance.audit_log", os.path.join(tmp_arch, "audit.jsonl"))
         _cfg_set("maintenance.enabled", True)
         _cfg_set("maintenance.conflict_review", True)
+        _cfg_set("maintenance.expire", True)
         _cfg_set("maintenance.snapshot_before_write", True)
         c = get_conn()
+        # h1: CONFLICT row whose resolve.status is 'ACCEPTED' (distinct from the
+        # rule target 'REVIEW') -> conflict_review must rewrite it to REVIEW.
         c.execute(
             "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, occurred_at, created_at, updated_at, memory_status, metadata) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            ("冲突复核候选记忆内容足够长用于测试维护任务非破坏性标记。", "h_maint_1", "L4", "t", "general",
-             "conflict", _now(), _now(), _now(), "CONFLICT", "{}"),
+            ("冲突复核候选记忆内容足够长用于测试维护任务按规则更新状态字段。", "h_maint_1", "L4", "t", "general",
+             "conflict", _now(), _now(), _now(), "CONFLICT",
+             json.dumps({"resolve": {"status": "ACCEPTED", "decision": "CONFLICT"}})),
+        )
+        # h2: expired ACTIVE row -> expire must set memory_status='archived'.
+        c.execute(
+            "INSERT INTO memories (content, content_hash, level, agent_name, category, subject, occurred_at, created_at, updated_at, invalid_at, memory_status, metadata) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("过期候选记忆内容足够长用于测试维护任务归档状态按规则更新。", "h_maint_2", "L4", "t", "general",
+             "expired", _now(), _now(), _now(), "2020-01-01T00:00:00Z", "ACTIVE", "{}"),
         )
         c.commit()
-        # run one pass
-        res = m.run_maintenance(actions=["conflict_review"], dry_run=False)
-        assert res["ok"] is True and res["total_marked"] >= 1, res
-        # content untouched, metadata marker added, still readable
+
+        r1 = m.run_maintenance(actions=["conflict_review"], dry_run=False)
+        assert r1["ok"] is True and r1["total_marked"] == 1, r1
         row = c.execute("SELECT content, metadata, memory_status FROM memories WHERE content_hash='h_maint_1'").fetchone()
-        assert row[0].startswith("冲突复核候选")
+        assert row[0].startswith("冲突复核候选")  # content untouched (non-destructive)
         meta = json.loads(row[1])
-        assert meta.get("cognitive_maintenance")
-        assert meta["cognitive_maintenance"][-1]["source_pipeline"] == "cognitive.loop.maintenance"
-        # audit log appended with before-snapshot
-        au = m.read_audit(limit=20)
+        assert meta.get("cognitive_maintenance")[-1]["source_pipeline"] == "cognitive.loop.maintenance"
+        assert meta["resolve"]["status"] == "REVIEW", meta  # BY RULE
+
+        r2 = m.run_maintenance(actions=["expire"], dry_run=False)
+        assert r2["ok"] is True and r2["total_marked"] == 1, r2
+        row2 = c.execute("SELECT memory_status FROM memories WHERE content_hash='h_maint_2'").fetchone()
+        assert row2[0] == "archived", row2  # BY RULE, not deleted
+
+        # audit log appended with before-snapshot + rules_applied
+        au = m.read_audit(limit=30)
         marks = [e for e in au["entries"] if e.get("action") == "conflict_review"]
         assert marks and marks[0].get("before", {}).get("id")
-        # rollback restores exact prior metadata/status
-        before = marks[0]["before"]
+        assert marks[0].get("after", {}).get("id")
+
+        # rollback restores the EXACT prior resolve.status (distinct value).
         rb = m.rollback_from_audit(marks[0])
         assert rb["ok"] is True
-        row2 = c.execute("SELECT metadata, memory_status FROM memories WHERE content_hash='h_maint_1'").fetchone()
-        assert row2[0] == before.get("metadata") or json.loads(row2[0]) == {}
+        row3 = c.execute("SELECT metadata, memory_status FROM memories WHERE content_hash='h_maint_1'").fetchone()
+        meta3 = json.loads(row3[0])
+        assert meta3["resolve"]["status"] == "ACCEPTED", meta3  # restored
+        assert "cognitive_maintenance" not in meta3  # marker rolled back too
+        assert row3[1] == "CONFLICT"  # memory_status restored
+
+        # archived row still exists (no silent physical deletion)
+        exists = c.execute("SELECT COUNT(*) FROM memories WHERE content_hash='h_maint_2'").fetchone()[0]
+        assert exists == 1
         c.close()
         # archive anchor is append-only and non-deleting
         ar = m.archive_session("S-arch-1", payload={"note": "test"}, agent_name="t")
-        assert ar["ok"] is True
-        assert os.path.exists(ar["path"])
+        assert ar["ok"] is True and os.path.exists(ar["path"])
         print("PASS: test_p4_maintenance_run_is_non_destructive_audited_and_rollbackable")
     finally:
         _reset()
@@ -374,4 +470,110 @@ def test_p4_include_archived_capability_is_present():
         assert r1 and len(r1) >= 1
         print("PASS: test_p4_include_archived_capability_is_present")
     finally:
+        cleanup_temp_db(db, orig)
+
+
+# ── Independent-review regressions: config switch must NOT change recall ──
+
+def _seed_identity(c, viewer="viewer1"):
+    try:
+        c.execute("INSERT OR REPLACE INTO identities (agent_name, agent_type, trusted_by) VALUES (?,?,?)",
+                  (viewer, "human", ""))
+        c.commit()
+    except Exception:
+        pass
+
+
+def test_p3_config_only_switch_never_changes_recall_set():
+    """Review finding: config ON made an fts5 recall of 2 rows become 0
+    because viewer identity was used as an author content filter. The master
+    switch must affect ORDERING only, never the recall set.
+    """
+    db, orig = init_temp_db()
+    try:
+        from memall.core.db import get_conn
+        from memall.core.models import MemoryInput
+        from memall.core.thin_waist import capture, unified_search
+        from memall.search.enhancements import record_interaction
+        c = get_conn()
+        mids = []
+        for txt in [
+            "PostgreSQL database configuration decision content long enough to pass gate checks properly",
+            "PostgreSQL replication configuration decision content long enough to pass gate checks properly",
+        ]:
+            mids.append(int(capture(MemoryInput(
+                content=txt, level="L4", category="general",
+                agent_name="author1", visibility="public", project="p"))))
+        _seed_identity(c, "viewer1")
+        for _ in range(4):
+            record_interaction(c, query="PostgreSQL", memory_id=mids[0],
+                               action="click", agent_name="viewer1")
+        c.close()
+
+        base = {"query": "PostgreSQL", "mode": "fts5", "agent_name": "viewer1"}
+        _reset()
+        off = json.loads(unified_search(dict(base)))
+        n_off = len(off.get("results") or [])
+        _cfg_set("quality.utility.tracking_enabled", True)
+        on = json.loads(unified_search(dict(base)))
+        n_on = len(on.get("results") or [])
+        assert n_off == 2 and n_on == 2, \
+            f"config must not change recall: off={n_off} on={n_on}"
+        assert any("utility_rerank_signal" in r for r in on.get("results") or [])
+        # Explicit author filter still works under config ON.
+        filt = json.loads(unified_search({**base, "agent_name_filter": "author1"}))
+        assert len(filt.get("results") or []) == 2
+        print("PASS: test_p3_config_only_switch_never_changes_recall_set")
+    finally:
+        _reset()
+        cleanup_temp_db(db, orig)
+
+
+def test_p3_handle_retrieve_config_only_recall_and_per_result_signals():
+    """Review finding: handle_retrieve dropped recall under config ON and
+    lacked per-result utility signals. Both paths (plain + enhanced) must
+    return the SAME recall set, and enhanced results must carry signals.
+    """
+    db, orig = init_temp_db()
+    try:
+        from memall.core.db import get_conn
+        from memall.core.models import MemoryInput
+        from memall.core.thin_waist import capture
+        from memall.mcp.tools.retrieve import handle_retrieve
+        from memall.search.enhancements import record_interaction
+        c = get_conn()
+        mids = []
+        for txt in [
+            "PostgreSQL database configuration decision content long enough to pass gate checks properly",
+            "PostgreSQL replication configuration decision content long enough to pass gate checks properly",
+        ]:
+            mids.append(int(capture(MemoryInput(
+                content=txt, level="L4", category="general",
+                agent_name="author1", visibility="public", project="p"))))
+        _seed_identity(c, "viewer1")
+        for _ in range(4):
+            record_interaction(c, query="PostgreSQL", memory_id=mids[0],
+                               action="click", agent_name="viewer1")
+        c.close()
+        args = {"query": "PostgreSQL", "agent_name": "viewer1"}
+
+        def recall(raw):
+            o = json.loads(raw)
+            if isinstance(o, list):
+                return len(o), any("utility_rerank_signal" in r for r in o)
+            rs = o.get("results") or []
+            return len(rs), any("utility_rerank_signal" in r for r in rs)
+
+        _reset()
+        n_off, _ = recall(handle_retrieve(dict(args)))
+        _cfg_set("quality.utility.tracking_enabled", True)
+        n_on, has_sig = recall(handle_retrieve(dict(args)))
+        assert n_off == 2 and n_on == 2, f"recall changed: off={n_off} on={n_on}"
+        assert has_sig is True, "enhanced handle_retrieve must carry per-result utility signals"
+        _cfg_set("quality.utility.tracking_enabled", False)
+        n_back, _ = recall(handle_retrieve(dict(args)))
+        assert n_back == 2
+        print("PASS: test_p3_handle_retrieve_config_only_recall_and_per_result_signals")
+    finally:
+        _reset()
         cleanup_temp_db(db, orig)

@@ -175,3 +175,15 @@
 
 - [x] 「按蓝图补齐」轮次已落地本地 commit `3ee3372`（21 files，未 push）；提交态自洽校验通过。
 - [ ] `thin_waist.py.bak_phase1` 仍为唯一未跟踪项，待决策删除/归档（不纳入任何提交）。
+
+## 独立审查复核轮次（2026-11-10，用户质疑后，未提交）
+- [x] 诚实承认：此前多轮**未做独立代码审查**；P3/P4 两条 ADR 验收句实际未通过（非「已知偏差」）。
+- [x] 修 P3 验收（config 主开关）、P4 验收（按规则更新 resolve.status/memory_status）。
+- [x] 修独立审查报的【严重】召回回归（viewer 身份被当作者过滤）、老库补列静默失败、SQL OR/AND 括号、per-result 信号缺失。
+- [x] 修 2 个假通过断言 + 新增 3 个回归测试；`tests/test_blueprint_completion.py` 15 passed。
+- [x] 全量 613 passed/2 skipped/0 failed/0 errors。
+- [ ] 两个独立审查 subagent 均未完整收尾（其中一个报出严重回归后中断）；若需正式「通过代码审查」结论，需重跑一个完整收尾的独立审查。
+- [ ] 本轮修复待落地本地 commit（不 push）。
+- [ ] `thin_waist.py.bak_phase1` 仍为唯一未跟踪项，待决策删除/归档。
+
+- [x] 独立审查复核 + 验收修复轮次已落地本地 commit `dc4d847`（13 files，未 push）；提交态自洽校验通过。

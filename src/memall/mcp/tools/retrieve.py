@@ -59,6 +59,15 @@ def _split_facet_fields(arguments: dict):
 def _wants_enhancements(arguments: dict) -> bool:
     if _split_facet_fields(arguments):
         return True
+    # ADR 0028 P3: tracking_enabled is a master switch; when on, retrieval
+    # must route through the utility-aware enhancement layer even with no
+    # per-call flag.
+    try:
+        from memall.core.thin_waist import _utility_tracking_active
+        if _utility_tracking_active():
+            return True
+    except Exception:
+        pass
     return any(bool(arguments.get(f)) for f in _ENHANCE_FLAGS)
 
 
@@ -139,20 +148,51 @@ def handle_retrieve(arguments: dict) -> str:
         # Route through the enhancement layer; drop routing-only keys.
         args = dict(arguments)
         args["facet_fields"] = _split_facet_fields(args)
+        # `agent_name` on the MCP retrieve surface is the session VIEWER, not
+        # an author content filter. Two coupled fixes (independent-review
+        # regression: config-only utility tracking made recall drop to 0):
+        #  1) set viewer from agent_name when the caller gave no explicit
+        #     viewer, so trust filtering uses the real identity;
+        #  2) mark agent_name as identity so enhanced_search never narrows
+        #     recall to "memories written by the viewer".
+        # An explicit agent_name_filter still wins as an author filter.
+        if not args.get("viewer") and args.get("agent_name"):
+            args["viewer"] = args["agent_name"]
+        args.setdefault("viewer_is_identity", True)
         result = enhanced_search(**args)
-        items = [{
-            "id": m.id, "content": m.content, "category": m.category,
-            "level": m.level, "owner": m.owner, "agent_name": m.agent_name,
-            "subject": m.subject, "occurred_at": m.occurred_at,
-            **_cognitive_fields(m),
-        } for m in result["results"]]
+        items = []
+        for m in result["results"]:
+            item = {
+                "id": m.id, "content": m.content, "category": m.category,
+                "level": m.level, "owner": m.owner, "agent_name": m.agent_name,
+                "subject": m.subject, "occurred_at": m.occurred_at,
+                **_cognitive_fields(m),
+            }
+            # ADR 0028 P3: surface per-result utility signals (parity with
+            # unified_search fts5 payload, not just the top-level map).
+            for k in ("utility_rerank_signal", "utility_rerank_score"):
+                v = getattr(m, k, None)
+                if v is not None:
+                    item[k] = v
+            items.append(item)
         payload = {"results": items, "total": result.get("total", len(items))}
         for key in ("facets", "suggestions", "clusters", "explanations", "expanded_query", "continuity", "utility_rerank_signals"):
             if key in result:
                 payload[key] = result[key]
         return json.dumps(payload, ensure_ascii=False)
 
-    result = retrieve(**arguments)
+    # Plain (no enhancement) path: keep identity semantics consistent with
+    # the enhancement path above. On the MCP retrieve surface `agent_name` is
+    # the session VIEWER; only an explicit `agent_name_filter` is an author
+    # content filter. Without this, a human viewer reading public memories
+    # written by someone else got 0 rows (and toggling the utility config
+    # would silently change the recall set).
+    plain_args = dict(arguments)
+    if "agent_name_filter" not in plain_args or plain_args.get("agent_name_filter") is None:
+        _viewer = plain_args.pop("agent_name", None) or plain_args.get("viewer") or None
+        if _viewer:
+            plain_args["viewer"] = _viewer
+    result = retrieve(**plain_args)
     if result is None:
         return json.dumps({"status": "not_found"})
     if isinstance(result, list):

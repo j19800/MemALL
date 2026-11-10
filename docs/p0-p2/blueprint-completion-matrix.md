@@ -1,10 +1,12 @@
 # ADR 0028 蓝图逐条完成度对照表
 
-> **文档状态**：现行（2026-11-10，「按蓝图补齐」轮次后）。逐条对照 `ADR/0028-memory-cognitive-loop-implementation-plan.md` §2 的**字面改动表**，不再按阶段目标粗估。
-> 关联验收：`tests/test_blueprint_completion.py`（12 passed）。
+> **文档状态**：现行（2026-11-10，「按蓝图补齐」+ 用户质疑后的独立审查复核轮次）。逐条对照 `ADR/0028-memory-cognitive-loop-implementation-plan.md` §2 的**字面改动表**，不再按阶段目标粗估。
+> 关联验收：`tests/test_blueprint_completion.py`（复核后 15 passed）；**验收与审查全过程见 [acceptance-review-status.md](acceptance-review-status.md)**。
 
 ## 结论
-**蓝图 §2 的每一条字面改动现已全部实现**（P4 亦不再 deferred，而是以 opt-in / 非破坏性方式落地）。所有新增能力一律 **default-off / config-gated / additive / non-destructive**，不改变既有默认行为。
+**蓝图 §2 的每一条字面改动现已全部实现**，且经「逐条实测 ADR 5 条验收句」确认 P0/P1/P2/P3/P4 均通过（P3/P4 在复核轮次中从「未通过」修复为通过）。所有新增能力一律 **default-off / config-gated / additive / non-destructive**，不改变既有默认行为；config 开关只影响排序/状态，不改变召回集合。
+
+> 诚实提示：本结论是在**补做独立审查复核、修掉 5 个真实缺陷（含 1 个【严重】召回回归）之后**才成立的。复核前的 `f1af71b` 版本**不符合** P3/P4 验收句，详见 `acceptance-review-status.md`。两个独立审查 agent 均未完整收尾，故不宣称「已通过完整独立代码审查」，只宣称「其报出的问题已复现/修复/写成回归测试 + 主 agent 逐项实测其余清单」。
 
 ## P0（5/5，早已完成）
 | 蓝图表条目 | 状态 | 证据 |
@@ -58,6 +60,12 @@
 | `mcp/tools/` `handle_maintenance` 或 `mode=audit` 暴露 conflicts/history/evidence | ✅ 本轮 | `memall_system action=maintenance`（run/status/audit/archive/rollback）+ `handle_retrieve(mode=audit)` 只读审计面 |
 | ADR 声明所有自动动作：快照/回滚可选、可审计日志、默认保留原始条目 | ✅ 本轮 | `_append_audit` JSONL（含 `before` 快照）、`rollback_from_audit()`；所有 pass 仅打 metadata 标记 / 置 `memory_status='archived'`，**不删行、不改 content** |
 | **验收**：维护跑完 `metadata.resolve.status`/`memory_status` 按规则更新；归档在 `ADR/archived_sessions/`；`include_archived=True` 显式可读；无静默删除 | ✅ 本轮 | `test_p4_maintenance_run_is_non_destructive_audited_and_rollbackable` + `test_p4_include_archived_capability_is_present`（复用既有 `include_archived` 语义） |
+
+## 复核轮次补记（2026-11-10）
+- P3 验收句曾未通过（config 非主开关）→ 已修；P4 验收句曾未通过（状态字段未按规则更新）→ 已修。
+- 独立审查报出【严重】配置开关改变召回集合（viewer 身份被当作者过滤）→ 已修 + 2 个回归测试。
+- 老库补列静默失败、SQL OR/AND 括号、per-result 信号、2 个假通过断言 → 已修。
+- 详见 `acceptance-review-status.md`。
 
 ## 已知偏差（诚实登记，非欠账）
 1. **P3 配置键前缀**：蓝图写 `utility.*`（顶层），实现用 `quality.utility.*`。`tracking_enabled` 验收键按蓝图字面保留；若需严格顶层键，可加别名（低风险，留作可选）。

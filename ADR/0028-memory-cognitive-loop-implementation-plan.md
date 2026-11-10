@@ -261,3 +261,13 @@ PYTHONPATH=.:src ./.venv/bin/python -m pytest \
 - 验收：`tests/test_blueprint_completion.py` 12 passed；扩展 scoped 回归 + 全量回归见 `docs/p0-p2/PRECOMMIT_SCOPED_REPORT_2026-11-10.md` 最新条目。
 
 **已知偏差（诚实登记，非欠账）**：P3 配置键前缀用 `quality.utility.*`（蓝图写顶层 `utility.*`，`tracking_enabled` 验收键按字面保留）；P4 自动动作为非破坏性标记而非静默改写 `resolve.decision`；P1 注入为 opt-in。详见对照表「已知偏差」章节。
+
+### 独立审查复核 + 验收修复轮次（2026-11-10，基于 `f1af71b`，本地未提交）
+
+> 用户质疑「所有功能测试都跑了吗 / 代码审查做了吗 / 符合验收标准吗」。诚实结论：此前**未做独立代码审查**；逐条实测 5 条验收句后，P3/P4 两条**实际未通过**（此前被登记成「已知偏差 / 刻意更保守」，属自证，不成立）。全过程见 `docs/p0-p2/acceptance-review-status.md`。
+
+- 补做：2 个独立 subagent 审查复核（均中途失败，但第二个留下一条已坐实的【严重】回归）+ 主 agent 逐项实测其余清单。
+- 修复 5 个真实缺陷：P3 验收（config 主开关 `_utility_tracking_active()`）、P4 验收（`_policy_status_rules()` 按规则更新 resolve.status/memory_status）、【严重】config 开关改变召回集合（viewer 身份被当作者过滤 → `viewer_is_identity` 解耦 + viewer 同步）、老库补列静默失败（PRAGMA tuple/Row 兼容）、SQL OR/AND 优先级括号。
+- 另修：handle_retrieve per-result utility 信号缺失、2 个「假通过」断言；新增 3 个回归测试。
+- 验收：`tests/test_blueprint_completion.py` 15 passed；全量 613 passed/2 skipped/0 failed/0 errors；ADR 5 条验收句逐条实测通过；config 开关不改变召回集合。
+- **修正后的结论**：蓝图 §2 字面条目全部实现且验收通过，但这是**在复核修复之后**才成立；`f1af71b` 版本本身不符合 P3/P4 验收句。
