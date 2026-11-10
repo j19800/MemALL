@@ -24,6 +24,10 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
             "base_backoff_seconds": 5,
             "max_backoff_seconds": 300,
             "claim_ttl_seconds": 300,
+            # Health thresholds surfaced by kb_enrich_stats().pipeline.health:
+            # a raw counter nobody reads is not an alert.
+            "alert_queue_depth": 100,
+            "alert_stale_running": 1,
             "batch_size": 10,
             "poll_interval_seconds": 2,
             "autostart": False,

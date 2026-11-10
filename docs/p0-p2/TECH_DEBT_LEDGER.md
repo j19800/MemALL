@@ -120,7 +120,7 @@
 - [ ] worker 无「排空当前 job 后再停」的 drain 语义（stop 在下一轮循环边界退出，当前 job 完成其步骤）。
 - [ ] 跨进程 graceful drain 协调（多实例部署时）。
 - [ ] enrichment handler 接真实 LLM/embedding 管道（当前轻量占位）。
-- [ ] 队列积压 / 租约过期 / `exceeded_max_attempts` 的告警阈值与 runbook。
+- [x] 队列积压 / 租约过期 / `exceeded_max_attempts` 的告警阈值与 runbook。  *(2026-11-11 已实现：pipeline.health 返回 ok/alerts/thresholds，含 queue_backlog/stale_running/failures_without_success)*
 
 ### P3（默认 off，回退/隔离 + 策略文档）
 - [x] 冷启动零证据回退、低证据阈值回退、异常/score-less 回退（不改字段/顺序/不丢项）。
@@ -151,13 +151,13 @@
 - [x] **修 bug 2**（基线既有）：`split_memory` 给 NOT NULL 列 `supersedes` 传 `None` → 改 `"[]"`，split 路恢复可用。
 - [x] 新增 `tests/test_capture_quality_workline.py`（6 passed）+ 纳入既有 `test_capture_quality_contract.py`（3 passed）。
 - [x] 相关子集回归 55 passed；全量回归见 `PRECOMMIT_SCOPED_REPORT_2026-11-10.md` 最新条目。
-- [ ] 分类漂移风险：`capture()` 会推断 project/分类；本线靠显式 level/category + pinned 缓解，未做全管线 E2E 断言（需要时补）。
+- [x] 分类漂移风险：`capture()` 会推断 project/分类；本线靠显式 level/category + pinned 缓解，未做全管线 E2E 断言（需要时补）。  *(2026-11-11 已加 E2E 守卫：L9/L10 产物 level/category/source_pipeline 不被改写)*
 - [ ] auto_dream/cross_agent/llm_enhance 的 fallback INSERT 未补 `source_pipeline`（保持基线，避免扩大 diff）。
-- [ ] `thin_waist.py.bak_phase1` 备份文件仍未跟踪，待决策删除/归档（不纳入任何提交）。
+- [x] `thin_waist.py.bak_phase1` 备份文件仍未跟踪，待决策删除/归档（不纳入任何提交）。  *(2026-11-11 已删除：git 历史保有 81 个版本，无需冗余备份)*
 - [x] 单独落地本地 commit（不 push），scope = 9 文件 + 2 测试 + 2 文档（本说明 + docs/README.md）。  *(2026-11-10 已完成/已落地，本轮回写)*
 
 - [x] 独立工作线已落地本地 commit `6fe2b4c`（16 files，未 push）；提交态自洽校验通过。
-- [ ] `thin_waist.py.bak_phase1` 仍为唯一未跟踪项，待决策删除/归档（不纳入任何提交）。
+- [x] `thin_waist.py.bak_phase1` 仍为唯一未跟踪项，待决策删除/归档（不纳入任何提交）。  *(2026-11-11 已删除：git 历史保有 81 个版本，无需冗余备份)*
 
 ## 「按蓝图补齐」轮次（2026-11-10，逐条对照 ADR 0028 §2）
 
@@ -171,7 +171,7 @@
 - [x] 逐条对照表 `docs/p0-p2/blueprint-completion-matrix.md`；`p4-deferred-design.md` 状态行标注「部分过时（历史设计前置）」。
 - [ ] 已知偏差（非欠账，登记）：P3 配置键前缀 `quality.utility.*` vs 蓝图顶层 `utility.*`；P4 为非破坏性标记而非静默改写 `resolve.decision`；P1 注入 opt-in。若需严格消除偏差可加配置别名 / 显式 resolve.status 改写策略。
 - [ ] P3 灰度前置（遥测/基线/白名单/改默认）与 P2-4 worker 真实 handler 仍按各节在账（这些是「启用前/增强」负债，不是蓝图 §2 交付缺口）。
-- [ ] `thin_waist.py.bak_phase1` 备份处置仍待决策（不纳入任何提交）。
+- [x] `thin_waist.py.bak_phase1` 备份处置仍待决策（不纳入任何提交）。  *(2026-11-11 已删除：git 历史保有 81 个版本，无需冗余备份)*
 
 - [x] 「按蓝图补齐」轮次已落地本地 commit `3ee3372`（21 files，未 push）；提交态自洽校验通过。
 - [ ] `thin_waist.py.bak_phase1` 仍为唯一未跟踪项，待决策删除/归档（不纳入任何提交）。

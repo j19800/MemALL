@@ -199,3 +199,52 @@ def test_utility_window_uses_real_time_math():
         print("PASS: test_utility_window_uses_real_time_math")
     finally:
         cleanup_temp_db(db, orig)
+
+
+def test_worker_stats_expose_actionable_health():
+    """Raw queue counters are not an alert; stats must give a verdict."""
+    db, orig = init_temp_db()
+    try:
+        from memall.pipeline.kb_enrich import kb_enrich_stats
+        s = kb_enrich_stats()
+        pipe = s.get("pipeline") or {}
+        health = pipe.get("health")
+        assert health is not None, f"stats must expose health: {sorted(pipe)}"
+        assert health["ok"] is True, health
+        assert health["alerts"] == [], health
+        assert "alert_queue_depth" in health["thresholds"], health
+        print("PASS: test_worker_stats_expose_actionable_health")
+    finally:
+        cleanup_temp_db(db, orig)
+
+
+def test_worker_health_flags_backlog():
+    """A queue over the threshold must surface as a named alert."""
+    db, orig = init_temp_db()
+    try:
+        import memall.config as cfg
+        from memall.core.db import get_conn
+        from memall.pipeline.kb_enrich import kb_enrich_stats, _ensure_pipeline_jobs_schema
+        cfg.get_config()
+        cfg._config.setdefault("kb", {}).setdefault("enrich_worker", {})
+        cfg._config["kb"]["enrich_worker"]["alert_queue_depth"] = 1
+        cfg._last_mtime_check = float("inf")
+
+        c = get_conn()
+        _ensure_pipeline_jobs_schema(c)
+        for i in range(3):
+            c.execute("INSERT INTO pipeline_jobs (created_at,kind,doc_id,chunk_hash,doc_version,"
+                      "chunk_index,status,attempts) VALUES (?,?,?,?,?,?,?,?)",
+                      ("2026-01-01T00:00:00Z", "kb_enrich", f"d{i}", f"h{i}", "1", i, "queued", 0))
+        c.commit()
+        c.close()
+
+        health = (kb_enrich_stats().get("pipeline") or {}).get("health") or {}
+        codes = [a["code"] for a in health.get("alerts", [])]
+        assert "queue_backlog" in codes, health
+        assert health["ok"] is False, health
+        print("PASS: test_worker_health_flags_backlog")
+    finally:
+        from memall.config import reset_config
+        reset_config()
+        cleanup_temp_db(db, orig)

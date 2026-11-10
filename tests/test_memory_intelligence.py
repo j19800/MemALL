@@ -292,3 +292,39 @@ def test_include_review_survives_the_mcp_search_whitelist():
         print("PASS: test_include_review_survives_the_mcp_search_whitelist")
     finally:
         cleanup_temp_db(db, orig)
+
+
+def test_pipeline_artifacts_are_not_reclassified():
+    """capture() infers level/category for user input, but must NOT rewrite a
+    pipeline artifact's deliberate level/category (L9 pattern / L10 knowledge).
+
+    This is the 'classification drift' risk on the record: inference is helpful
+    for a bare capture and destructive for a distillation step whose producer
+    chose the layer on purpose.
+    """
+    db, orig = init_temp_db()
+    try:
+        from memall.core.db import get_conn
+        from memall.core.models import MemoryInput
+        from memall.core.thin_waist import capture
+
+        cases = [
+            ("L9", "pattern", "auto_dream.pattern"),
+            ("L10", "knowledge", "cross_agent.integrate"),
+        ]
+        for level, category, spine in cases:
+            mid = int(capture(MemoryInput(
+                content=f"管线产物 {level} 内容需要足够长以通过质量门禁校验流程验证。",
+                level=level, category=category, agent_name="system",
+                metadata={"source_pipeline": spine, "ingest_mode": "auto"})))
+            c = get_conn()
+            r = c.execute("SELECT level, category, metadata FROM memories WHERE id=?",
+                          (mid,)).fetchone()
+            c.close()
+            assert r["level"] == level, f"{level} was rewritten to {r['level']}"
+            assert r["category"] == category, f"{category} was rewritten to {r['category']}"
+            meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else {}
+            assert meta.get("source_pipeline") == spine, meta.get("source_pipeline")
+        print("PASS: test_pipeline_artifacts_are_not_reclassified")
+    finally:
+        cleanup_temp_db(db, orig)

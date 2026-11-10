@@ -88,6 +88,40 @@ def kb_enrich_stats() -> dict[str, Any]:
                            LIMIT 3"""
                     ).fetchall()
                     result["pipeline"]["recent_errors"] = [r[0] for r in recent if r[0]]
+                # Actionable health signal: raw counters require a human to
+                # interpret them, so a backlog or a stuck lease went unnoticed.
+                # Surface a verdict plus the thresholds that produced it.
+                try:
+                    from memall.config import get_config as _gc
+                    _max_depth = int(_gc("kb.enrich_worker.alert_queue_depth", 100) or 100)
+                    _max_stale = int(_gc("kb.enrich_worker.alert_stale_running", 1) or 1)
+                    _alerts = []
+                    if result["pipeline"]["queue_depth"] > _max_depth:
+                        _alerts.append({
+                            "code": "queue_backlog",
+                            "detail": f"queue_depth={result['pipeline']['queue_depth']} > {_max_depth}",
+                        })
+                    _stale = int(rows[5] or 0) if len(rows) > 5 else 0
+                    if _stale > _max_stale:
+                        _alerts.append({
+                            "code": "stale_running",
+                            "detail": f"{_stale} job(s) held past claim_ttl",
+                        })
+                    if int(rows[4] or 0) and not (result["pipeline"].get("last_completed_at")):
+                        _alerts.append({
+                            "code": "failures_without_success",
+                            "detail": f"failed={rows[4]} and never completed",
+                        })
+                    result["pipeline"]["health"] = {
+                        "ok": not _alerts,
+                        "alerts": _alerts,
+                        "thresholds": {
+                            "alert_queue_depth": _max_depth,
+                            "alert_stale_running": _max_stale,
+                        },
+                    }
+                except Exception:
+                    pass
         finally:
             conn.close()
     except Exception:
