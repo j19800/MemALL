@@ -922,6 +922,22 @@ class DigestInput(BaseModel):
     model_config = {"extra": "ignore"}
 
 
+class KBEnrichActionInput(BaseModel):
+    """memall_system kb_enrich_stats / kb_reprocess / kb_enrich_stop.
+
+    Stats/stop take no required params; reprocess accepts optional filters
+    (doc_id/failed_only/all/process_budget). Declare them so
+    validate_tool_input(exclude_unset=True) does NOT strip routing/filter
+    fields before the handler runs. Extra keys are ignored (Pydantic v2).
+    """
+    model_config = {"extra": "ignore"}
+    doc_id: Optional[str] = Field(None, max_length=500)
+    failed_only: Optional[bool] = None
+    all: Optional[bool] = None
+    process_budget: Optional[int] = Field(None, ge=1, le=500)
+    timeout_seconds: Optional[float] = Field(None, ge=0, le=60)
+
+
 # ── Hooks ──
 
 

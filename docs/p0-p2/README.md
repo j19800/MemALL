@@ -12,6 +12,9 @@
 | [p0-resolve-exposure.md](p0-resolve-exposure.md) | P0：测试基线 + resolve/validity 增量暴露 |
 | [p1-continuity-contract.md](p1-continuity-contract.md) | P1：Continuity Pack、session/recap KB 排除、MCP 契约 |
 | [p2-kb-boundary-hardening.md](p2-kb-boundary-hardening.md) | P2：`kb_policy` 权威、KB 边界硬化、异步 enrich 骨架 |
+| [p2-4-worker-deployment.md](p2-4-worker-deployment.md) | P2-4 durable worker 部署/启停/观测/多进程语义（autostart 默认 off） |
+| [p3-utility-rerank-rollout.md](p3-utility-rerank-rollout.md) | P3 冷启动回退、跨 agent 隔离、度量基线/灰度/kill-switch（默认 off 不改） |
+| [p4-deferred-design.md](p4-deferred-design.md) | P4 延迟项的设计前置（canonicalization/conflict review/归档/审计等，仅登记） |
 | [COMMIT_CHECKLIST.md](COMMIT_CHECKLIST.md) | 提交范围、验收命令、排除项、阶段确认 |
 | [TECH_DEBT_LEDGER.md](TECH_DEBT_LEDGER.md) | P2-4 真异步队列、P2-3 收敛、P1 边界测试、P3 保守闭环债务 |
 | [PRECOMMIT_SCOPED_REPORT_2026-11-10.md](PRECOMMIT_SCOPED_REPORT_2026-11-10.md) | 各轮 scoped regression 实际结果（最新 70 passed） |

@@ -115,3 +115,27 @@ PYTHONPATH=.:src ./.venv/bin/python -m pytest \
 - 提交态自洽校验：`git write-tree` 导出 482 文件 → 关键模块全可导入、validator 识别 ADR0028 actions、排除项未混入。
 - 提交后工作区仅剩 9 个独立工作线文件 + `thin_waist.py.bak_phase1` + `test_capture_quality_contract.py`（均未暂存，留待后续单独评估/提交）。
 - 验收：ADR0028 scoped 70 passed；全量 578 passed（3 个 pre-existing 竞态，隔离复跑通过）；py_compile OK。
+
+## 从检查点继续推进（2026-11-10，基于 `8aa68cc`，本轮待提交）
+
+### 本轮新增 scope（在 `8aa68cc` 之上）
+- 代码：`src/memall/pipeline/kb_enrich.py`（worker stop/status/Event 循环）、`src/memall/mcp/tools/__init__.py`（`kb_enrich_stop`）、`src/memall/mcp/models.py`（`KBEnrichActionInput`）、`src/memall/mcp/validator.py`（登记 3 个 kb action）。
+- 测试：`tests/test_kb_ingest_p2_expanded.py`（+3）、`tests/test_kb_enrich_worker_p2.py`（+4）、`tests/test_utility_rerank_p3.py`（+4）。
+- 文档：新建 `p2-4-worker-deployment.md` / `p3-utility-rerank-rollout.md` / `p4-deferred-design.md`；更新 `README.md`(p0-p2) / `CHANGELOG_TRACKING.md` / `TECH_DEBT_LEDGER.md` / `PRECOMMIT_SCOPED_REPORT_2026-11-10.md` / `TRANSFORMATION_DOC.md` / `p1-continuity-contract.md` / `p2-kb-boundary-hardening.md` / ADR 0028。
+
+### 验收
+- 定向：P1 3 passed、P2-4 20 passed、P3 10 passed；py_compile OK。
+- Scoped（9 文件）-> **81 passed in 73.52s**。
+- 全量：见报告最新条目。
+
+### 提交门禁（仍不 push）
+- [ ] `git diff --name-only` / `git status --short` 复核：只暂存上述 ADR0028 主线文件。
+- [ ] 排除 9 个独立工作线文件（`gateway_sync.py`、`mcp/tools/capture.py`、`pipeline/{auto_dream,cross_agent,lifecycle,llm_enhance,observe,ops,reflect}.py`）、`thin_waist.py.bak_phase1`、`test_capture_quality_contract.py`。
+- [ ] 提交态（`git write-tree` 导出）导入/validator 自洽校验。
+- [ ] 本地 commit（沿用 `DeepSeek Harness <noreply@deepseek-harness.local>`），**不 push**。
+
+## ✅ 本轮已落地提交（2026-11-10）
+- **commit `c841c2f`**（本地，未 push）：19 files, 797+/6-。
+- 提交集 = 本轮 19 个 ADR0028 主线文件；9 个独立工作线文件 + `bak_phase1` + `test_capture_quality_contract.py` 保留在工作区未暂存。
+- 提交态自洽：`git write-tree` 导出 485 文件，关键模块/validator/MCP 链通过，排除项未混入。
+- 验收：定向 P1 3 / P2-4 20 / P3 10；scoped 81 passed；全量 592 passed/2 skipped/0 failed/0 errors。

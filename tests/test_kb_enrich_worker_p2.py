@@ -436,3 +436,132 @@ def test_reprocess_budget_is_bounded_and_clamped():
         assert r2.get("trigger_mode") == "bounded_once"
     finally:
         cleanup_temp_db(db_path, orig)
+
+
+# ── True multi-process contention (spawn independent OS processes) ──
+
+def _mp_claim_worker(db_path, barrier, out_q, idx):
+    """Child process: open its OWN sqlite connection and try to claim one job."""
+    import sqlite3 as _s
+    from memall.pipeline.kb_enrich import _claim_job, _ensure_pipeline_jobs_schema
+    try:
+        conn = _s.connect(str(db_path), timeout=30)
+        conn.row_factory = _s.Row
+        _ensure_pipeline_jobs_schema(conn)
+        barrier.wait()  # release all children at once -> real contention
+        jid = _claim_job(conn)
+        out_q.put((idx, jid))
+        conn.close()
+    except Exception as e:
+        out_q.put((idx, ("error", str(e)[:120])))
+
+
+def test_claim_cas_true_multiprocess_single_winner():
+    """True multi-process: N spawned processes race one queued row; CAS yields exactly 1 winner, no double-claim."""
+    import multiprocessing as mp
+    db_path, orig = init_temp_db()
+    try:
+        from memall.core.db import get_conn
+        from memall.pipeline.kb_enrich import _ensure_pipeline_jobs_schema
+        # Seed one queued job via a normal pooled connection (schema ready).
+        c = get_conn()
+        _ensure_pipeline_jobs_schema(c)
+        c.execute(
+            "INSERT INTO pipeline_jobs (created_at,kind,doc_id,chunk_hash,doc_version,chunk_index,status,attempts,next_retry_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            ("2026-01-01T00:00:00Z", "kb_enrich", "d-mp", "hmp", "1", 0, "queued", 0, None),
+        )
+        c.commit()
+        c.close()
+
+        n = 4
+        ctx = mp.get_context("spawn")
+        barrier = ctx.Barrier(n)
+        out_q = ctx.Queue()
+        procs = [ctx.Process(target=_mp_claim_worker, args=(str(db_path), barrier, out_q, i)) for i in range(n)]
+        for p in procs:
+            p.start()
+        for p in procs:
+            p.join(timeout=30)
+            if p.is_alive():
+                p.terminate()
+        results = []
+        while not out_q.empty():
+            results.append(out_q.get())
+        assert len(results) == n, f"expected {n} child results, got {results}"
+        # No child errored
+        assert all(not (isinstance(r[1], tuple) and r[1][0] == "error") for r in results), results
+        winners = [r for r in results if isinstance(r[1], int) and r[1] is not None]
+        assert len(winners) == 1, f"CAS violation: {len(winners)} winners among {results}"
+        # Exactly one running row for this job
+        assert _pipeline_count(db_path, status="running", doc_id="d-mp") == 1
+        assert _pipeline_count(db_path, status="queued", doc_id="d-mp") == 0
+        print("PASS: test_claim_cas_true_multiprocess_single_winner")
+    finally:
+        cleanup_temp_db(db_path, orig)
+
+
+def test_kb_enrich_worker_status_and_stop_bounded():
+    """Worker lifecycle observability + cooperative stop is bounded and idempotent."""
+    from memall.pipeline.kb_enrich import (
+        kb_enrich_worker_status, stop_kb_enrich_worker, kb_enrich_stats,
+    )
+    # No worker running (autostart default off): status reflects that.
+    st0 = kb_enrich_worker_status()
+    assert st0.get("alive") is False
+    # stop with no worker: bounded, no error, additive shape
+    r = stop_kb_enrich_worker(timeout_seconds=0.5)
+    assert r.get("stop_requested") is True
+    assert r.get("still_alive") is False
+    assert r.get("thread_was_running") is False
+    # idempotent: calling again must not raise
+    r2 = stop_kb_enrich_worker(timeout_seconds=0.5)
+    assert r2.get("stop_requested") is True
+    # stats exposes worker observability (additive)
+    stats = kb_enrich_stats()
+    assert "worker" in stats and isinstance(stats["worker"], dict)
+    assert "stop_requested" in stats["worker"]
+    print("PASS: test_kb_enrich_worker_status_and_stop_bounded")
+
+
+def test_mcp_kb_enrich_actions_validator_registered():
+    """MCP surface: kb_enrich_stats / kb_reprocess / kb_enrich_stop are known to validator (no unknown-action)."""
+    from memall.mcp.validator import validate_tool_input
+    for act in ("kb_enrich_stats", "kb_reprocess", "kb_enrich_stop"):
+        ok, data, err = validate_tool_input("memall_system", {"action": act})
+        assert ok is True, f"{act}: {err}"
+    # filters must survive exclude_unset dump for kb_reprocess
+    ok, data, err = validate_tool_input("memall_system", {
+        "action": "kb_reprocess", "doc_id": "dx", "failed_only": True, "process_budget": 7,
+    })
+    assert ok is True
+    assert data.get("doc_id") == "dx" and data.get("process_budget") == 7
+    print("PASS: test_mcp_kb_enrich_actions_validator_registered")
+
+
+def test_reprocess_idempotent_under_repeated_calls():
+    """Bounded reprocess is idempotent: repeated calls don't duplicate rows or crash (multi-invocation safety)."""
+    db_path, orig = init_temp_db()
+    try:
+        from memall.core.db import get_conn
+        from memall.pipeline.kb_enrich import reprocess_kb_enrich, _ensure_pipeline_jobs_schema
+        c = get_conn()
+        _ensure_pipeline_jobs_schema(c)
+        for i in range(3):
+            c.execute(
+                "INSERT INTO pipeline_jobs (created_at,kind,doc_id,chunk_hash,doc_version,chunk_index,status,attempts,next_retry_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (f"2026-01-01T00:00:0{i}Z", "kb_enrich", "d-idem", f"hi{i}", "1", i, "failed", 3, None),
+            )
+        c.commit()
+        c.close()
+        total_before = _pipeline_count(db_path, doc_id="d-idem")
+        for _ in range(3):
+            res = reprocess_kb_enrich({"doc_id": "d-idem", "failed_only": True, "process_budget": 2})
+            assert res.get("ok") is True
+            assert res.get("trigger_mode") == "bounded_once"
+        # No row duplication from repeated reprocess resets
+        assert _pipeline_count(db_path, doc_id="d-idem") == total_before
+        print("PASS: test_reprocess_idempotent_under_repeated_calls")
+    finally:
+        cleanup_temp_db(db_path, orig)

@@ -44,3 +44,6 @@ PYTHONPATH=.:src ./.venv/bin/python -m pytest tests/test_kb_ingest_p2_expanded.p
 - `test_p1_continuity_pack_recent_supersedes_boundary`：supersession 链与 KB 排除边界。
 - `test_p1_session_start_mcp_kb_exclusion_contract`：MCP `handle_session_start` 返回 `kb_excluded` 且注入面不含 KB 证据。
 `build_continuity_pack` 的 `why_selected.filters` 含 `temporal_validity,kb_excluded` 等。
+
+## 从检查点继续（2026-11-10，未提交）
+新增 3 个剩余边界组合测试：`resolve_status`（REVIEW/PENDING/CONFLICT）× temporal validity 的 `pending_decisions` 门控；`include_conflicts=False` 抑制 CONFLICT/REVIEW `memory_status` 行；`session_start auto_inject` 逐注入桶 KB 排除快照。注意 `conflicts` 桶是紧凑投影（`id/subject/memory_status/slot_key/created_at`），不含 `content`，断言需按其契约。

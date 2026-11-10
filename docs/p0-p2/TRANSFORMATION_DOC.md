@@ -118,3 +118,11 @@ PYTHONPATH=.:src ./.venv/bin/python -m pytest   tests/test_kb_ingest_p2.py tests
 
 ### 最新验收
 扩展 scoped regression（9 个测试文件）-> **70 passed in 65.59s (exit 0)**。详见 `PRECOMMIT_SCOPED_REPORT_2026-11-10.md`。
+
+## 从检查点继续推进（2026-11-10，基于 `8aa68cc`，未提交）
+
+- **P1**：补齐 `resolve_status`×temporal validity 的 `pending_decisions` 边界、`include_conflicts=False` 抑制 CONFLICT/REVIEW 进入 active_state、`session_start`/`auto_inject` 逐桶 KB 排除断言（+3 测试）。
+- **P2-4**：worker 增加协作式 stop（`Event` + 有界 join + 幂等）、`kb_enrich_worker_status()`、`kb_enrich_stats.worker` 观测；MCP `kb_enrich_stop` action；**修复既有缺口**（`kb_enrich_stats`/`kb_reprocess` 在 validator 中原本 unknown，新增 `KBEnrichActionInput` 登记 3 action）；**真多进程** spawn CAS 单赢家测试；reprocess 幂等。部署文档 `p2-4-worker-deployment.md`（autostart 默认 off）。
+- **P3**（默认 off 不改）：冷启动/低证据回退、跨 agent 隔离、权重钳制/永不丢项测试（+4，共 10 passed）；策略文档 `p3-utility-rerank-rollout.md`（度量基线/灰度/Kill-Switch）。
+- **P4**：设计前置文档 `p4-deferred-design.md`（8 项，仅登记不实现）。
+- **验收**：scoped 9 文件 **81 passed**；详见 `PRECOMMIT_SCOPED_REPORT_2026-11-10.md`。

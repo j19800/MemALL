@@ -118,3 +118,44 @@
 - 全量回归：`578 passed, 2 skipped, 1 failed, 2 errors`；3 个问题均为 pre-existing 共享 DB `duplicate column` 竞态（隔离重跑 3 passed，与本次改动无关）。
 - 提交后工作区仅剩：9 个独立工作线文件（未跟踪/未暂存，留待后续单独处理）+ 2 个排除项。
 - **未 push**（按口径仅本地提交）。
+
+### 2026-11-10 从检查点继续全自动推进（基于 commit `8aa68cc` 之上）
+
+> 检查点列出的「下一步建议」中，P1/P2-4/P3 主干已在 `8aa68cc` 完成；本轮补齐其**更深一层空白**，不改任何默认行为。
+
+**P1 剩余边界组合（`tests/test_kb_ingest_p2_expanded.py` +3）**
+- `test_p1_resolve_status_pending_decisions_respects_validity`：`resolve.decision` = REVIEW/PENDING/CONFLICT 且时间有效才进 `pending_decisions`；NOOP/过期/未来均排除。
+- `test_p1_include_conflicts_false_suppresses_review_status_rows`：`include_conflicts=False` 时 CONFLICT/REVIEW `memory_status` 行进不了 `active_state`（`conflicts` 桶为紧凑投影、不含 content，测试按其契约断言）。
+- `test_p1_session_start_auto_inject_per_bucket_kb_exclusion`：逐注入桶断言 KB 证据（`document.import`/`kb_ingest`）不泄漏、provenance 标签一致。
+- 3 passed。
+
+**P2-4 观测/启停/真多进程（改代码 + 测试 + 文档）**
+- `src/memall/pipeline/kb_enrich.py`：
+  - 新增 `_worker_stop` Event、`stop_kb_enrich_worker(timeout_seconds)`（协作式、有界 join、幂等、无 worker 安全返回）、`kb_enrich_worker_status()` 观测快照。
+  - `kb_enrich_worker_loop` 改为 `while not _worker_stop.is_set()` + `Event.wait()` 替代 `sleep()`，空闲时 stop 可立即唤醒；`ensure_...started()` 重启前 `clear()` stop event。
+  - `kb_enrich_stats()` 增加 additive `worker` 块。
+- `src/memall/mcp/tools/__init__.py`：新增 `memall_system` action `kb_enrich_stop`（+ enum + 描述）。
+- `src/memall/mcp/models.py` + `validator.py`：新增 `KBEnrichActionInput` 并登记 `kb_enrich_stats`/`kb_reprocess`/`kb_enrich_stop` —— **修复既有缺口**：前两个 action 之前在 validator 里是 `unknown action`，MCP 层会被挡；filter 字段（`doc_id`/`failed_only`/`process_budget`）也不再被 `exclude_unset` 剥离。
+- `tests/test_kb_enrich_worker_p2.py` +4：
+  - `test_claim_cas_true_multiprocess_single_winner`：**真 `multiprocessing` spawn 4 进程**争抢 1 个 queued 行，CAS 恰好 1 赢家（此前只有同进程双连接）。
+  - `test_kb_enrich_worker_status_and_stop_bounded`、`test_mcp_kb_enrich_actions_validator_registered`、`test_reprocess_idempotent_under_repeated_calls`（有界/幂等/不复制行）。
+  - 全量 20 passed。
+- 新文档 `docs/p0-p2/p2-4-worker-deployment.md`：配置/启用/观测/启停/多进程语义/启用前评估清单（强调 `autostart` 默认 off、handler 仍为占位）。
+
+**P3 冷启动/隔离 + 策略文档（不改默认）**
+- `tests/test_utility_rerank_p3.py` +4（全量 10 passed）：冷启动零证据回退、低证据阈值回退、**跨 agent 隔离**（A 的点击不泄漏给 B）、权重钳制/无 base score/永不丢项。
+- 新文档 `docs/p0-p2/p3-utility-rerank-rollout.md`：回退契约、跨 agent 隔离现状与空身份限制、度量基线表、分阶段灰度、**Kill-Switch**（`search.utility_rerank.enabled=False` 热重载即时回退）、启用前负债。
+- `search.utility_rerank.enabled` 仍为 **False**。
+
+**P4 设计前置（保持 deferred）**
+- 新文档 `docs/p0-p2/p4-deferred-design.md`：8 个延迟项（canonicalization/conflict review/expiry/低效用归档/主题画像/策略自适应/审计/非破坏性归档）的准入条件、前置依赖、不变量；仅登记不实现。
+- `docs/p0-p2/README.md` 索引登记 3 份新文档。
+
+**验收**：见 `PRECOMMIT_SCOPED_REPORT_2026-11-10.md` 最新条目（本轮 scoped 回归 + 全量回归）。
+
+### ✅ 本轮已落地提交（2026-11-10，全自动推进，本地 commit，未 push）
+- **commit `c841c2f`**：`feat(memall): ADR0028 follow-up - P1 boundary combos, P2-4 worker stop/observability/multiprocess CAS, P3 cold-start/isolation`
+- 19 files, 797+/6-。基于 `8aa68cc` 之上；提交态（`git write-tree` 导出 485 文件）自洽校验通过。
+- 提交后工作区仅剩：9 个独立工作线文件 + `thin_waist.py.bak_phase1` + `test_capture_quality_contract.py`（均未暂存）。
+- 验收：scoped 81 passed、全量 592 passed/2 skipped/0 failed、py_compile OK、导入/validator/MCP 链 OK。
+- **未 push**。

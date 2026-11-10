@@ -101,3 +101,42 @@
 - [ ] 9 个 capture-robustness/readability 文件（工作区未提交）仍需单独评估/提交/或明确登记为另一工作线负债。
 - [ ] `thin_waist.py.bak_phase1` 备份与 `test_capture_quality_contract.py` 未跟踪项的处置（保留/删除/归档）待定。
 - [ ] P4 / P3 灰度前项如文首各节所列，仍在账。
+
+## 从检查点继续推进（2026-11-10，基于 `8aa68cc`）
+
+### P1（剩余边界组合，已补齐）
+- [x] `resolve_status` × temporal validity 交叉 → `pending_decisions`（REVIEW/PENDING/CONFLICT）边界。
+- [x] `include_conflicts=False` 抑制 CONFLICT/REVIEW `memory_status` 行进入 active_state。
+- [x] `session_start`/`auto_inject` 逐注入桶 KB 排除快照（更强断言）。
+- [ ] 若后续 `conflicts` 桶改为携带 content，可再补内容级断言（当前为紧凑投影，按契约断言）。
+
+### P2-4（观测/启停/真多进程，已补齐）
+- [x] **真多进程** CAS 争用（4 spawn 进程 / 1 queued 行 / 恰好 1 赢家）。
+- [x] Worker 协作式 stop（Event + 有界 join + 幂等）+ `kb_enrich_worker_status()` 观测快照 + `kb_enrich_stats.worker`。
+- [x] MCP `kb_enrich_stop` action + schema enum/描述。
+- [x] **修复既有缺口**：`kb_enrich_stats`/`kb_reprocess` 在 validator 中原本 unknown；新增 `KBEnrichActionInput` 并登记 3 action，filter 字段不再被剥离。
+- [x] `reprocess` 重复调用幂等（不复制行、有界 once）。
+- [x] 部署文档 `p2-4-worker-deployment.md`（autostart 默认 off、handler 仍占位）。
+- [ ] worker 无「排空当前 job 后再停」的 drain 语义（stop 在下一轮循环边界退出，当前 job 完成其步骤）。
+- [ ] 跨进程 graceful drain 协调（多实例部署时）。
+- [ ] enrichment handler 接真实 LLM/embedding 管道（当前轻量占位）。
+- [ ] 队列积压 / 租约过期 / `exceeded_max_attempts` 的告警阈值与 runbook。
+
+### P3（默认 off，回退/隔离 + 策略文档）
+- [x] 冷启动零证据回退、低证据阈值回退、异常/score-less 回退（不改字段/顺序/不丢项）。
+- [x] 跨 agent 隔离（agent-scoped 聚合）测试。
+- [x] 灰度策略 + Kill-Switch 文档 `p3-utility-rerank-rollout.md`。
+- [ ] 空 `agent_name` 语义决策（当前退化为「全局账本」不过滤）——直接调用时无隔离，灰度前需定夺。
+- [ ] §度量基线遥测埋点（排序扰动/采纳率/延迟/冷启动占比/串扰抽查）最小实现。
+- [ ] 书面基线报告 + 评审；灰度白名单机制；改默认（**近期一律不改**）。
+
+### P4（deferred，仅登记）
+- [x] 设计前置文档 `p4-deferred-design.md`（8 项清单 + 准入条件 + 不变量）。
+- [ ] 全部实现项保持 deferred，待 P3 基线/灰度评审与 worker 真实管道就绪后再排期。
+
+### 提交登记
+- [ ] 本轮改动待落地本地 commit（不 push），提交前按 `git diff --name-only` 复核 scope、排除 9 个独立工作线文件 + `thin_waist.py.bak_phase1` + `test_capture_quality_contract.py`。
+
+## ✅ 本轮提交登记（2026-11-10）
+- [x] 本轮 ADR0028 follow-up 已落地本地 commit `c841c2f`（未 push）。
+- [ ] 9 个独立工作线文件 + `bak_phase1` + `test_capture_quality_contract.py` 仍按约束保留，未纳入提交（见前述各节负债）。

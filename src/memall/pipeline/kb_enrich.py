@@ -34,6 +34,12 @@ def kb_enrich_stats() -> dict[str, Any]:
     Pipeline metrics are best-effort; errors are swallowed and omitted.
     """
     result: dict[str, Any] = {**_STATS, "seen_keys": len(_SEEN_KEYS)}
+    # Observability: autostarted worker state (additive; read-only). Defined
+    # below in the worker-lifecycle section; guarded for partial import states.
+    try:
+        result["worker"] = kb_enrich_worker_status()
+    except Exception:
+        pass
     try:
         from memall.config import get_config as _gc
         if str(_gc("kb.enrich_worker.backend", "sqlite+queue")).strip() != "sqlite+queue":
@@ -296,7 +302,9 @@ def kb_enrich_worker_loop(poll_interval_seconds: int = 2,
         return
 
     backoff = base_backoff_seconds
-    while True:
+    # Cooperative shutdown: loop condition + Event.wait() instead of sleep()
+    # so stop_kb_enrich_worker() wakes an idle worker immediately (bounded).
+    while not _worker_stop.is_set():
         conn = None
         try:
             conn = get_conn()
@@ -347,16 +355,17 @@ def kb_enrich_worker_loop(poll_interval_seconds: int = 2,
                             conn.commit()
                             backoff = min(max_backoff_seconds, max(base_backoff_seconds, backoff * 2))
             else:
-                _time.sleep(poll_interval_seconds)
+                _worker_stop.wait(max(0.05, float(poll_interval_seconds)))
         except Exception as e:
             log.debug("kb_enrich worker loop error: %s", e)
-            _time.sleep(poll_interval_seconds)
+            _worker_stop.wait(max(0.05, float(poll_interval_seconds)))
         finally:
             if conn is not None:
                 try:
                     conn.close()
                 except Exception:
                     pass
+    log.info("kb_enrich worker: stop requested — exiting loop")
 
 
 def start_kb_enrich_worker(**kwargs) -> threading.Thread:
@@ -516,6 +525,53 @@ def reprocess_kb_enrich(args: dict | None = None) -> dict:
 _worker_lock = threading.Lock()
 _worker_thread: threading.Thread | None = None
 _worker_started: bool = False
+_worker_stop = threading.Event()   # cooperative shutdown signal for the loop
+
+
+def stop_kb_enrich_worker(timeout_seconds: float = 5.0) -> dict:
+    """Cooperatively stop the autostarted worker (bounded, non-blocking-ish).
+
+    Sets the stop event, wakes the loop from its poll sleep, and joins with a
+    bounded timeout. Safe to call even when no worker is running. Returns a
+    small observability dict (additive; never raises).
+    """
+    global _worker_thread, _worker_started
+    _worker_stop.set()
+    with _worker_lock:
+        t = _worker_thread
+    joined = False
+    alive = False
+    if t is not None:
+        try:
+            t.join(timeout=max(0.0, float(timeout_seconds)))
+            joined = True
+            alive = t.is_alive()
+        except Exception:
+            alive = t.is_alive() if t is not None else False
+        if not alive:
+            with _worker_lock:
+                if _worker_thread is t:
+                    _worker_thread = None
+                    _worker_started = False
+    return {
+        "stop_requested": True,
+        "thread_was_running": t is not None,
+        "joined": joined,
+        "still_alive": alive,
+        "timeout_seconds": float(timeout_seconds),
+    }
+
+
+def kb_enrich_worker_status() -> dict:
+    """Observability snapshot for the autostarted worker (read-only, additive)."""
+    with _worker_lock:
+        t = _worker_thread
+    return {
+        "started": bool(_worker_started),
+        "alive": bool(t is not None and t.is_alive()),
+        "thread_name": t.name if t is not None else None,
+        "stop_requested": _worker_stop.is_set(),
+    }
 
 
 def ensure_kb_enrich_worker_started(**overrides) -> bool:
@@ -539,6 +595,8 @@ def ensure_kb_enrich_worker_started(**overrides) -> bool:
     with _worker_lock:
         if _worker_thread is not None and _worker_thread.is_alive():
             return True
+        # Clear a previous cooperative stop before (re)starting a fresh loop.
+        _worker_stop.clear()
         kwargs = {
             "poll_interval_seconds": int(overrides.get("poll_interval_seconds", 2) or 2),
             "max_attempts": int(overrides.get("max_attempts", 3) or 3),

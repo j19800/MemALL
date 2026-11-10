@@ -77,3 +77,7 @@ print('KB policy authority: OK')
 - `kb_enrich._claim_job` 改为 CAS 条件 UPDATE，消除跨进程重复 claim 竞争；dedup 分支同样条件化。
 - 新增测试：CAS 单赢家、running 行不可重 claim、`process_budget` 有界钳制（[1,500]，`trigger_mode=bounded_once`）。
 - `tests/test_kb_enrich_worker_p2.py` -> 16 passed。
+
+## 从检查点继续（2026-11-10，未提交）
+- 真多进程（`multiprocessing` spawn 4 进程）CAS 单赢家验证；worker 协作式 stop + `kb_enrich_worker_status()` + `kb_enrich_stats.worker` 观测面；MCP `kb_enrich_stop`；validator 登记 `kb_enrich_stats`/`kb_reprocess`/`kb_enrich_stop`（修既有 unknown-action 缺口）；reprocess 重复调用幂等。`tests/test_kb_enrich_worker_p2.py` -> 20 passed。
+- 详见 `p2-4-worker-deployment.md`（部署/启停/观测/多进程语义）。

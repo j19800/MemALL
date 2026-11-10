@@ -460,6 +460,14 @@ def _handle_system(args: dict) -> str:
         from memall.pipeline.kb_enrich import reprocess_kb_enrich
         result = reprocess_kb_enrich(args)
         return json.dumps(result, ensure_ascii=False)
+    elif action == "kb_enrich_stop":
+        from memall.pipeline.kb_enrich import stop_kb_enrich_worker
+        try:
+            timeout = float(args.get("timeout_seconds", 5.0))
+        except (TypeError, ValueError):
+            timeout = 5.0
+        result = stop_kb_enrich_worker(timeout_seconds=timeout)
+        return json.dumps(result, ensure_ascii=False)
     elif action == "session_end":
         return session.handle_session_end(args)
     elif action == "session_summary":
@@ -600,9 +608,9 @@ def _handle_system(args: dict) -> str:
 
 registry.register(ToolDef(
     name="memall_system",
-    description="Pipeline, sessions, gateway, hub sync, DB maintenance, security, adaptive, onboarding, reflection, index rebuild, daily digest, hot topics. Actions: run_pipeline | distill | gateway | hub_connect | hub_sync | session_start | session_end | session_summary | db | security | adaptive | onboarding | reflect | index_rebuild | digest (每日摘要/日报/总结) | hot (热门/热点/热榜)",
+    description="Pipeline, sessions, gateway, hub sync, DB maintenance, security, adaptive, onboarding, reflection, index rebuild, daily digest, hot topics, KB enrich worker. Actions: run_pipeline | distill | gateway | hub_connect | hub_sync | session_start | session_end | session_summary | db | security | adaptive | onboarding | reflect | index_rebuild | digest (每日摘要/日报/总结) | hot (热门/热点/热榜) | kb_enrich_stats | kb_reprocess | kb_enrich_stop",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["run_pipeline", "distill", "gateway", "hub_connect", "hub_sync", "session_start", "session_end", "session_summary", "db", "security", "adaptive", "onboarding", "reflect", "index_rebuild", "digest", "每日摘要", "日报", "总结", "hot", "热门", "热点", "热榜", "kb_enrich_stats", "kb_reprocess"]},
+        "action": {"type": "string", "enum": ["run_pipeline", "distill", "gateway", "hub_connect", "hub_sync", "session_start", "session_end", "session_summary", "db", "security", "adaptive", "onboarding", "reflect", "index_rebuild", "digest", "每日摘要", "日报", "总结", "hot", "热门", "热点", "热榜", "kb_enrich_stats", "kb_reprocess", "kb_enrich_stop"]},
         # Per-action sub-action vocabularies.  Each action accepts ONLY its own
         # field — a single shared ``sub_action`` enum used to mix seven
         # vocabularies, so almost every declared value was invalid for almost

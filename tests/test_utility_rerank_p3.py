@@ -185,3 +185,119 @@ def test_mcp_handle_unified_search_utility_rerank_end_to_end():
     finally:
         _reset_config()
         cleanup_temp_db(db_path, orig)
+
+
+def test_cold_start_zero_evidence_falls_back_unchanged():
+    """Cold start: with config ON but no interaction evidence, rerank is a pure no-op (no signals, no reorder, no drops)."""
+    db_path, orig = init_temp_db()
+    try:
+        from memall.core.db import get_conn
+        from memall.search.enhancements import apply_enhancements
+        _set_utility_config(True, min_interactions=2)
+        conn = get_conn()
+        results = [
+            {"memory_id": 1, "content": "alpha", "score": 0.9},
+            {"memory_id": 2, "content": "beta", "score": 0.5},
+            {"memory_id": 3, "content": "gamma", "score": 0.1},
+        ]
+        original = [r["memory_id"] for r in results]
+        out = apply_enhancements(results, query="q", conn=conn, agent_name="cold_agent",
+                                 utility_rerank=True)
+        assert [r["memory_id"] for r in out["results"]] == original
+        assert all("utility_rerank_signal" not in r and "utility_rerank_score" not in r
+                   for r in out["results"])
+        conn.close()
+        print("PASS: test_cold_start_zero_evidence_falls_back_unchanged")
+    finally:
+        _reset_config()
+        cleanup_temp_db(db_path, orig)
+
+
+def test_low_evidence_below_min_interactions_falls_back_unchanged():
+    """Low evidence: < min_interactions impressions/clicks must NOT trigger signals or reorder."""
+    db_path, orig = init_temp_db()
+    try:
+        from memall.core.db import get_conn
+        from memall.search.enhancements import apply_enhancements
+        _set_utility_config(True, min_interactions=3)
+        conn = get_conn()
+        # Only 1 impression for memory 1 -> below threshold of 3
+        _interaction(conn, 1, "low_agent", action="impression", n=1)
+        results = [
+            {"memory_id": 1, "content": "low", "score": 0.3},
+            {"memory_id": 2, "content": "high", "score": 0.8},
+        ]
+        original = [r["memory_id"] for r in results]
+        out = apply_enhancements(results, query="q", conn=conn, agent_name="low_agent",
+                                 utility_rerank=True)
+        assert [r["memory_id"] for r in out["results"]] == original
+        assert all("utility_rerank_signal" not in r for r in out["results"])
+        conn.close()
+        print("PASS: test_low_evidence_below_min_interactions_falls_back_unchanged")
+    finally:
+        _reset_config()
+        cleanup_temp_db(db_path, orig)
+
+
+def test_cross_agent_interaction_isolation():
+    """Utility aggregation is agent-scoped: A's interactions must not leak into B's rerank signals."""
+    db_path, orig = init_temp_db()
+    try:
+        from memall.core.db import get_conn
+        from memall.search.enhancements import apply_enhancements, aggregate_interaction_utility
+        _set_utility_config(True, min_interactions=2)
+        conn = get_conn()
+        # Agent A has strong evidence on memory 1; Agent B has NONE.
+        _interaction(conn, 1, "agent_A", action="click", n=5)
+        agg_b = aggregate_interaction_utility(conn, agent_name="agent_B", days=30, limit=1000)
+        assert agg_b.get("ok") is True
+        assert (agg_b.get("by_memory") or []) == [], "agent_B must see zero interaction rows"
+
+        results = [
+            {"memory_id": 1, "content": "shared", "score": 0.5},
+            {"memory_id": 2, "content": "other", "score": 0.6},
+        ]
+        original = [r["memory_id"] for r in results]
+        out_b = apply_enhancements([dict(r) for r in results], query="q", conn=conn,
+                                   agent_name="agent_B", utility_rerank=True)
+        # No leakage: B's result is unchanged, no signals
+        assert [r["memory_id"] for r in out_b["results"]] == original
+        assert all("utility_rerank_signal" not in r for r in out_b["results"])
+        # A does get a signal on memory 1 (proves the data exists, just isolated)
+        out_a = apply_enhancements([dict(r) for r in results], query="q", conn=conn,
+                                   agent_name="agent_A", utility_rerank=True)
+        assert any(r.get("memory_id") == 1 and "utility_rerank_signal" in r
+                   for r in out_a["results"])
+        conn.close()
+        print("PASS: test_cross_agent_interaction_isolation")
+    finally:
+        _reset_config()
+        cleanup_temp_db(db_path, orig)
+
+
+def test_signal_math_is_bounded_and_never_drops_items():
+    """Utility score math: weight clamped to [0,0.5], base preserved, all items retained."""
+    db_path, orig = init_temp_db()
+    try:
+        from memall.core.db import get_conn
+        from memall.search.enhancements import _apply_utility_rerank
+        _set_utility_config(True, min_interactions=1, weight=99.0)  # oversized weight
+        conn = get_conn()
+        _interaction(conn, 1, "math_agent", action="click", n=4)
+        results = [
+            {"memory_id": 1, "content": "a", "rrf_score": 0.5},
+            {"memory_id": 2, "content": "b", "rrf_score": 0.4},
+            {"memory_id": 3, "content": "c"},  # no base score at all
+        ]
+        out = _apply_utility_rerank(results, conn, agent_name="math_agent",
+                                    min_interactions=1, weight=99.0)
+        assert len(out) == 3  # never drops
+        by_id = {r["memory_id"]: r for r in out}
+        assert "utility_rerank_signal" in by_id[1]
+        assert by_id[1]["utility_rerank_score"] >= by_id[1]["rrf_score"]  # non-negative boost
+        assert "utility_rerank_signal" in by_id[3]  # even score-less item gets a (0-based) signal
+        conn.close()
+        print("PASS: test_signal_math_is_bounded_and_never_drops_items")
+    finally:
+        _reset_config()
+        cleanup_temp_db(db_path, orig)

@@ -236,3 +236,13 @@ PYTHONPATH=.:src ./.venv/bin/python -m pytest \
 **最新验收**：扩展 scoped regression（9 文件）-> **70 passed in 65.59s (exit 0)**。详见 `docs/p0-p2/PRECOMMIT_SCOPED_REPORT_2026-11-10.md`。
 
 **仍待（P4 / P3 灰度前）**：canonicalization/conflict review/expiry/low-utility 归档/主题画像/策略自适应/审计；P3 冷启动回退、跨 agent 隔离、遥测/基线、灰度与 kill-switch 标准；真实多进程并发集成测试。以上均登记于 `docs/p0-p2/TECH_DEBT_LEDGER.md`。
+
+### 从检查点继续推进（2026-11-10，基于 `8aa68cc`，本地未提交）
+
+> 检查点的「下一步建议」主干已在 `8aa68cc` 完成；本轮补齐更深一层，**不改任何默认**。
+
+- **P1**：`resolve_status`×temporal validity 的 `pending_decisions` 边界、`include_conflicts=False` 抑制、`session_start auto_inject` 逐桶 KB 排除（`tests/test_kb_ingest_p2_expanded.py` +3）。
+- **P2-4**：worker 协作式 stop（`Event`+有界 join+幂等）、`kb_enrich_worker_status()`/`kb_enrich_stats.worker` 观测、MCP `kb_enrich_stop`、validator 登记 3 个 kb action（修既有 unknown 缺口）、**真多进程 spawn CAS 单赢家**、reprocess 幂等（`tests/test_kb_enrich_worker_p2.py` 20 passed）。部署文档 `docs/p0-p2/p2-4-worker-deployment.md`。
+- **P3**：冷启动/低证据回退、跨 agent 隔离、权重钳制/永不丢项（`tests/test_utility_rerank_p3.py` 10 passed）；度量基线/灰度/Kill-Switch 文档 `docs/p0-p2/p3-utility-rerank-rollout.md`；`search.utility_rerank.enabled` 仍 False。
+- **P4**：设计前置 `docs/p0-p2/p4-deferred-design.md`（8 项，仅登记，保持 deferred）。
+- **验收**：scoped 9 文件 **81 passed**；详见 `docs/p0-p2/PRECOMMIT_SCOPED_REPORT_2026-11-10.md`。

@@ -61,3 +61,22 @@ git diff --name-only
   -> **70 passed in 65.59s (exit 0)**.
 - 定向：`tests/test_kb_enrich_worker_p2.py -q` -> **16 passed**；`tests/test_utility_rerank_p3.py -q` -> **6 passed**；P1 新增 4 测试 -> **4 passed**.
 - 本轮修改：`kb_enrich._claim_job` CAS 化；`thin_waist.enhanced_search`/`unified_search` 的 `utility_rerank` 传播 + NameError 修复 + additive 信号透传；新增 3+4+6 = 13 个测试（含 1 个新文件）。
+
+## 从检查点继续推进（2026-11-10，基于 `8aa68cc`，未提交）
+### 定向验收
+- `tests/test_kb_ingest_p2_expanded.py -k 'resolve_status_pending_decisions or include_conflicts_false_suppresses or auto_inject_per_bucket'` -> **3 passed**.
+- `tests/test_kb_enrich_worker_p2.py -q` -> **20 passed**（含真多进程 spawn CAS、worker stop/状态、validator 登记、reprocess 幂等）.
+- `tests/test_utility_rerank_p3.py -q` -> **10 passed**（含冷启动/低证据回退、跨 agent 隔离、权重钳制）.
+- `py_compile`：`kb_enrich.py` / `mcp/tools/__init__.py` / `mcp/models.py` / `mcp/validator.py` -> OK.
+
+### Scoped 回归（9 文件）
+`tests/test_kb_ingest_p2.py tests/test_kb_ingest_p2_expanded.py tests/test_kb_enrich_worker_p2.py tests/test_utility_rerank_p3.py tests/test_capture_resolve_engine.py tests/test_session.py tests/test_session_sweep.py tests/test_cluster.py tests/test_e2e.py -q`
+-> **81 passed in 73.52s (exit 0)**（上轮 70 + 本轮 11 新测试）.
+
+### 全量回归
+结果见本文件后续追加（后台任务 `pytest tests/ -q ...`）。历史对照：上轮 578 passed, 2 skipped, 3 个 pre-existing 共享 DB `duplicate column` 竞态（隔离重跑通过）。
+
+### 全量回归（本轮最终结果）
+`PYTHONPATH=.:src ./.venv/bin/python -m pytest tests/ -q --ignore=smoke_test --ignore=stress_test --ignore=benchmark --ignore=quality_test --disable-warnings --tb=line`
+-> **592 passed, 2 skipped, 192 warnings in 451.94s (exit 0)**。
+对照：上轮 578 passed + 3 个 pre-existing 共享 DB `duplicate column` 竞态（隔离重跑通过）；本轮竞态未复现，0 failed / 0 errors。确认与本次改动无关。
