@@ -715,6 +715,38 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 except Exception as e:
                     logger.warning(f"Failed to build CONTINUITY narrative line: {e}")
 
+            # [RECENT] actual memory CONTENT, not just counters.
+            # Every other part is a count or a summary, so a session could report
+            # "待决(14)" while containing zero usable text — measured 65 characters
+            # of formatted context on a database holding 14 memories. The point of
+            # injection is that the next session knows WHAT was decided, so the
+            # most recent decisions/tasks/preferences go in verbatim (bounded).
+            try:
+                if agent_name:
+                    _rows = conn.execute(
+                        "SELECT content, category FROM memories "
+                        "WHERE LOWER(agent_name)=LOWER(?) "
+                        "AND COALESCE(category,'') IN "
+                        "    ('decision','task','preference','fix','problem') "
+                        "AND COALESCE(memory_status,'') NOT IN ('archived','deleted') "
+                        "AND COALESCE(memory_status,'') NOT LIKE '%REVIEW%' "
+                        "AND LENGTH(TRIM(content)) > 8 "
+                        "ORDER BY created_at DESC LIMIT 6",
+                        (agent_name,),
+                    ).fetchall()
+                    _lines = []
+                    for _r in _rows:
+                        _txt = " ".join(str(_r[0]).split())[:160]
+                        _cat = str(_r[1] or "").upper()
+                        if _txt:
+                            _lines.append(f"  - [{_cat}] {_txt}" if _cat else f"  - {_txt}")
+                    if _lines:
+                        stable_parts.append(
+                            f"[RECENT] {L('recent_context')}" + chr(10) + chr(10).join(_lines)
+                        )
+            except Exception as e:
+                logger.warning(f"Failed to build RECENT memory block: {e}")
+
             # [NARRATIVE] greeting — last, it differs every session
             narrative_line = _build_narrative_greeting(narrative_data, agent_name)
             if narrative_line:

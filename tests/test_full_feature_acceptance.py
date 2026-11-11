@@ -141,3 +141,105 @@ def test_problem_category_recognises_incident_language():
         print("PASS: test_problem_category_recognises_incident_language")
     finally:
         cleanup_temp_db(db, orig)
+
+
+def test_session_injection_carries_actual_memory_content():
+    """Injection must contain WHAT was decided, not just how many items exist.
+
+    Measured before: a database holding 14 memories injected 65 characters —
+    every section was a counter ("待决(14)") and no memory text appeared at all.
+    """
+    db, orig = init_temp_db()
+    try:
+        from memall.core.models import MemoryInput
+        from memall.core.thin_waist import capture
+        from memall.pipeline.session import session_start
+
+        capture(MemoryInput(content="数据库改用 MySQL 8.0，因为 DBA 团队只熟悉 MySQL。",
+                            level="L4", category="decision", agent_name="inj", project="p"))
+        capture(MemoryInput(content="下周要完成支付服务的熔断降级改造。",
+                            level="L4", category="task", agent_name="inj", project="p"))
+
+        out = session_start(agent_name="inj", auto_inject=True)
+        fmt = out.get("injection_formatted") or ""
+        assert len(fmt) > 120, f"injection too thin: {len(fmt)} chars: {fmt!r}"
+        assert "MySQL" in fmt or "熔断" in fmt, f"no memory content injected: {fmt!r}"
+        assert "[RECENT]" in fmt, fmt
+        print("PASS: test_session_injection_carries_actual_memory_content")
+    finally:
+        cleanup_temp_db(db, orig)
+
+
+def test_slot_kind_matches_category():
+    """Slot namespace must reflect what the memory IS.
+
+    A preference and a deployment procedure both used to land in
+    slot:decision:* merely because they contained a decision-ish verb, so
+    unrelated categories collided inside one namespace.
+    """
+    db, orig = init_temp_db()
+    try:
+        from memall.core.thin_waist import _slot_key_for_memory
+        from memall.core.models import MemoryInput
+
+        cases = [
+            ("我偏好用 vim 开发，代码风格遵循 PEP8。", "preference"),
+            ("部署流程：先跑 alembic 迁移，再滚动重启。", "procedure"),
+            ("教训：上线前必须压测，这次没有压测就上了。", "reflection"),
+        ]
+        for text, kind in cases:
+            mi = MemoryInput(content=text, level="L4", agent_name="x", project="pay")
+            slot = _slot_key_for_memory(mi, text)
+            assert slot and f":{kind}:" in slot, (text, slot)
+        # A real decision still lands in the decision namespace.
+        mi = MemoryInput(content="数据库选 PostgreSQL 16，主从部署。",
+                         level="L4", agent_name="x", project="pay")
+        assert ":decision:" in (_slot_key_for_memory(mi, mi.content) or "")
+        print("PASS: test_slot_kind_matches_category")
+    finally:
+        cleanup_temp_db(db, orig)
+
+
+def test_engineering_decisions_are_classified_as_decisions():
+    """"数据库选 PostgreSQL" is unmistakably a decision but matched no keyword,
+    so it was stored as `general` while the slot logic simultaneously called it
+    slot:decision:* — two rule sets disagreeing about one sentence."""
+    db, orig = init_temp_db()
+    try:
+        from memall.core.db import get_conn
+        from memall.core.models import MemoryInput
+        from memall.core.thin_waist import capture
+
+        for text in ("数据库选 PostgreSQL 16，主从部署，读写分离。",
+                     "缓存用 Redis 集群模式，配三个哨兵节点。",
+                     "API 网关选 Kong，因为它支持插件热加载。"):
+            mid = int(capture(MemoryInput(content=text, level="L4",
+                                          agent_name="dec", project="pay")))
+            c = get_conn()
+            cat = c.execute("SELECT category FROM memories WHERE id=?", (mid,)).fetchone()[0]
+            c.close()
+            assert cat == "decision", (text, cat)
+        print("PASS: test_engineering_decisions_are_classified_as_decisions")
+    finally:
+        cleanup_temp_db(db, orig)
+
+
+def test_tasks_and_incidents_get_slots():
+    """Work items change over time too; without a slot they can never be
+    recognised as the same item."""
+    db, orig = init_temp_db()
+    try:
+        from memall.core.thin_waist import _slot_key_for_memory
+        from memall.core.models import MemoryInput
+
+        cases = [
+            ("下周要完成支付服务的熔断降级改造。", ":task:"),
+            ("支付服务连接池耗尽导致雪崩，根因是慢查询。", ":problem:"),
+        ]
+        for text, marker in cases:
+            mi = MemoryInput(content=text, level="L4", agent_name="x", project="pay")
+            slot = _slot_key_for_memory(mi, text)
+            assert slot and marker in slot, (text, slot)
+        print("PASS: test_tasks_and_incidents_get_slots")
+    finally:
+        cleanup_temp_db(db, orig)

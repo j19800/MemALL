@@ -865,7 +865,18 @@ _CATEGORY_RULES = (
     ("fix",        ("修复", "修好", "bug", "报错", "崩溃", "挂了", "hotfix", "regression", "回归测试")),
     ("task",       ("待办", "todo", "明天", "下周", "截止", "deadline", "要完成", "记得", "跟进")),
     ("preference", ("偏好", "喜欢", "习惯", "倾向", "prefer", "不喜欢", "讨厌")),
-    ("decision",   ("决定", "决策", "选型", "采用", "选定", "改为", "改用", "定下来", "architecture", "decision")),
+    # "选 X" / "用 X" ARE decisions in engineering prose ("数据库选 PostgreSQL",
+    # "缓存用 Redis 集群") but matched nothing, so such memories were classified
+    # general while the slot logic simultaneously tagged them slot:decision:*.
+    # Two rule sets disagreeing about the same sentence is worse than either.
+    ("decision",   ("决定", "决策", "选型", "采用", "选定", "改为", "改用", "定下来",
+                    "选了", "选用", "选择", "确定为", "敲定", "拍板",
+                    # "选 X" / "用 X" / "改用 X" as a bare verb before a proper
+                    # noun: "数据库选 PostgreSQL", "缓存用 Redis". Substring
+                    # matching on 选/用 alone would over-fire (选择 is covered
+                    # above), so require a following latin/digit token.
+                    "选 ", "选用 ", "用 ", "使用 ",
+                    "architecture", "decision", "chose", "chosen", "went with")),
     ("reflection", ("反思", "复盘", "教训", "总结一下", "回顾", "retrospective")),
     ("procedure",  ("步骤", "流程", "先", "然后", "最后", "step", "runbook", "操作手册")),
     # "problem" needs causal/incident vocabulary too: an incident report rarely
@@ -877,8 +888,16 @@ _CATEGORY_RULES = (
 )
 
 
-def _infer_category(text: str) -> str | None:
-    """Best-effort category from content; None when no confident signal."""
+def _infer_category(text: str, data: "MemoryInput | None" = None) -> str | None:
+    """Best-effort category from content; None when no confident signal.
+
+    Purely keyword-driven (``data`` is accepted for call-site compatibility but
+    deliberately unused). It MUST NOT call ``_slot_key_for_memory``: that
+    function calls back into this one to decide the slot kind, and the mutual
+    recursion hung the process. Consistency between category and slot is
+    achieved in the other direction instead — ``_slot_key_for_memory`` derives
+    the slot kind FROM the category returned here.
+    """
     low = (text or "").lower()
     if not low.strip():
         return None
@@ -886,6 +905,10 @@ def _infer_category(text: str) -> str | None:
         for k in keys:
             if k in low:
                 return cat
+    # NOTE: deliberately does NOT consult _slot_key_for_memory — that function
+    # calls back into this one to decide slot kind, and the mutual call recursed
+    # until the process hung. Slot corroboration lives in _slot_key_for_memory's
+    # own "a recognised topic is enough" rule instead.
     return None
 
 
@@ -1163,7 +1186,7 @@ def _capture_normalize_and_validate(
     )
     if (not _explicit_cat
             and (getattr(data, "category", "") or "general").strip().lower() == "general"):
-        _guessed = _infer_category(getattr(data, "content", "") or "")
+        _guessed = _infer_category(getattr(data, "content", "") or "", data)
         if _guessed:
             data.category = _guessed
     _validate_category(data)
@@ -1416,6 +1439,15 @@ _SLOT_TOPICS = (
     ("language",  ("编程语言", "language", "python", "go ", "java", "typescript")),
     ("theme",     ("主题", "theme", "深色", "浅色", "dark", "light")),
     ("editor",    ("编辑器", "editor", "vim", "vscode", "emacs")),
+    # Reliability / delivery topics: without these, incidents and work items got
+    # no slot at all and could never be recognised as the same item over time.
+    ("payment",   ("支付", "payment", "订单", "order", "结算")),
+    ("reliability", ("熔断", "降级", "限流", "重试", "circuit", "retry", "fallback")),
+    ("performance", ("慢查询", "性能", "压测", "qps", "延迟", "索引", "performance")),
+    ("pool",      ("连接池", "pool", "连接泄漏", "connection")),
+    ("incident",  ("雪崩", "宕机", "崩溃", "故障", "incident", "outage")),
+    ("testing",   ("测试", "压测", "回归", "test", "qa")),
+    ("docs",      ("文档", "doc", "api 文档", "readme")),
 )
 
 
@@ -1456,6 +1488,16 @@ def _slot_key_for_memory(data: MemoryInput, content: str) -> str | None:
     proj = _strip_mech_prefix(getattr(data, "project", "") or "")
     low = (content or "").lower()
 
+    # Tasks and incidents also change over time ("下周完成熔断改造" then later
+    # "熔断改造完成"), so they deserve slots too; before this they had none and
+    # could never supersede or be recognised as the same work item.
+    _cat = _infer_category(content, data) or ""
+    if _cat in ("task", "problem"):
+        _topic = _slot_topic(content, data)
+        if _topic:
+            _scope = f":{proj}" if proj and proj.lower() not in ("", "general") else ""
+            return f"slot:{_cat}:{_topic}{_scope}"
+
     is_config = any(k in low for k in (
         "端口", "port", "地址", "url", "路径", "path", "配置", "config",
         "密码", "password", "key", "token", "账号", "环境变量", "host",
@@ -1472,7 +1514,17 @@ def _slot_key_for_memory(data: MemoryInput, content: str) -> str | None:
     if not (is_config or is_decision or topic):
         return None
 
-    kind = "config" if is_config else "decision"
+    # The slot KIND must match what the memory actually is, not merely whether
+    # it mentions a decision verb. A preference ("我偏好用 vim") and a procedure
+    # ("部署流程：先跑迁移") were both getting slot:decision:* because they
+    # contained 用/选. Distinct kinds also stop unrelated categories from
+    # colliding inside one slot namespace.
+    if is_config:
+        kind = "config"
+    elif _cat in ("preference", "procedure", "reflection", "fix", "problem", "task"):
+        kind = _cat
+    else:
+        kind = "decision"
     if topic:
         scope = f":{proj}" if proj and proj.lower() not in ("", "general") else ""
         return f"slot:{kind}:{topic}{scope}"

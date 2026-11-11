@@ -28,6 +28,7 @@ from typing import Dict
 _PACKS: Dict[str, Dict[str, str]] = {
     "zh": {
         "context_header": "[CONTEXT] 会话上下文（首段先概括以下信息）：",
+        "recent_context": "最近的决策/任务/偏好（原文）：",
         "decisions_pending": "待决",
         "decisions_in_progress": "进行中",
         "distill_pending": "组待写摘要，调 memall_system action=distill 查看",
@@ -55,6 +56,7 @@ _PACKS: Dict[str, Dict[str, str]] = {
     },
     "en": {
         "context_header": "[CONTEXT] Session context (summarise these first):",
+        "recent_context": "recent decisions / tasks / preferences (verbatim):",
         "decisions_pending": "open",
         "decisions_in_progress": "in progress",
         "distill_pending": "groups await summaries — run memall_system action=distill",
