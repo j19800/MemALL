@@ -530,7 +530,7 @@ def _handle_system(args: dict) -> str:
         try:
             from memall.search.enhancements import utility_telemetry
             return json.dumps({"ok": True, "telemetry": utility_telemetry(
-                reset=bool(arguments.get("reset")))}, ensure_ascii=False)
+                reset=bool(args.get("reset")))}, ensure_ascii=False)
         except Exception as e:
             return json.dumps({"ok": False, "error": str(e)[:200]}, ensure_ascii=False)
     elif action == "kb_enrich_stats":
@@ -690,7 +690,7 @@ registry.register(ToolDef(
     name="memall_system",
     description="Pipeline, sessions, gateway, hub sync, DB maintenance, security, adaptive, onboarding, reflection, index rebuild, daily digest, hot topics, KB enrich worker. Actions: run_pipeline | distill | gateway | hub_connect | hub_sync | session_start | session_end | session_summary | db | security | adaptive | onboarding | reflect | index_rebuild | digest (每日摘要/日报/总结) | hot (热门/热点/热榜) | kb_enrich_stats | kb_reprocess | kb_enrich_stop",
     input_schema={"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["run_pipeline", "distill", "gateway", "hub_connect", "hub_sync", "session_start", "session_end", "session_summary", "db", "security", "adaptive", "onboarding", "reflect", "index_rebuild", "digest", "每日摘要", "日报", "总结", "hot", "热门", "热点", "热榜", "kb_enrich_stats", "kb_reprocess", "kb_enrich_stop", "maintenance"]},
+        "action": {"type": "string", "enum": ["run_pipeline", "distill", "gateway", "hub_connect", "hub_sync", "session_start", "session_end", "session_summary", "db", "security", "adaptive", "onboarding", "reflect", "index_rebuild", "digest", "每日摘要", "日报", "总结", "hot", "热门", "热点", "热榜", "kb_enrich_stats", "kb_reprocess", "kb_enrich_stop", "maintenance", "utility_telemetry"]},
         # Per-action sub-action vocabularies.  Each action accepts ONLY its own
         # field — a single shared ``sub_action`` enum used to mix seven
         # vocabularies, so almost every declared value was invalid for almost

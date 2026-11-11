@@ -107,10 +107,22 @@ def _vec0_knn(conn, query_vec: np.ndarray, top_k: int) -> list[dict]:
     soft-delete semantics as FTS.
     """
     vec_bytes = np.array(query_vec, dtype=np.float32).tobytes()
+    # sqlite-vec's query planner needs a LITERAL limit (or `k = ?`) to recognise
+    # a vec0 KNN query; with `LIMIT ?` it raises
+    #   "A LIMIT or 'k = ?' constraint is required on vec0 knn queries"
+    # The exception was swallowed upstream, so `mode=vector` silently returned
+    # zero results on EVERY query — the whole vector path was dead.
+    _limit = int(max(top_k * 4, top_k + 20))
     try:
+        # This sqlite-vec build recognises ONLY the `k = ?` form; a literal
+        # `LIMIT n` still raises "A LIMIT or 'k = ?' constraint is required on
+        # vec0 knn queries". Verified both ways on the same database. The
+        # exception used to be swallowed upstream, so mode=vector returned zero
+        # results for EVERY query — the entire vector path was dead.
         rows = conn.execute(
-            "SELECT rowid, distance FROM mem_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
-            (vec_bytes, max(top_k * 4, top_k + 20)),
+            "SELECT rowid, distance FROM mem_vec WHERE embedding MATCH ? AND k = ? "
+            "ORDER BY distance",
+            (vec_bytes, _limit),
         ).fetchall()
         if not rows:
             return []

@@ -138,6 +138,11 @@ _ACTION_MODELS: dict[tuple[str, str], type[BaseModel]] = {
     ("memall_system", "index_rebuild"): IndexRebuildInput,
     ("memall_system", "import"): ImportInput,
     ("memall_system", "kb_enrich_stats"): KBEnrichActionInput,
+    # Registered here too: the schema advertised the action but _pick_model had
+    # no entry, so every call was rejected with "unknown action" — a declared
+    # capability that could never be invoked.
+    ("memall_system", "utility_telemetry"): KBEnrichActionInput,
+    ("memall_system", "p3_telemetry"): KBEnrichActionInput,
     ("memall_system", "kb_reprocess"): KBEnrichActionInput,
     ("memall_system", "kb_enrich_stop"): KBEnrichActionInput,
     ("memall_system", "maintenance"): MaintenanceInput,

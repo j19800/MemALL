@@ -549,7 +549,24 @@ def _row_to_memory(row) -> Memory:
 
 
 # Pre-compiled regex for specificity scoring in _score_quality
-_SPECIFICITY_RE = re.compile(r"\d{4}|v\d+\.\d+|[A-Z]{2,}\d*|#\d+")
+# Specificity = "does this pin down WHO/WHAT/WHICH", not "does it contain a
+# 4-digit number". The old pattern only matched \d{4} / v1.2 / ACRONYM123 / #42,
+# so a perfectly concrete Chinese memory ("PostgreSQL 16 主库", "token 过期返回
+# 500") scored 1 and every normal capture was pushed to gate=review. Now also
+# counts: named technologies, file paths / dotted identifiers, numbers with a
+# unit or magnitude, and 2+ CJK proper-noun-looking compounds.
+_SPECIFICITY_RE = re.compile(
+    r"\d{4}"                       # years
+    r"|v\d+\.\d+"                 # versions
+    r"|[A-Z]{2,}\d*"                # acronyms / IDs
+    r"|#\d+"                        # issue refs
+    r"|\b\d+(?:\.\d+)?\s*(?:qps|ms|s|kb|mb|gb|tb|px|%|个|条|次|天|小时|分钟|人|台|并发)\b"
+    r"|[A-Za-z][A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)+"   # foo.bar / snake_case / kebab-case
+    r"|(?<![A-Za-z])(?:PostgreSQL|MySQL|SQLite|Redis|Kafka|RabbitMQ|Docker|Kubernetes|"
+    r"GraphQL|REST|HTTP|HTTPS|TCP|UDP|JSON|YAML|Linux|Windows|macOS|Python|Go|Java|"
+    r"TypeScript|JavaScript|React|Vue|Nginx|HAProxy|Elasticsearch|MongoDB)(?![A-Za-z])",
+    re.I,
+)
 # Reasoning markers (pre-compiled)
 _REASONING_COMPILED: list[re.Pattern] = []
 # Both languages: ``_score_quality`` uses this to score the "reasoning"
@@ -634,7 +651,26 @@ def _score_quality(data: MemoryInput, content_hash_val: str,
     text_len = len(text.strip())
     scores: dict = {}
 
-    scores["completeness"] = min(10, max(0, (text_len - 10) // 20))
+    # Completeness must not require a 210-character essay to score 10. Chinese
+    # carries far more meaning per character than the old `(len-10)//20` assumed,
+    # so a 40-character decision ("数据库改用 MySQL，因为许可成本更低") scored 1 —
+    # below the review threshold. Now: a short-but-whole statement (has a subject
+    # and a predicate-ish tail) gets a floor of 5, and length adds on top of that.
+    _raw_comp = min(10, max(0, (text_len - 10) // 20))
+    # A complete short statement needs only a predicate-ish signal. The old list
+    # was mainly decision verbs, so "反思：沟通成本偏高" and "我偏好深色主题"
+    # scored completeness=0 despite being whole thoughts.
+    _has_verbish = bool(re.search(
+        r"(是|为|用|采用|使用|决定|改为|改用|需要|应该|必须|要|完成|修复|导致|因为|所以|"
+        r"然后|首先|最后|通过|支持|返回|报错|失败|偏好|习惯|倾向|喜欢|应|建议|避免|"
+        r"偏高|偏低|过高|不足|过多|堆积|耗尽|超时|泄漏|雪崩|崩|卡住|阻塞|"
+        r"is|are|was|were|use|used|require|must|prefer|should|avoid|cause|because|then)",
+        text, re.I))
+    if _has_verbish and text_len >= 20:
+        _raw_comp = max(_raw_comp, 5)
+    elif text_len >= 40:
+        _raw_comp = max(_raw_comp, 4)
+    scores["completeness"] = _raw_comp
     filler = ["嗯", "那个", "然后", "所以", "呃", "啊", "好的，", "明白了，"]
     scores["clarity"] = (
         10 if text_len > 40 else max(0, 10 - sum(text.count(f) for f in filler) * 2)
@@ -656,14 +692,26 @@ def _score_quality(data: MemoryInput, content_hash_val: str,
     stripped = text.lstrip()
     if stripped.startswith("{") and stripped.endswith("}"):
         scores["clarity"] = min(scores["clarity"], 4)
-    scores["relevance"] = 7 if len(text.strip()) >= 40 else max(0, text_len // 10)
+    # Relevance measured ONLY by character count is a length test wearing a
+    # relevance label: a 24-character preference ("我偏好深色主题，字号 14px")
+    # is entirely on-topic yet scored 2/10. Short prose that reads as a complete
+    # statement now floors at 5; real length still raises it.
+    if len(text.strip()) >= 40:
+        scores["relevance"] = 7
+    elif re.search(r"[\u4e00-\u9fff]{4,}|[A-Za-z]{3,}", text):
+        scores["relevance"] = max(5, text_len // 10)
+    else:
+        scores["relevance"] = max(0, text_len // 10)
+
     scores["specificity"] = max(1, min(10, len(_SPECIFICITY_RE.findall(text)) * 2))
 
     # "reasoning" — measures whether content contains evidence/analysis language
     reasoning_hits = sum(1 for p in _REASONING_COMPILED if p.search(text))
     scores["reasoning"] = min(10, max(0, reasoning_hits * 2))
 
-    scores["relevance"] = 7 if len(text.strip()) >= 40 else max(0, text_len // 10)
+    # (relevance is computed above; the duplicate assignment that used to live
+    #  here overwrote it with a pure length test — which is why fixing the first
+    #  one appeared to have no effect.)
     scores["source_traceability"] = (
         10 if (data.agent_name and data.owner and getattr(data, "project", ""))
         else (8 if (data.agent_name and data.owner) else 4)
@@ -731,7 +779,14 @@ def _score_quality(data: MemoryInput, content_hash_val: str,
     # Minimum dimension floor: no single dimension may be critically low.
     # L5 task cards routinely have low reasoning (they are commitments, not
     # essays) — exempt them so min_dim<2 doesn't push them into review.
-    elif min_dim < 2 and text_len < 80 and data.level != "L5":
+    # Minimum dimension floor: no single dimension may be critically low. L5 task
+    # cards are exempt (they are commitments, not essays) — and so is any memory
+    # whose AVERAGE clears the level threshold comfortably: a short Chinese
+    # sentence is legitimate content even when the "specificity" heuristic finds
+    # no digits or acronyms. Measured: without this, 6 of 8 perfectly normal
+    # captures were pushed to review purely by a 1-point specificity score.
+    elif (min_dim < 2 and text_len < 80 and data.level != "L5"
+          and avg < required + 1.0):
         gate = "review"
     else:
         passed = avg >= required
@@ -813,7 +868,12 @@ _CATEGORY_RULES = (
     ("decision",   ("决定", "决策", "选型", "采用", "选定", "改为", "改用", "定下来", "architecture", "decision")),
     ("reflection", ("反思", "复盘", "教训", "总结一下", "回顾", "retrospective")),
     ("procedure",  ("步骤", "流程", "先", "然后", "最后", "step", "runbook", "操作手册")),
-    ("problem",    ("问题", "故障", "异常", "失败", "卡住")),
+    # "problem" needs causal/incident vocabulary too: an incident report rarely
+    # contains the literal word 问题 ("连接池耗尽导致服务雪崩" is unmistakably a
+    # problem but matched nothing).
+    ("problem",    ("问题", "故障", "异常", "失败", "卡住", "导致", "根因", "雪崩",
+                    "耗尽", "超时", "泄漏", "宕机", "崩溃", "报错", "incident",
+                    "root cause", "outage", "leak", "timeout")),
 )
 
 
