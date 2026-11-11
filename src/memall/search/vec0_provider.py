@@ -40,7 +40,8 @@ class Vec0Provider(SearchProvider):
             logger.error("Vec0 build_index failed: %s", e)
             return {"status": "error", "error": str(e)}
 
-    def search(self, query: str, top_k: int = 10) -> dict:
+    def search(self, query: str, top_k: int = 10,
+               include_archived: bool = False) -> dict:
         from memall.graph.retrieve import _query_embed, _vec0_knn
         from memall.core.db import pool_conn
 
@@ -49,7 +50,8 @@ class Vec0Provider(SearchProvider):
             return {"query": query, "mode": "vec0", "error": "embedding failed", "results": [], "total": 0}
 
         with pool_conn() as conn:
-            vec_results = _vec0_knn(conn, query_vec, top_k)
+            vec_results = _vec0_knn(conn, query_vec, top_k,
+                                    include_archived=include_archived)
 
         if not vec_results:
             return {"query": query, "mode": "vec0", "results": [], "total": 0}

@@ -94,7 +94,8 @@ def _query_embed(query: str) -> np.ndarray | None:
         return None
 
 
-def _vec0_knn(conn, query_vec: np.ndarray, top_k: int) -> list[dict]:
+def _vec0_knn(conn, query_vec: np.ndarray, top_k: int,
+              include_archived: bool = False) -> list[dict]:
     """KNN search via vec0 virtual table.
 
     Archived (soft-deleted) rows are filtered here — the single funnel all
@@ -134,9 +135,11 @@ def _vec0_knn(conn, query_vec: np.ndarray, top_k: int) -> list[dict]:
         # mode=vector / hybrid — measured: default hybrid returned the REVIEW
         # row while default fts5 correctly hid it. Two different answers to
         # "may I see this?" depending on the mode is a correctness bug.
+        _arch_clause = ("" if include_archived
+                        else "AND COALESCE(memory_status, '') NOT IN ('archived', 'deleted') ")
         live = {r[0] for r in conn.execute(
             f"SELECT id FROM memories WHERE id IN ({ph}) "
-            "AND COALESCE(memory_status, '') NOT IN ('archived', 'deleted') "
+            f"{_arch_clause}"
             "AND COALESCE(memory_status, '') NOT LIKE '%REVIEW%' "
             "AND COALESCE(json_extract(metadata, '$.resolve.decision'), '') "
             "    NOT IN ('REVIEW','CONFLICT') "

@@ -311,6 +311,7 @@ def vector_search(
     agent_name: Optional[str] = None,
     viewer: Optional[str] = None,
     source_pipeline: Optional[str] = None,
+    include_archived: bool = False,
 ) -> dict:
     """Semantic vector search.
 
@@ -331,7 +332,7 @@ def vector_search(
 
     p = get_provider(active)
     if p is not None:
-        result = p.search(query, top_k=top_k)
+        result = p.search(query, top_k=top_k, include_archived=include_archived)
     else:
         from memall.graph.retrieve import retrieve as graph_retrieve
 
@@ -476,6 +477,7 @@ def hybrid_search(
     viewer: Optional[str] = None,
     source_pipeline: Optional[str] = None,
     include_review: bool = False,
+    include_archived: bool = False,
 ) -> dict:
     """RRF (Reciprocal Rank Fusion) hybrid search combining FTS5 + vec0.
 
@@ -559,8 +561,9 @@ def hybrid_search(
         # hid: archived rows and (measured) REVIEW rows held by the quality gate
         # or the resolve engine. One answer to "may I see this?" per mode is the
         # only defensible behaviour.
-        if not include_review:
+        if not include_archived:
             filters.append("COALESCE(m.memory_status,'') NOT IN ('archived','deleted')")
+        if not include_review:
             filters.append("COALESCE(m.memory_status,'') NOT LIKE '%REVIEW%'")
             filters.append("COALESCE(json_extract(m.metadata,'$.resolve.decision'),'') NOT IN ('REVIEW','CONFLICT')")
             filters.append("COALESCE(json_extract(m.metadata,'$.resolve.status'),'') NOT IN ('REVIEW','CONFLICT')")
@@ -593,7 +596,7 @@ def hybrid_search(
         query_vec = _query_embed(query)
         vec_rows = []
         if query_vec is not None:
-            vec_results = _vec0_knn(conn, query_vec, fetch)
+            vec_results = _vec0_knn(conn, query_vec, fetch, include_archived=include_archived)
             if vec_results:
                 mids = [vr["memory_id"] for vr in vec_results]
                 vp = ",".join("?" * len(mids))

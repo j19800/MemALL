@@ -1670,13 +1670,27 @@ def _resolve_slot_key(data: MemoryInput) -> str | None:
         return None
 
 def _find_active_slot_memory(conn, slot_key: str, agent_name: str, exclude_hash: str | None = None):
-    """Find most recent active memory for the same slot (same agent preferred)."""
+    """Find most recent active memory for the same slot (same agent preferred).
+
+    Pushes the slot match into SQL. The previous version scanned
+    ``ORDER BY updated_at DESC LIMIT 200`` and matched the slot in Python, so on
+    a store of a few hundred memories it inspected 200 rows per capture
+    (measured 5.17s per write at 300 memories) and — worse — silently MISSED the
+    slot once more than 200 newer unrelated rows existed, turning a real
+    supersede into a bogus "new_slot" NOOP. The slot lives at
+    ``metadata.slot_key`` (also written into ``machine_hints``), so filter on
+    both and let SQLite do the work.
+    """
     try:
         rows = conn.execute(
             """SELECT id, content, content_hash, metadata, created_at, updated_at, memory_status
                FROM memories
                WHERE COALESCE(memory_status,'') != 'archived'
-               ORDER BY updated_at DESC LIMIT 200""",
+                 AND (json_extract(metadata, '$.slot_key') = ?
+                      OR json_extract(metadata, '$.machine_hints.slot_key') = ?
+                      OR json_extract(metadata, '$.machine_hints.slot_key_guess') = ?)
+               ORDER BY updated_at DESC LIMIT 50""",
+            (slot_key, slot_key, slot_key),
         ).fetchall()
     except Exception:
         return None
@@ -2893,6 +2907,11 @@ def unified_search(arguments: dict) -> str:
             # omitting it here silently hid REVIEW rows even when the caller
             # explicitly asked for them.
             "include_review": arguments.get("include_review", False),
+            # include_archived must survive the same whitelist: the plain
+            # retrieve() honours it, but omitting it here made mode=fts5/direct
+            # return [] for archived rows a caller explicitly asked to inspect
+            # (measured: retrieve -> [1], MCP fts5 -> []).
+            "include_archived": arguments.get("include_archived", False),
         }
         retrieve_args = {k: v for k, v in retrieve_args.items() if v is not None}
         viewer = arguments.get("viewer") or arguments.get("agent_name") or ""
@@ -2932,6 +2951,11 @@ def unified_search(arguments: dict) -> str:
             # omitting it here silently hid REVIEW rows even when the caller
             # explicitly asked for them.
             "include_review": arguments.get("include_review", False),
+            # include_archived must survive the same whitelist: the plain
+            # retrieve() honours it, but omitting it here made mode=fts5/direct
+            # return [] for archived rows a caller explicitly asked to inspect
+            # (measured: retrieve -> [1], MCP fts5 -> []).
+            "include_archived": arguments.get("include_archived", False),
         }
         retrieve_args = {k: v for k, v in retrieve_args.items() if v is not None}
         viewer = arguments.get("viewer") or arguments.get("agent_name") or ""
@@ -2962,6 +2986,7 @@ def unified_search(arguments: dict) -> str:
             level=arguments.get("level"),
             owner=arguments.get("owner"),
             project=arguments.get("project"),
+            include_archived=arguments.get("include_archived", False),
             # Session identity is the viewer; an explicit content filter must
             # come from agent_name_filter (see the hybrid branch below).
             agent_name=arguments.get("agent_name_filter"),
@@ -2999,6 +3024,7 @@ def unified_search(arguments: dict) -> str:
         rerank=arguments.get("rerank", False),
         viewer=arguments.get("viewer") or arguments.get("agent_name"),
         include_review=arguments.get("include_review", False),
+        include_archived=arguments.get("include_archived", False),
     )
     if wants_enhancements:
         _apply_enhancements_inplace(

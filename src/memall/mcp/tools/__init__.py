@@ -301,6 +301,7 @@ registry.register(ToolDef(
         "continuity": {"type": "boolean", "description": "ADR0028 P1: attach validity-aware continuity pack (default off, config-gated)"},
         "agent_name_filter": {"type": "string", "description": "Explicit AUTHOR content filter (agent_name on this surface is the viewer session identity)"},
         "include_review": {"type": "boolean", "description": "Include memories still pending quality review (hidden by default)"},
+        "include_archived": {"type": "boolean", "description": "Include soft-deleted (archived) memories for history inspection"},
         "session_id": {"type": "string", "description": "Enable per-session novelty demotion for repeat queries"},
     }, "required": ["action"]},
     handler=_handle_read,

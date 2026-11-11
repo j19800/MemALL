@@ -164,6 +164,10 @@ class RetrieveInput(BaseModel):
     # deliberate opt-in for a human review workflow. Declared so the validator
     # does not strip it (same F3-class defect as agent_name_filter).
     include_review: bool = False
+    # Archived rows are soft-deleted; a caller inspecting history must be able
+    # to ask for them. Undeclared => validate_tool_input's exclude_unset dump
+    # stripped it, so include_archived never reached retrieve() over MCP.
+    include_archived: bool = False
     viewer: Optional[str] = Field(None, max_length=200)
 
 
@@ -390,6 +394,7 @@ class UnifiedSearchInput(BaseModel):
     # Quality-gate visibility: REVIEW rows are hidden by default; opt in here
     # for a human review workflow (declared so the validator keeps it).
     include_review: bool = Field(False, description="Include memories still pending quality review")
+    include_archived: bool = Field(False, description="Include soft-deleted (archived) memories")
     # Per-session novelty demotion (requires search.seen_tracking.enabled):
     # repeat queries within one session surface unseen results lower down
     # instead of returning the identical top-k twice.  Never excludes.
