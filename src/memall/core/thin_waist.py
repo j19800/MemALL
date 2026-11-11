@@ -2829,6 +2829,13 @@ def unified_search(arguments: dict) -> str:
             occurred_at=arguments.get("occurred_at"),
             from_occurred_at=arguments.get("from_occurred_at"),
             to_occurred_at=arguments.get("to_occurred_at"),
+            # Quality-gate visibility must survive this explicit parameter list.
+            # With any enhancement active (e.g. utility tracking on) fts5/direct
+            # route HERE instead of the plain path, and omitting include_review
+            # silently hid every REVIEW memory even when explicitly requested —
+            # measured: plain path returned [2,1], enhanced path returned [1].
+            include_review=arguments.get("include_review", False),
+            include_archived=arguments.get("include_archived", False),
         )
         # enhanced_search returns Memory objects; serialise to the same
         # shape the plain paths use.
@@ -2991,6 +2998,7 @@ def unified_search(arguments: dict) -> str:
         source_pipeline=arguments.get("source_pipeline"),
         rerank=arguments.get("rerank", False),
         viewer=arguments.get("viewer") or arguments.get("agent_name"),
+        include_review=arguments.get("include_review", False),
     )
     if wants_enhancements:
         _apply_enhancements_inplace(
@@ -3343,7 +3351,18 @@ def _build_retrieve_where(conn, query, viewer, filters) -> tuple[list, list, boo
         except Exception:
             _rv = False
         if not _rv:
-            where.append("(COALESCE(memories.memory_status, '') NOT LIKE '%REVIEW%')")
+            # The resolve engine records "needs review" in metadata.resolve, NOT
+            # in memory_status (which stays NULL for resolve-only outcomes), so
+            # filtering on memory_status alone let every REVIEW-decision memory
+            # through — measured: resolve=REVIEW rows 2 and 4 both appeared in
+            # default search results. Both markers must be honoured.
+            where.append(
+                "(COALESCE(memories.memory_status, '') NOT LIKE '%REVIEW%' "
+                "AND COALESCE(json_extract(memories.metadata, '$.resolve.decision'), '') "
+                "    NOT IN ('REVIEW','CONFLICT') "
+                "AND COALESCE(json_extract(memories.metadata, '$.resolve.status'), '') "
+                "    NOT IN ('REVIEW','CONFLICT'))"
+            )
 
     for key in ("owner", "agent_name", "category", "project", "level"):
         val = filters.get(key)

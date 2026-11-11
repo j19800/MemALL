@@ -128,9 +128,20 @@ def _vec0_knn(conn, query_vec: np.ndarray, top_k: int) -> list[dict]:
             return []
         ids = [r["rowid"] for r in rows]
         ph = ",".join("?" * len(ids))
+        # Honour the SAME quality-gate visibility as the SQL paths. The vector
+        # mode used to filter only `archived`, so a memory the resolve engine
+        # marked REVIEW (or the quality gate held) still came back through
+        # mode=vector / hybrid — measured: default hybrid returned the REVIEW
+        # row while default fts5 correctly hid it. Two different answers to
+        # "may I see this?" depending on the mode is a correctness bug.
         live = {r[0] for r in conn.execute(
             f"SELECT id FROM memories WHERE id IN ({ph}) "
-            "AND COALESCE(memory_status, '') != 'archived'", ids).fetchall()}
+            "AND COALESCE(memory_status, '') NOT IN ('archived', 'deleted') "
+            "AND COALESCE(memory_status, '') NOT LIKE '%REVIEW%' "
+            "AND COALESCE(json_extract(metadata, '$.resolve.decision'), '') "
+            "    NOT IN ('REVIEW','CONFLICT') "
+            "AND COALESCE(json_extract(metadata, '$.resolve.status'), '') "
+            "    NOT IN ('REVIEW','CONFLICT')", ids).fetchall()}
         results = []
         for r in rows:
             if r["rowid"] not in live:

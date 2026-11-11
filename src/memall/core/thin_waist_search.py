@@ -475,6 +475,7 @@ def hybrid_search(
     rerank: Optional[bool] = None,
     viewer: Optional[str] = None,
     source_pipeline: Optional[str] = None,
+    include_review: bool = False,
 ) -> dict:
     """RRF (Reciprocal Rank Fusion) hybrid search combining FTS5 + vec0.
 
@@ -553,6 +554,16 @@ def hybrid_search(
         if source_pipeline:
             filters.append("json_extract(m.metadata, '$.source_pipeline') = ?")
             filter_params.append(source_pipeline)
+        # Quality-gate visibility. This FTS candidate query had NO status
+        # filtering at all, so hybrid/auto returned memories that fts5 correctly
+        # hid: archived rows and (measured) REVIEW rows held by the quality gate
+        # or the resolve engine. One answer to "may I see this?" per mode is the
+        # only defensible behaviour.
+        if not include_review:
+            filters.append("COALESCE(m.memory_status,'') NOT IN ('archived','deleted')")
+            filters.append("COALESCE(m.memory_status,'') NOT LIKE '%REVIEW%'")
+            filters.append("COALESCE(json_extract(m.metadata,'$.resolve.decision'),'') NOT IN ('REVIEW','CONFLICT')")
+            filters.append("COALESCE(json_extract(m.metadata,'$.resolve.status'),'') NOT IN ('REVIEW','CONFLICT')")
         where_sql = (" AND " + " AND ".join(filters)) if filters else ""
         # With filters the candidate pool is pre-cut, so fetch more of it.
         fetch = top_k * (8 if filters or source_pipeline else 2)
