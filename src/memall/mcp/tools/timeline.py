@@ -5,10 +5,14 @@ from memall.core.thin_waist import timeline
 def handle(arguments: dict) -> str:
     args = dict(arguments)
     agent_name = args.pop("agent_name", None)
+    # A caller may pass either spelling; both must be consumed or `viewer` ends
+    # up duplicated (explicit kwarg + **args) and raises TypeError.
+    explicit_viewer = args.pop("viewer", None)
+    args.pop("action", None)
     # Timeline is a read path: pass the session identity down as the viewer so
     # core.timeline can drop rows this caller may not read.  It used to be
     # dropped entirely, which returned every row to every caller.
-    items = timeline(viewer=agent_name or None, **args)
+    items = timeline(viewer=explicit_viewer or agent_name or None, **args)
     # Include level/owner/agent_name/subject — the previous projection dropped
     # them, forcing every timeline consumer to do a follow-up trace call.
     return json.dumps([{

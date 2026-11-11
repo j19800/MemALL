@@ -97,3 +97,48 @@ def test_exact_duplicate_still_dedups():
         from memall.config import reset_config
         reset_config()
         cleanup_temp_db(db, orig)
+
+
+def test_differing_time_or_quantity_is_never_merged():
+    """A differing number/date IS the information, not noise.
+
+    Measured false merges at the 0.72 shingle bar: "…一周前确认" vs
+    "…一个月前确认" scored 0.76 and collapsed three timeline entries into one,
+    destroying the very ordering the temporal model exists to provide.
+    """
+    db, orig = init_temp_db()
+    try:
+        _enable_dedup()
+        cases = [
+            ("数据库选 PostgreSQL 16 作为主库，一周前确认。",
+             "数据库选 PostgreSQL 16 作为主库，一个月前确认。"),
+            ("数据库选 PostgreSQL 16 作为主库，半年前确认。",
+             "数据库选 PostgreSQL 16 作为主库，一年前确认。"),
+            ("数据库连接池设为 20 个连接。", "数据库连接池设为 50 个连接。"),
+        ]
+        for a_text, b_text in cases:
+            a = _capture(a_text, category="general")
+            b = _capture(b_text, category="general")
+            assert a != b, f"quantities/dates differ but merged: {a_text!r} vs {b_text!r}"
+        print("PASS: test_differing_time_or_quantity_is_never_merged")
+    finally:
+        from memall.config import reset_config
+        reset_config()
+        cleanup_temp_db(db, orig)
+
+
+def test_timeline_accepts_an_explicit_identity():
+    """TimelineInput lacked agent_name/viewer, so the validator stripped them and
+    an explicit filter was silently ignored."""
+    db, orig = init_temp_db()
+    try:
+        from memall.mcp.validator import validate_tool_input
+        ok, data, err = validate_tool_input("memall_read", {
+            "action": "timeline", "hours": 24, "agent_name": "who",
+            "viewer": "who"})
+        assert ok, err
+        assert data.get("agent_name") == "who", data
+        assert data.get("viewer") == "who", data
+        print("PASS: test_timeline_accepts_an_explicit_identity")
+    finally:
+        cleanup_temp_db(db, orig)

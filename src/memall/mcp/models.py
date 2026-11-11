@@ -203,6 +203,12 @@ class TimelineInput(BaseModel):
     days: Optional[int] = Field(None, ge=1, le=365)
     start: Optional[str] = None
     end: Optional[str] = None
+    # timeline() accepts `viewer` for trust filtering, but neither spelling was
+    # declared here, so the validator stripped them: an explicit
+    # agent_name/viewer on a timeline call was silently ignored and the result
+    # fell back to whatever identity the adapter had bound. Declared both.
+    agent_name: Optional[str] = Field(None, max_length=200)
+    viewer: Optional[str] = Field(None, max_length=200)
 
 
 # ── Persona & Ask tools ──

@@ -2214,6 +2214,28 @@ def _char_level_dup_lookup(content: str, recent, threshold: float) -> Optional[i
         return bool(_NEG_RE.search(str(text)))
 
     new_neg = _negated(content)
+
+    # Quantitative / temporal token guard. Two sentences that differ ONLY in a
+    # number, a date or a quantity are NOT duplicates — the differing token IS
+    # the information. Measured false merges at the 0.72 shingle bar:
+    #   "…一周前确认" vs "…一个月前确认"  Jaccard 0.76
+    #   "…一周前确认" vs "…半年前确认"    Jaccard 0.72
+    # all three collapsed into one memory, destroying the timeline.
+    _QTY_RE = re.compile(
+        r"\d+(?:\.\d+)?|"
+        r"今天|昨天|明天|后天|前天|本周|上周|下周|本月|上月|下月|"
+        r"今年|去年|明年|刚刚|刚才|"
+        # Chinese numerals + time units: "一周前" / "一个月前" / "半年前" carry
+        # the actual information and must not be treated as noise.
+        r"[一二三四五六七八九十百千万半几\d]+\s*(?:天|日|周|星期|月|年|小时|分钟|秒|个|条|次|人|台|元|块|%|px|qps|ms|gb|mb)"
+        r"(?:前|后|以前|以后|之前|之后)?",
+        re.I,
+    )
+
+    def _signature(text: str) -> frozenset:
+        return frozenset(t.lower() for t in _QTY_RE.findall(str(text)))
+
+    new_sig = _signature(content)
     best_id, best = None, 0.0
     for r in recent:
         old_set = shingles(r["content"])
@@ -2221,6 +2243,8 @@ def _char_level_dup_lookup(content: str, recent, threshold: float) -> Optional[i
             continue
         if new_neg != _negated(r["content"]):
             continue          # opposite polarity -> never a duplicate
+        if new_sig != _signature(r["content"]):
+            continue          # differing quantities/dates -> different facts
         inter = len(new_set & old_set)
         if not inter:
             continue
