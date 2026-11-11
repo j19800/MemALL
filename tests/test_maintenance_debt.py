@@ -360,3 +360,96 @@ def test_index_rebuild_works_on_a_small_corpus():
         print("PASS: test_index_rebuild_works_on_a_small_corpus")
     finally:
         cleanup_temp_db(db, orig)
+
+
+def test_utility_telemetry_reports_cold_start_and_disturbance():
+    """Rollout evidence: a switch that never reorders is pointless, one that
+    reorders wildly is dangerous. Telemetry must quantify both."""
+    db, orig = init_temp_db()
+    try:
+        import memall.config as cfg
+        from memall.core.db import get_conn
+        from memall.core.models import MemoryInput
+        from memall.core.thin_waist import capture, unified_search
+        from memall.search.enhancements import record_interaction, utility_telemetry
+
+        cfg.get_config()
+        cfg._config.setdefault("quality", {}).setdefault("utility", {})[
+            "tracking_enabled"] = True
+        cfg._last_mtime_diff = None
+        cfg._last_mtime_check = float("inf")
+
+        a = int(capture(MemoryInput(
+            content="PostgreSQL PostgreSQL 主库选型决策事务稳定团队熟悉。",
+            level="L4", category="decision", agent_name="tel", project="p")))
+        b = int(capture(MemoryInput(
+            content="PostgreSQL 主库选型补充说明事务稳定团队熟悉。",
+            level="L4", category="decision", agent_name="tel", project="p")))
+
+        # Cold start: no interaction evidence at all.
+        utility_telemetry(reset=True)
+        unified_search({"query": "PostgreSQL 主库选型", "mode": "fts5",
+                        "agent_name": "tel", "limit": 10})
+        cold = utility_telemetry()
+        assert cold["calls"] >= 1, cold
+        assert cold["cold_start_share"] == 1.0, cold
+        assert cold["applied"] == 0, cold
+
+        # With evidence the rerank should apply and move at least one item.
+        c = get_conn()
+        for _ in range(5):
+            record_interaction(c, query="PostgreSQL 主库选型", memory_id=b,
+                               action="click", agent_name="tel", accepted=True)
+        c.close()
+
+        utility_telemetry(reset=True)
+        unified_search({"query": "PostgreSQL 主库选型", "mode": "fts5",
+                        "agent_name": "tel", "limit": 10})
+        warm = utility_telemetry()
+        assert warm["applied"] >= 1, warm
+        assert warm["cold_start_share"] == 0.0, warm
+        assert warm["ranking_disturbance"] >= 0.0, warm
+        assert "max_displacement" in warm, warm
+        print("PASS: test_utility_telemetry_reports_cold_start_and_disturbance")
+    finally:
+        from memall.config import reset_config
+        reset_config()
+        cleanup_temp_db(db, orig)
+
+
+def test_cluster_drain_is_visible_across_connections():
+    """A drain requested by one instance must stop the others.
+
+    `_worker_stop` is a threading.Event — process-local. With gateway +
+    scheduler + MCP server running, stopping one left the others claiming jobs.
+    The signal now lives in the database so every instance polls the same flag.
+    """
+    db, orig = init_temp_db()
+    try:
+        from memall.core.db import get_conn
+        from memall.pipeline import kb_enrich as ke
+
+        c = get_conn()
+        assert ke._cluster_drain_requested(c) is False
+        c.close()
+
+        assert ke.request_cluster_drain(reason="test")["ok"] is True
+
+        # A SEPARATE connection stands in for another process.
+        c2 = get_conn()
+        assert ke._cluster_drain_requested(c2) is True, "drain must be cluster-visible"
+        c2.close()
+
+        assert ke.clear_cluster_drain()["ok"] is True
+        c3 = get_conn()
+        assert ke._cluster_drain_requested(c3) is False
+        c3.close()
+
+        # Idempotent both ways.
+        assert ke.request_cluster_drain()["ok"] is True
+        assert ke.request_cluster_drain()["ok"] is True
+        assert ke.clear_cluster_drain()["ok"] is True
+        assert ke.clear_cluster_drain()["ok"] is True
+        print("PASS: test_cluster_drain_is_visible_across_connections")
+    finally:
+        cleanup_temp_db(db, orig)

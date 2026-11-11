@@ -524,6 +524,15 @@ def _handle_system(args: dict) -> str:
         return hub.handle_sync(args)
     elif action == "session_start":
         return session.handle_session_start(args)
+    elif action in ("utility_telemetry", "p3_telemetry"):
+        # ADR 0028 P3 rollout evidence: ranking disturbance, cold-start share,
+        # latency, adoption. Read-only counters (no PII, no storage).
+        try:
+            from memall.search.enhancements import utility_telemetry
+            return json.dumps({"ok": True, "telemetry": utility_telemetry(
+                reset=bool(arguments.get("reset")))}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"ok": False, "error": str(e)[:200]}, ensure_ascii=False)
     elif action == "kb_enrich_stats":
         from memall.pipeline.kb_enrich import kb_enrich_stats
         return json.dumps(kb_enrich_stats(), ensure_ascii=False)

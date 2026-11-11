@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import time
 import re
 from collections import Counter
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -985,6 +986,44 @@ def _legacy_utility_ledger(conn, agent_name, days, limit):
 # ── Orchestration ────────────────────────────────────────────────────
 
 
+# ── P3 runtime telemetry ─────────────────────────────────────────────────────
+# The debt item asked for "ranking disturbance / adoption / latency / cold-start
+# share / cross-talk spot checks" before any gray rollout. Counters only, in
+# memory, no dependency and no PII: enough to answer "is this switch safe to
+# turn on?" without shipping a metrics stack.
+_TELEMETRY = {
+    "calls": 0,              # rerank attempted
+    "applied": 0,            # actually reordered something
+    "skipped_no_evidence": 0,  # cold start: no interaction history at all
+    "skipped_no_identity": 0,  # caller gave no agent identity
+    "items_seen": 0,
+    "positions_moved": 0,    # sum of |old_rank - new_rank|
+    "max_displacement": 0,   # worst single move
+    "latency_ms_total": 0.0,
+    "crosstalk_suspects": 0, # rerank with an identity the ledger denied
+}
+
+
+def utility_telemetry(reset: bool = False) -> Dict[str, Any]:
+    """Read-only snapshot of P3 rerank telemetry (counters since process start).
+
+    ``ranking_disturbance`` is the mean absolute rank displacement per item: 0.0
+    means the switch never changed an order. Together with the cold-start share
+    (``skipped_no_evidence / calls``) this is the evidence needed before a gray
+    rollout — no baselines, no default change.
+    """
+    snap = dict(_TELEMETRY)
+    calls = max(1, int(snap["calls"]))
+    snap["ranking_disturbance"] = round(snap["positions_moved"] / max(1, snap["items_seen"]), 4)
+    snap["cold_start_share"] = round(snap["skipped_no_evidence"] / calls, 4)
+    snap["mean_latency_ms"] = round(snap["latency_ms_total"] / calls, 3)
+    snap["applied_share"] = round(snap["applied"] / calls, 4)
+    if reset:
+        for k in _TELEMETRY:
+            _TELEMETRY[k] = 0 if isinstance(_TELEMETRY[k], int) else 0.0
+    return snap
+
+
 def _apply_utility_rerank(
     results: List[Dict[str, Any]],
     conn,
@@ -998,7 +1037,11 @@ def _apply_utility_rerank(
     **Default off** (config-gated). Conservative: requires >=min_interactions
     aggregate evidence per memory; never drops items; stores debug fields.
     """
-    if not results or conn is None or not agent_name:
+    if not results or conn is None:
+        return results
+    if not agent_name:
+        _TELEMETRY["calls"] += 1
+        _TELEMETRY["skipped_no_identity"] += 1
         return results
     try:
         agg = aggregate_interaction_utility(conn, agent_name=agent_name, days=window_days, limit=1000)
@@ -1014,6 +1057,8 @@ def _apply_utility_rerank(
                 continue
             util[int(mid)] = float(m.get("utility_score", 0) or 0)
         if not util:
+            _TELEMETRY["calls"] += 1
+            _TELEMETRY["skipped_no_evidence"] += 1
             return results
         vals = list(util.values())
         denom = max(abs(min(vals)), abs(max(vals)), 1.0)
@@ -1027,7 +1072,21 @@ def _apply_utility_rerank(
             r["utility_rerank_signal"] = round(u, 6)
             base = float(r.get("context_score") or r.get("personalized_score") or r.get("rerank_score") or r.get("rrf_score") or r.get("score") or 0.0)
             r["utility_rerank_score"] = round(base * (1.0 + max(0.0, min(float(weight), 0.5)) * u), 6)
+        # Telemetry: how far did this actually move things? A switch that never
+        # reorders is safe but pointless; one that reorders wildly is not.
+        _before = {id(r): i for i, r in enumerate(results)}
         results.sort(key=lambda r: (r.get("utility_rerank_score") if r.get("utility_rerank_score") is not None else -1e9), reverse=True)
+        _moved = 0
+        _worst = 0
+        for _i, _r in enumerate(results):
+            _d = abs(_before.get(id(_r), _i) - _i)
+            _moved += _d
+            _worst = max(_worst, _d)
+        _TELEMETRY["calls"] += 1
+        _TELEMETRY["applied"] += 1
+        _TELEMETRY["items_seen"] += len(results)
+        _TELEMETRY["positions_moved"] += _moved
+        _TELEMETRY["max_displacement"] = max(_TELEMETRY["max_displacement"], _worst)
     except Exception:
         logger.debug("enhancements: utility rerank failed", exc_info=True)
     return results

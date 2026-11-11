@@ -93,7 +93,7 @@
 - [x] Conservative gating: >=min_interactions evidence, never drops items; tested.
 - [x] Cold-start / low-evidence fallback policy (explicit design doc).  *(2026-11-10 已完成/已落地，本轮回写)*
 - [x] Cross-agent isolation review for interaction utility aggregation.  *(2026-11-10 已完成/已落地，本轮回写)*
-- [ ] Telemetry + ranking-quality baselines before any gray rollout / default change.
+- [x] Telemetry + ranking-quality baselines before any gray rollout / default change.  *(2026-11-11 已补：遥测 + `docs/p0-p2/p3-baseline-report.md` 可复现基线)*
 - [x] Gray-rollout criteria and kill-switch documentation.  *(2026-11-10 已完成/已落地，本轮回写)*
 
 ## 提交登记（2026-11-10）
@@ -118,7 +118,7 @@
 - [x] `reprocess` 重复调用幂等（不复制行、有界 once）。
 - [x] 部署文档 `p2-4-worker-deployment.md`（autostart 默认 off、handler 仍占位）。
 - [ ] worker 无「排空当前 job 后再停」的 drain 语义（stop 在下一轮循环边界退出，当前 job 完成其步骤）。
-- [ ] 跨进程 graceful drain 协调（多实例部署时）。
+- [x] 跨进程 graceful drain 协调（多实例部署时）。  *(2026-11-11 已实现：`worker_control` 表 + `request_cluster_drain`/`clear_cluster_drain`，每轮循环轮询，当前 job 先跑完)*
 - [ ] enrichment handler 接真实 LLM/embedding 管道（当前轻量占位）。
 - [x] 队列积压 / 租约过期 / `exceeded_max_attempts` 的告警阈值与 runbook。  *(2026-11-11 已实现：pipeline.health 返回 ok/alerts/thresholds，含 queue_backlog/stale_running/failures_without_success)*
 
@@ -127,7 +127,7 @@
 - [x] 跨 agent 隔离（agent-scoped 聚合）测试。
 - [x] 灰度策略 + Kill-Switch 文档 `p3-utility-rerank-rollout.md`。
 - [x] 空 `agent_name` 语义决策（当前退化为「全局账本」不过滤）——直接调用时无隔离，灰度前需定夺。  *(2026-11-11 已决策并实现：默认 deny，`search.utility_ledger.empty_agent_scope="global"` 才放开)*
-- [ ] §度量基线遥测埋点（排序扰动/采纳率/延迟/冷启动占比/串扰抽查）最小实现。
+- [x] §度量基线遥测埋点（排序扰动/采纳率/延迟/冷启动占比/串扰抽查）最小实现。  *(2026-11-11 已实现：`utility_telemetry()` + `memall_system action=utility_telemetry`，覆盖 ranking_disturbance/max_displacement/cold_start_share/applied_share/mean_latency_ms)*
 - [ ] 书面基线报告 + 评审；灰度白名单机制；改默认（**近期一律不改**）。
 
 ### P4（deferred，仅登记）

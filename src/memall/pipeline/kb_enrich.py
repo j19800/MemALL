@@ -343,6 +343,12 @@ def kb_enrich_worker_loop(poll_interval_seconds: int = 2,
         try:
             conn = get_conn()
             _ensure_pipeline_jobs_schema(conn)
+            # Finish the current job, then honour a drain requested by ANY
+            # instance (see request_cluster_drain).
+            if _cluster_drain_requested(conn):
+                log.info("kb_enrich worker: cluster drain requested — stopping")
+                _worker_stop.set()
+                break
             job_id = _claim_job(conn, claim_ttl_seconds)
             if job_id is not None:
                 job = conn.execute(
@@ -562,6 +568,72 @@ _worker_started: bool = False
 _worker_stop = threading.Event()   # cooperative shutdown signal for the loop
 
 
+# ── Cross-process drain signal ──────────────────────────────────────────────
+# `_worker_stop` is a threading.Event: it can only stop the worker in THIS
+# process. With more than one instance (gateway + scheduler + MCP server, or a
+# container pair) stopping one leaves the others claiming jobs. A row in
+# pipeline_jobs' sibling table gives every instance a shared signal it polls.
+_DRAIN_TABLE = "worker_control"
+
+
+def _ensure_drain_table(conn) -> None:
+    conn.execute(
+        f"CREATE TABLE IF NOT EXISTS {_DRAIN_TABLE} ("
+        "scope TEXT PRIMARY KEY, drain INTEGER NOT NULL DEFAULT 0, "
+        "requested_at TEXT, requested_by TEXT)"
+    )
+
+
+def request_cluster_drain(reason: str = "", by: str = "") -> dict:
+    """Ask EVERY instance to stop after its current job (idempotent)."""
+    from datetime import datetime, timezone
+    from memall.core.db import get_conn
+    try:
+        conn = get_conn()
+        try:
+            _ensure_drain_table(conn)
+            conn.execute(
+                f"INSERT INTO {_DRAIN_TABLE} (scope, drain, requested_at, requested_by) "
+                "VALUES ('kb_enrich', 1, ?, ?) "
+                "ON CONFLICT(scope) DO UPDATE SET drain=1, requested_at=excluded.requested_at, "
+                "requested_by=excluded.requested_by",
+                (datetime.now(timezone.utc).isoformat(), str(by or reason or "")[:200]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return {"ok": True, "cluster_drain": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+def clear_cluster_drain() -> dict:
+    """Cancel a pending cluster-wide drain."""
+    from memall.core.db import get_conn
+    try:
+        conn = get_conn()
+        try:
+            _ensure_drain_table(conn)
+            conn.execute(f"UPDATE {_DRAIN_TABLE} SET drain=0 WHERE scope='kb_enrich'")
+            conn.commit()
+        finally:
+            conn.close()
+        return {"ok": True, "cluster_drain": False}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+def _cluster_drain_requested(conn) -> bool:
+    """Read the shared drain flag; never raises (a missing table means 'no')."""
+    try:
+        _ensure_drain_table(conn)
+        row = conn.execute(
+            f"SELECT drain FROM {_DRAIN_TABLE} WHERE scope='kb_enrich'").fetchone()
+        return bool(row and int(row[0] or 0))
+    except Exception:
+        return False
+
+
 def stop_kb_enrich_worker(timeout_seconds: float = 5.0) -> dict:
     """Cooperatively stop the autostarted worker (bounded, non-blocking-ish).
 
@@ -571,6 +643,12 @@ def stop_kb_enrich_worker(timeout_seconds: float = 5.0) -> dict:
     """
     global _worker_thread, _worker_started
     _worker_stop.set()
+    # Also signal other instances, so a deployment stop does not leave them
+    # claiming jobs after this process exits.
+    try:
+        request_cluster_drain(reason="stop_kb_enrich_worker")
+    except Exception:
+        pass
     with _worker_lock:
         t = _worker_thread
     joined = False
