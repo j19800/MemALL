@@ -52,9 +52,23 @@ def identity_step() -> dict:
     conn = get_conn()
     try:
         now = datetime.now(timezone.utc).isoformat()
+        # Bounded scan. This used to read EVERY non-archived memory and run ten
+        # regexes over each; because session_start triggers this step, every
+        # read paid for it — measured 0.69s per search at 5000 memories with
+        # identity_step accounting for ~85% of the time (10k _extract_matches
+        # calls, 70k finditer calls per query). Traits come from RECENT
+        # behaviour, so the newest N rows are the right population, and the
+        # limit is configurable for deployments that want a wider window.
+        try:
+            from memall.config import get_config as _gc
+            _limit = int(_gc("session.identity_scan_limit", 500) or 500)
+        except Exception:
+            _limit = 500
+        _limit = max(50, min(_limit, 5000))
         rows = conn.execute(
             "SELECT id, content, agent_name, level, metadata FROM memories "
-            "WHERE COALESCE(memory_status, '') != 'archived' AND LENGTH(TRIM(content)) > 20 ORDER BY id"
+            "WHERE COALESCE(memory_status, '') != 'archived' AND LENGTH(TRIM(content)) > 20 "
+            "ORDER BY id DESC LIMIT ?", (_limit,)
         ).fetchall()
 
         # Per-agent trait accumulation

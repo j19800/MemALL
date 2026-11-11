@@ -243,3 +243,56 @@ def test_tasks_and_incidents_get_slots():
         print("PASS: test_tasks_and_incidents_get_slots")
     finally:
         cleanup_temp_db(db, orig)
+
+
+def test_read_path_does_not_scan_the_whole_table():
+    """A search must not pay for a full-table regex pass.
+
+    session_start maintenance ran identity_step on EVERY read, and identity_step
+    read every non-archived memory and ran ten regexes over each: at 5000
+    memories that was ~85% of a 0.69s search (10k _extract_matches calls, 70k
+    finditer calls per query). The scan is now bounded to the newest N rows.
+    """
+    db, orig = init_temp_db()
+    try:
+        import memall.config as cfg
+        from memall.core.db import get_conn
+        from memall.core.models import MemoryInput
+        from memall.core.thin_waist import capture
+        from memall.pipeline import identity
+
+        # Seed more rows than the scan limit so the bound is observable.
+        cfg.reset_config()          # do not inherit a previous test's mutations
+        cfg.get_config()
+        cfg._config.setdefault("session", {})["identity_scan_limit"] = 50
+        cfg._last_mtime_check = float("inf")
+
+        for i in range(120):
+            capture(MemoryInput(
+                content=f"身份扫描测试记忆第{i}条 内容足够长通过门禁校验流程。",
+                level="L4", agent_name="ids", project="p"))
+
+        seen = {"n": 0}
+        orig_extract = identity._extract_matches
+
+        def counting(text, patterns):
+            seen["n"] += 1
+            return orig_extract(text, patterns)
+
+        identity._extract_matches = counting
+        try:
+            out = identity.identity_step()
+        finally:
+            identity._extract_matches = orig_extract
+
+        assert out.get("scanned", 0) <= 50, f"scan was not bounded: {out}"
+        # identity_step runs two pattern groups per row (L1 and L7), so the
+        # extractor is called at most 2x the row limit.
+        assert seen["n"] <= 100, f"extractor ran {seen['n']} times for a 50-row limit"
+        # And critically: it must NOT be proportional to the 120 seeded rows.
+        assert seen["n"] < 120, f"extractor scaled with the table, not the limit: {seen['n']}"
+        print("PASS: test_read_path_does_not_scan_the_whole_table")
+    finally:
+        from memall.config import reset_config
+        reset_config()
+        cleanup_temp_db(db, orig)

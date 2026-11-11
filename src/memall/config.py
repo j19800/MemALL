@@ -369,6 +369,10 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         # every start, so it must be an explicit operator decision.
         "auto_improve": False,
         "auto_identity": False,
+        # identity_step scans this many NEWEST memories for L1/L7 signals.
+        # Scanning the whole table made every read pay for a full-table regex
+        # pass (0.69s/search at 5000 memories, ~85% of the time).
+        "identity_scan_limit": 500,
         # ADR 0028 P1: at session_end, auto-inject session/thread/project/agent
         # provenance (source_pipeline=conversation.session_end) into the
         # continuity capture. Default OFF (preserves the existing session.end
