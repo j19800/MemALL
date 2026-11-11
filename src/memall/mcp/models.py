@@ -168,6 +168,12 @@ class RetrieveInput(BaseModel):
     # to ask for them. Undeclared => validate_tool_input's exclude_unset dump
     # stripped it, so include_archived never reached retrieve() over MCP.
     include_archived: bool = False
+    # Temporal filters. Undeclared => stripped by exclude_unset, so a
+    # date-range query silently matched the entire corpus (measured: an
+    # "October only" search returned a September row).
+    occurred_at: Optional[str] = Field(None, max_length=64)
+    from_occurred_at: Optional[str] = Field(None, max_length=64)
+    to_occurred_at: Optional[str] = Field(None, max_length=64)
     viewer: Optional[str] = Field(None, max_length=200)
 
 
@@ -395,6 +401,9 @@ class UnifiedSearchInput(BaseModel):
     # for a human review workflow (declared so the validator keeps it).
     include_review: bool = Field(False, description="Include memories still pending quality review")
     include_archived: bool = Field(False, description="Include soft-deleted (archived) memories")
+    occurred_at: Optional[str] = Field(None, max_length=64)
+    from_occurred_at: Optional[str] = Field(None, max_length=64)
+    to_occurred_at: Optional[str] = Field(None, max_length=64)
     # Per-session novelty demotion (requires search.seen_tracking.enabled):
     # repeat queries within one session surface unseen results lower down
     # instead of returning the identical top-k twice.  Never excludes.

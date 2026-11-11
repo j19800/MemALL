@@ -2221,8 +2221,8 @@ def _capture_insert_row(conn, data: MemoryInput, h: str, now: str) -> int:
                (content, content_hash, level, owner, agent_name, creator, subject,
                 project, category, summary, occurred_at, created_at, updated_at,
                 supersedes, confidence, visibility, metadata, tags, thread_id,
-                agent_name_locked, memory_status, accumulate_key, stream)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                agent_name_locked, memory_status, accumulate_key, stream, valid_from)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 data.content,
                 h,
@@ -2253,6 +2253,13 @@ def _capture_insert_row(conn, data: MemoryInput, h: str, now: str) -> int:
                 memory_status,
                 accumulate_key_val,
                 data.stream,
+                # valid_from is when the FACT became true, which is the
+                # occurred_at the caller supplied (falling back to write time).
+                # Using `now` here made a backfilled decision valid from today
+                # rather than from when it actually applied, so "what was true
+                # on date X" answered the wrong question. Supersede later sets
+                # invalid_at on the row it replaces.
+                occurred or now,
             ),
         )
         return cur.lastrowid
@@ -3437,11 +3444,16 @@ def _build_retrieve_where(conn, query, viewer, filters) -> tuple[list, list, boo
         where.append(tsql)
         params.extend(tparams)
 
-    date_start = filters.get("date_start")
+    # Accept BOTH spellings. The SQL only looked for date_start/date_end while
+    # every caller (MCP schema, unified_search, enhanced_search) passes
+    # from_occurred_at/to_occurred_at — so a date-range filter silently matched
+    # the whole corpus. Measured: a "October only" query returned a September
+    # row. date_start/date_end are kept for existing direct callers.
+    date_start = filters.get("date_start") or filters.get("from_occurred_at")
     if date_start:
         where.append("memories.occurred_at >= ?")
         params.append(date_start)
-    date_end = filters.get("date_end")
+    date_end = filters.get("date_end") or filters.get("to_occurred_at")
     if date_end:
         where.append("memories.occurred_at <= ?")
         params.append(date_end)
