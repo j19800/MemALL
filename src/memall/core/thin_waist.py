@@ -2099,8 +2099,12 @@ def _infer_thread_root(conn, data: MemoryInput, now: str) -> Optional[int]:
     # First try: temporal window approach (existing logic)
     window_min = get_config("capture.thread_inference_window_minutes", 0)
     if not window_min or window_min <= 0:
-        # Temporal feature disabled, go straight to semantic fallback
-        pass
+        # The docstring promises "None when the feature is disabled
+        # (window <= 0)". The code used to `pass` here and fall through to the
+        # semantic path, so setting the window to 0 did NOT disable inference —
+        # it just switched to the other matcher (measured: the documented
+        # zero-window disable had no effect). Zero means off.
+        return None
     else:
         proj = data.project or ""
         try:
@@ -2136,12 +2140,17 @@ def _infer_thread_root(conn, data: MemoryInput, now: str) -> Optional[int]:
         return None
         
     try:
-        # Get recent memories from the same agent for semantic comparison
+        # Get recent memories from the same agent for semantic comparison.
+        # PROJECT BOUNDARY IS MANDATORY: a thread is "same agent AND same
+        # project". Comparing across projects linked unrelated work merely
+        # because the sentences resembled each other (measured: two 不同项目
+        # memories got threaded after the shingle similarity raised recall).
         recent = conn.execute(
             "SELECT id, content FROM memories "
             "WHERE agent_name = ? AND LENGTH(TRIM(content)) >= 10 "
+            "AND COALESCE(project, '') = COALESCE(?, '') "
             "ORDER BY created_at DESC LIMIT ?",
-            (data.agent_name, int(semantic_window)),
+            (data.agent_name, data.project, int(semantic_window)),
         ).fetchall()
     except sqlite3.Error:
         recent = []
@@ -2161,6 +2170,64 @@ def _infer_thread_root(conn, data: MemoryInput, now: str) -> Optional[int]:
     except Exception:
         # If semantic search fails, return None
         return None
+
+
+def _char_level_dup_lookup(content: str, recent, threshold: float) -> Optional[int]:
+    """Character-shingle Jaccard over recent memories (CJK-friendly).
+
+    TF-IDF treats "数据库选 X" and "主数据库决定用 X" as almost disjoint because
+    they share few whole tokens; character shingles capture the overlap that a
+    human reads as "the same decision, re-worded". The configured threshold is
+    reused as the bar, but scaled into shingle space: a TF-IDF 0.92 corresponds
+    to roughly 0.72 Jaccard in practice, so the effective bar is
+    ``max(0.5, threshold - 0.2)`` — deliberately conservative, because a false
+    merge silently loses a memory while a missed merge only costs a duplicate.
+    """
+    def shingles(text: str, n: int = 3) -> set:
+        t = "".join(str(text).split()).lower()
+        if len(t) < n:
+            return {t} if t else set()
+        return {t[i:i + n] for i in range(len(t) - n + 1)}
+
+    new_set = shingles(content)
+    if not new_set:
+        return None
+    bar = max(0.5, float(threshold) - 0.2)
+
+    # Polarity guard. Character overlap cannot see negation, and a one-character
+    # difference flips the meaning: "数据库使用 PostgreSQL 作为主库" and
+    # "数据库不使用 PostgreSQL 作为主库" score 0.95 Jaccard — a measured FALSE
+    # MERGE that would silently destroy a reversal of the decision. When one side
+    # is negated and the other is not, they are never duplicates.
+    # Precise negation only. A bare "不" also matches 不同 / 不仅 / 不断, which
+    # made unrelated memories look like opposite-polarity statements and broke
+    # thread inference (measured: two 不同项目 memories stopped being linked).
+    # Require a negation that actually reverses a predicate.
+    _NEG_RE = re.compile(
+        r"不使用|不再|不再使用|不可行|不能|不支持|不允许|不需要|不应该|"
+        r"没有|无需|无法|并非|不是|禁止|取消|废弃|停止|避免|放弃|"
+        r"\bnot\b|\bno\b|\bnever\b|\bwithout\b|\bdisable[ds]?\b|\bdeprecated\b",
+        re.I,
+    )
+
+    def _negated(text: str) -> bool:
+        return bool(_NEG_RE.search(str(text)))
+
+    new_neg = _negated(content)
+    best_id, best = None, 0.0
+    for r in recent:
+        old_set = shingles(r["content"])
+        if not old_set:
+            continue
+        if new_neg != _negated(r["content"]):
+            continue          # opposite polarity -> never a duplicate
+        inter = len(new_set & old_set)
+        if not inter:
+            continue
+        jac = inter / len(new_set | old_set)
+        if jac >= bar and jac > best:
+            best, best_id = jac, r["id"]
+    return best_id
 
 
 def _semantic_dedup_lookup(
@@ -2193,7 +2260,15 @@ def _semantic_dedup_lookup(
         sim = cosine_sim(base, tfidf_docs[i + 1])
         if sim >= threshold and sim > best_sim:
             best_sim, best_id = sim, r["id"]
-    return best_id
+    if best_id is not None:
+        return best_id
+    # TF-IDF alone cannot catch re-worded Chinese duplicates: measured on real
+    # pairs, "数据库选 PostgreSQL 16 作为主库，事务稳定" vs "主数据库决定用
+    # PostgreSQL 16，因为事务支持稳定" scores 0.29, and even a near-identical
+    # sentence with one extra clause scores 0.34 — nowhere near a 0.85 bar. So
+    # the configured threshold could never fire and semantic dedup was dead
+    # weight. Add a character-level measure that suits short CJK text.
+    return _char_level_dup_lookup(data.content, recent, threshold)
 
 
 def _capture_insert_row(conn, data: MemoryInput, h: str, now: str) -> int:
