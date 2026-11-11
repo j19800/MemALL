@@ -227,6 +227,17 @@ def _tfidf_embed(texts, normalize: bool = True):
     vec, svd = model
     X = vec.transform(texts)
     out = svd.transform(X).astype(np.float32)
+    # Pad/truncate to the schema's fixed width (vec0 declares float[EMBED_DIM]).
+    # On a small corpus SVD yields min(EMBED_DIM, n_docs, n_features) columns —
+    # e.g. 2 for a handful of memories — and inserting that raised
+    # "Dimension mismatch ... Expected 512 dimensions but received 2", which
+    # made index_rebuild fail outright on any small/new database. Zero-padding
+    # keeps the storage contract while preserving the trained subspace.
+    if out.shape[1] < EMBED_DIM:
+        pad = np.zeros((out.shape[0], EMBED_DIM - out.shape[1]), dtype=np.float32)
+        out = np.hstack([out, pad])
+    elif out.shape[1] > EMBED_DIM:
+        out = out[:, :EMBED_DIM]
     if normalize:
         norms = np.linalg.norm(out, axis=1, keepdims=True)
         norms[norms == 0] = 1.0

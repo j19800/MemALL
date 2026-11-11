@@ -228,6 +228,17 @@ def _mark(conn, mem_id: int, action: str, marker: dict,
         return {"ok": False, "memory_id": mem_id, "action": action, "error": str(e)[:200]}
 
 
+# A row already carrying this policy's marker must not be picked again: without
+# this, every run re-processed the same rows (measured: one CONFLICT row marked
+# on three consecutive runs, accumulating three markers and three audit lines
+# of no-op work). Idempotency belongs here, not in the caller.
+_ALREADY_MARKED_SQL = (
+    "AND NOT EXISTS (SELECT 1 FROM json_each("
+    "COALESCE(json_extract(memories.metadata,'$.cognitive_maintenance'),'[]')) je "
+    "WHERE json_extract(je.value,'$.action') = ?)"
+)
+
+
 def _select_candidates(conn, action: str, limit: int) -> list[int]:
     """Read-only candidate selection, one policy per action."""
     try:
@@ -238,15 +249,18 @@ def _select_candidates(conn, action: str, limit: int) -> list[int]:
                 "SELECT id FROM memories WHERE "
                 "(COALESCE(memory_status,'') LIKE '%CONFLICT%' "
                 "OR COALESCE(memory_status,'') LIKE '%REVIEW%') "
-                "AND COALESCE(memory_status,'') != 'archived' ORDER BY updated_at DESC LIMIT ?",
-                (limit,),
+                "AND COALESCE(memory_status,'') != 'archived' "
+                f"{_ALREADY_MARKED_SQL} "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (action, limit),
             ).fetchall()
         elif action == "expire":
             rows = conn.execute(
                 "SELECT id FROM memories WHERE invalid_at IS NOT NULL AND invalid_at != '' "
                 "AND invalid_at <= ? AND COALESCE(memory_status,'') != 'archived' "
+                f"{_ALREADY_MARKED_SQL} "
                 "ORDER BY updated_at DESC LIMIT ?",
-                (_now(), limit),
+                (_now(), action, limit),
             ).fetchall()
         elif action == "low_utility_archive":
             # This policy is NAMED for utility, so it must actually consult the
@@ -269,8 +283,9 @@ def _select_candidates(conn, action: str, limit: int) -> list[int]:
                     f"SELECT id FROM memories WHERE "
                     f"COALESCE(json_extract(metadata,'$.slot_key'),'') IN ({marks}) "
                     f"AND COALESCE(memory_status,'') != 'archived' "
+                    f"{_ALREADY_MARKED_SQL} "
                     f"ORDER BY updated_at ASC LIMIT ?",
-                    (*sorted(low_slots), limit),
+                    (*sorted(low_slots), action, limit),
                 ).fetchall()
             else:
                 rows = []
@@ -278,8 +293,10 @@ def _select_candidates(conn, action: str, limit: int) -> list[int]:
             # Conservative: only memories already explicitly tagged for review.
             rows = conn.execute(
                 "SELECT id FROM memories WHERE COALESCE(memory_status,'') = 'REVIEW' "
-                "AND COALESCE(memory_status,'') != 'archived' ORDER BY updated_at DESC LIMIT ?",
-                (limit,),
+                "AND COALESCE(memory_status,'') != 'archived' "
+                f"{_ALREADY_MARKED_SQL} "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (action, limit),
             ).fetchall()
         else:
             rows = []

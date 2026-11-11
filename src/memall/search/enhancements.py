@@ -793,6 +793,24 @@ def record_interaction(
 
 
 
+def _empty_agent_scope() -> str:
+    """How an empty ``agent_name`` is interpreted by the utility ledger.
+
+    ``(? = '' OR agent_name = ?)`` silently meant "aggregate across EVERY agent"
+    when no identity was supplied — a cross-agent leak waiting for the first
+    caller that forgot to pass one. The default is now ``deny`` (no rows), so a
+    missing identity yields no signal instead of someone else's. Deployments that
+    genuinely want a global ledger can set
+    ``search.utility_ledger.empty_agent_scope = "global"``.
+    """
+    try:
+        from memall.config import get_config
+        v = str(get_config("search.utility_ledger.empty_agent_scope", "deny") or "deny").lower()
+    except Exception:
+        v = "deny"
+    return v if v in ("deny", "global") else "deny"
+
+
 def aggregate_interaction_utility(conn, agent_name: str = "", days: int = 30, limit: int = 500) -> Dict[str, Any]:
     """Read-only aggregation of search_interactions for P3 utility ledger experiments.
 
@@ -803,6 +821,11 @@ def aggregate_interaction_utility(conn, agent_name: str = "", days: int = 30, li
         return {"ok": False, "error": "no_connection", "agent_name": agent_name, "by_memory": []}
     try:
         agent_name = (agent_name or "")[:200]
+        if not agent_name and _empty_agent_scope() == "deny":
+            # No identity -> no evidence. Returning an empty ledger is the safe
+            # default; see _empty_agent_scope().
+            return {"ok": True, "agent_name": "", "by_memory": [], "count": 0,
+                    "scope": "deny_empty_agent"}
         days = max(1, min(int(days or 30), 365))
         limit = max(1, min(int(limit or 500), 5000))
         rows = conn.execute(

@@ -60,6 +60,20 @@ from test_helpers import init_temp_db, cleanup_temp_db
 db_path, patcher = init_temp_db()
 print(f"Temp DB: {db_path}")
 
+# Disable the background thread pool for a DETERMINISTIC end-to-end run.
+# Every capture triggers an on_capture lightweight pipeline in a background
+# thread, which races this script's foreground writes on the same SQLite file:
+# measured 17 "database is locked" retries and a ~151s pipeline pass, enough to
+# time the script out. The pipeline is covered by its own tests; here we want a
+# repeatable happy path. Set MEMALL_E2E_BACKGROUND=1 to test with it enabled.
+if os.environ.get("MEMALL_E2E_BACKGROUND") != "1":
+    try:
+        from memall.core.bg_registry import set_enabled as _bg_set_enabled
+        _bg_set_enabled(False)
+        print("Background pipeline: disabled (deterministic mode)")
+    except Exception:
+        pass
+
 # Import AFTER db_path is patched
 from memall.mcp.adapter import handle_call
 
@@ -132,9 +146,14 @@ def main():
     # ── 2. Retrieve ──
     print("\n\u2500\u2500 Retrieve \u2500\u2500")
     try:
-        raw = handle_call("memall_read", {"action": "retrieve", "query": "HTTP transport thread pool", "limit": 5})
+        raw = handle_call("memall_read", {"action": "retrieve", "query": "HTTP transport thread pool",
+                                           "limit": 5, "agent_name": "e2e_agent"})
         r = json.loads(raw)
-        assert isinstance(r, list), f"expected list, got {type(r)}"
+        # retrieve returns a bare list on the plain path and a {"results": [...]}
+        # envelope once an enhancement routes it. Both are valid shapes; the
+        # old assertion pinned one and failed on the other.
+        items = r if isinstance(r, list) else (r.get("results") if isinstance(r, dict) else None)
+        assert isinstance(items, list), f"expected list or results envelope, got {type(r)}"
         ok("retrieve", f"{len(r)} results")
     except Exception as e:
         fail("retrieve", str(e))
@@ -142,9 +161,14 @@ def main():
     # ── 3. Timeline ──
     print("\n\u2500\u2500 Timeline \u2500\u2500")
     try:
-        raw = handle_call("memall_read", {"action": "timeline", "hours": 24, "limit": 10})
+        raw = handle_call("memall_read", {"action": "timeline", "hours": 24, "limit": 10,
+                                          "agent_name": "e2e_agent"})
         r = json.loads(raw)
-        assert isinstance(r, list), f"expected list, got {type(r)}"
+        # timeline refuses an identity-less call by design (an empty trust
+        # filter is indistinguishable from no data), so pass one and accept
+        # either a list or a results envelope.
+        items = r if isinstance(r, list) else (r.get("results") if isinstance(r, dict) else None)
+        assert isinstance(items, list), f"expected list or results envelope, got {type(r)}"
         ok("timeline", f"{len(r)} entries")
     except Exception as e:
         fail("timeline", str(e))
@@ -170,7 +194,8 @@ def main():
     print("\n\u2500\u2500 Traverse \u2500\u2500")
     if mem_ids:
         try:
-            r = tool("memall_read", {"action": "traverse", "node_id": mem_ids[0], "depth": 1})
+            r = tool("memall_read", {"action": "traverse", "node_id": mem_ids[0], "depth": 1,
+                                      "agent_name": "e2e_agent"})
             ok("traverse", f"from node {mem_ids[0]}")
         except Exception as e:
             fail("traverse", str(e))
@@ -238,7 +263,7 @@ def main():
     # ── 8. Vector search ──
     print("\n\u2500\u2500 Vector Search \u2500\u2500")
     try:
-        r = tool("memall_read", {"action": "vector_search", "query": "memory thread pool", "top_k": 5})
+        r = tool("memall_read", {"action": "vector_search", "query": "memory thread pool", "top_k": 5, "agent_name": "e2e_agent"})
         ok("memall_vector_search", f'{len(r) if isinstance(r, list) else 1} results')
     except Exception as e:
         fail("memall_vector_search", str(e))
@@ -336,7 +361,7 @@ def main():
     # ── 19. Vector search after index rebuild ──
     print("\n\u2500\u2500 Vector Search (post-index) \u2500\u2500")
     try:
-        r = tool("memall_read", {"action": "vector_search", "query": "HTTP transport thread pool", "top_k": 5})
+        r = tool("memall_read", {"action": "vector_search", "query": "HTTP transport thread pool", "top_k": 5, "agent_name": "e2e_agent"})
         ok("memall_vector_search (post-index)", f'{len(r) if isinstance(r, list) else 1} results')
     except Exception as e:
         fail("memall_vector_search (post-index)", str(e))

@@ -248,3 +248,115 @@ def test_worker_health_flags_backlog():
         from memall.config import reset_config
         reset_config()
         cleanup_temp_db(db, orig)
+
+
+def test_maintenance_is_idempotent_per_policy():
+    """A row already carrying this policy's marker must not be re-processed.
+
+    Before the fix the same CONFLICT row was marked on every run, accumulating
+    markers and audit lines of pure no-op work.
+    """
+    db, orig = init_temp_db()
+    tmp = tempfile.mkdtemp()
+    try:
+        _cfg({"enabled": True, "conflict_review": True,
+              "archive_dir": tmp, "audit_log": os.path.join(tmp, "a.jsonl"),
+              "snapshot_before_write": True})
+        from memall.core.db import get_conn
+        from memall.pipeline import maintenance as m
+        c = get_conn()
+        c.execute("INSERT INTO memories (content, content_hash, level, agent_name, category, "
+                  "subject, occurred_at, created_at, updated_at, memory_status, metadata) "
+                  "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                  ("幂等测试记忆内容足够长通过门禁校验流程。", "h_idem", "L4", "t", "general",
+                   "s", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z",
+                   "2026-01-01T00:00:00Z", "CONFLICT", "{}"))
+        c.commit()
+        mid = int(c.execute("SELECT id FROM memories WHERE content_hash='h_idem'").fetchone()[0])
+        c.close()
+
+        first = m.run_maintenance(actions=["conflict_review"], dry_run=False)
+        second = m.run_maintenance(actions=["conflict_review"], dry_run=False)
+        assert first.get("total_marked") == 1, first
+        assert second.get("total_marked") == 0, f"must not re-process: {second}"
+
+        c = get_conn()
+        meta = json.loads(c.execute("SELECT metadata FROM memories WHERE id=?", (mid,)).fetchone()[0])
+        c.close()
+        assert len(meta.get("cognitive_maintenance") or []) == 1, meta
+        print("PASS: test_maintenance_is_idempotent_per_policy")
+    finally:
+        from memall.config import reset_config
+        reset_config()
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+        cleanup_temp_db(db, orig)
+
+
+def test_utility_ledger_denies_missing_identity_by_default():
+    """No identity must mean no evidence, not "everyone's evidence"."""
+    db, orig = init_temp_db()
+    try:
+        from datetime import datetime, timezone
+        import memall.config as cfg
+        from memall.core.db import get_conn
+        from memall.search.enhancements import aggregate_interaction_utility
+        cfg.get_config()
+        now = datetime.now(timezone.utc).isoformat()
+        c = get_conn()
+        for _ in range(3):
+            c.execute("INSERT INTO search_interactions (query, memory_id, action, agent_name, "
+                      "created_at, accepted) VALUES (?,?,?,?,?,?)",
+                      ("q", 1, "click", "alice", now, 1))
+        c.commit()
+        try:
+            denied = aggregate_interaction_utility(c, agent_name="")
+            assert denied.get("count") == 0, denied
+            assert denied.get("scope") == "deny_empty_agent", denied
+
+            own = aggregate_interaction_utility(c, agent_name="alice")
+            assert own.get("count") == 1, own
+
+            cfg._config.setdefault("search", {}).setdefault("utility_ledger", {})[
+                "empty_agent_scope"] = "global"
+            cfg._last_mtime_check = float("inf")
+            glob = aggregate_interaction_utility(c, agent_name="")
+            assert glob.get("count") == 1, glob
+        finally:
+            c.close()
+        print("PASS: test_utility_ledger_denies_missing_identity_by_default")
+    finally:
+        from memall.config import reset_config
+        reset_config()
+        cleanup_temp_db(db, orig)
+
+
+def test_index_rebuild_works_on_a_small_corpus():
+    """SVD yields fewer columns than EMBED_DIM on a tiny corpus; the vectors must
+    still match the schema's fixed width, or index_rebuild fails outright."""
+    db, orig = init_temp_db()
+    try:
+        from memall.core.db import get_conn
+        from memall.core.models import MemoryInput
+        from memall.core.thin_waist import capture
+        from memall.mcp.tools import _handle_system
+
+        for text in (
+            "PostgreSQL 数据库选型决策内容足够长通过门禁校验。",
+            "Redis 缓存集群配置方案内容足够长通过门禁校验。",
+            "blue-green 部署流程说明内容足够长通过门禁校验。",
+        ):
+            capture(MemoryInput(content=text, level="L4", category="general",
+                               agent_name="idx_agent", project="p"))
+
+        out = json.loads(_handle_system({"action": "index_rebuild", "force": True}))
+        assert out.get("embedded", 0) >= 1, out
+        assert "Dimension mismatch" not in json.dumps(out), out
+
+        c = get_conn()
+        dims = c.execute("SELECT COUNT(*) FROM memories WHERE id IS NOT NULL").fetchone()[0]
+        c.close()
+        assert dims >= 3
+        print("PASS: test_index_rebuild_works_on_a_small_corpus")
+    finally:
+        cleanup_temp_db(db, orig)

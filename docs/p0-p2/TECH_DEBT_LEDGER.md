@@ -126,7 +126,7 @@
 - [x] 冷启动零证据回退、低证据阈值回退、异常/score-less 回退（不改字段/顺序/不丢项）。
 - [x] 跨 agent 隔离（agent-scoped 聚合）测试。
 - [x] 灰度策略 + Kill-Switch 文档 `p3-utility-rerank-rollout.md`。
-- [ ] 空 `agent_name` 语义决策（当前退化为「全局账本」不过滤）——直接调用时无隔离，灰度前需定夺。
+- [x] 空 `agent_name` 语义决策（当前退化为「全局账本」不过滤）——直接调用时无隔离，灰度前需定夺。  *(2026-11-11 已决策并实现：默认 deny，`search.utility_ledger.empty_agent_scope="global"` 才放开)*
 - [ ] §度量基线遥测埋点（排序扰动/采纳率/延迟/冷启动占比/串扰抽查）最小实现。
 - [ ] 书面基线报告 + 评审；灰度白名单机制；改默认（**近期一律不改**）。
 
@@ -174,7 +174,6 @@
 - [x] `thin_waist.py.bak_phase1` 备份处置仍待决策（不纳入任何提交）。  *(2026-11-11 已删除：git 历史保有 81 个版本，无需冗余备份)*
 
 - [x] 「按蓝图补齐」轮次已落地本地 commit `3ee3372`（21 files，未 push）；提交态自洽校验通过。
-- [ ] `thin_waist.py.bak_phase1` 仍为唯一未跟踪项，待决策删除/归档（不纳入任何提交）。
 
 ## 独立审查复核轮次（2026-11-10，用户质疑后，未提交）
 - [x] 诚实承认：此前多轮**未做独立代码审查**；P3/P4 两条 ADR 验收句实际未通过（非「已知偏差」）。
@@ -184,7 +183,6 @@
 - [x] 全量 613 passed/2 skipped/0 failed/0 errors。
 - [ ] 两个独立审查 subagent 均未完整收尾（其中一个报出严重回归后中断）；若需正式「通过代码审查」结论，需重跑一个完整收尾的独立审查。
 - [ ] 本轮修复待落地本地 commit（不 push）。
-- [ ] `thin_waist.py.bak_phase1` 仍为唯一未跟踪项，待决策删除/归档。
 
 - [x] 独立审查复核 + 验收修复轮次已落地本地 commit `dc4d847`（13 files，未 push）；提交态自洽校验通过。
 
@@ -206,8 +204,8 @@
 
 ## E2E 测试发现（2026-11-10 晚）
 - [x] 确定性 E2E（关后台任务）23 passed / 0 failed，覆盖主链路与本轮全部新增能力。
-- [ ] 【既有】`on_capture` 轻量 pipeline 与前台写入争 SQLite 写锁：`tests/test_e2e.py` 在 pipeline 开启时超时（17 次 `database is locked`，单次 pipeline ~151s）。建议加 config 开关或在夹具禁用 `bg_registry`；并把自带 e2e 脚本改为默认禁用后台 pipeline。
-- [ ] `tests/test_e2e.py` 无可配置的后台开关，导致脚本级 E2E 非确定（capture 有 5 次重试，不丢写）。
+- [x] 【既有】`on_capture` 轻量 pipeline 与前台写入争 SQLite 写锁：`tests/test_e2e.py` 在 pipeline 开启时超时（17 次 `database is locked`，单次 pipeline ~151s）。建议加 config 开关或在夹具禁用 `bg_registry`；并把自带 e2e 脚本改为默认禁用后台 pipeline。  *(2026-11-11 已修：e2e 默认 `bg_registry.set_enabled(False)`，`MEMALL_E2E_BACKGROUND=1` 可回原行为；实测 25/25 通过)*
+- [x] `tests/test_e2e.py` 无可配置的后台开关，导致脚本级 E2E 非确定（capture 有 5 次重试，不丢写）。  *(2026-11-11 已修：同上，现已确定性且全绿)*
 - [x] 真实 MCP 协议接入测试（stdio JSON-RPC：initialize/tools-list/tools-call）——8 工具、主链路 + 新增能力全部通过。
 - [x] MCP 链路暴露并修复：`rollback_from_audit` CAS 用字符串比较导致 JSON 键序变化时误拒合法回滚 → 改语义比较 + 回归测试。
 - [x] MCP 协议测试目前是临时脚本（手工 /tmp），未纳入 `tests/` 自动化；建议补一个 `tests/test_mcp_protocol_e2e.py`（子进程 + JSON-RPC 客户端）。  *(2026-11-11 已修)*
@@ -224,7 +222,7 @@
 - [x] S5 整数 `task_id` 静默丢 7 个 P3 字段 → 先 str 再切片；fallback 仅对缺列生效。
 - [x] **P3 排序合同测试盲区** → 新增 `test_p3_ordering_actually_changes_with_utility`，并用 sort 变异双向验证（删除后新测试 FAIL）。
 - [x] 确认此前已修：S1/S2/S3/S4、mode=audit 越权、aggregate_utility_ledger tuple、agent_name_filter。
-- [ ] M4-a 已处理行仍会被反复选中（候选 SQL 未排除已带 marker 的行）。
+- [x] M4-a 已处理行仍会被反复选中（候选 SQL 未排除已带 marker 的行）。  *(2026-11-11 已修：四个候选查询均排除已带 marker 的行，实测 1→0→0)*
 - [x] M4-b 审计日志无轮转。  *(2026-11-11 已修：8MB 轮转 + .1~.3 备份)*
 - [x] M6 `_ensure_interaction_columns` 在纯 get_conn() 老库路径不可达。  *(2026-11-11 已修)*
 - [x] `_paths()` 依赖 cwd；`dry_run` 仍写审计行（与 docstring 不符）。  *(2026-11-11 已修)*

@@ -144,6 +144,13 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "review_visibility": {
             "include_by_default": False,
         },
+        # How the utility ledger treats a MISSING agent identity. "deny" (default)
+        # returns no evidence, so an unidentified caller can never see another
+        # agent's interaction history. "global" aggregates across all agents and
+        # should only be chosen deliberately.
+        "utility_ledger": {
+            "empty_agent_scope": "deny",
+        },
         "seen_tracking": {
             "enabled": False,
             # Results in the first N positions are never reordered.
