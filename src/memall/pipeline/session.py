@@ -671,6 +671,16 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
             darcs = injection.get("decision_arcs", {})
             open_dec = darcs.get("open", [])
             in_prog = darcs.get("in_progress", [])
+            # arc_status opens on every L4 row and closes only when the item is
+            # completed/superseded, so an "open" bucket can hold settled
+            # decisions too. The [DECISIONS] line is a BACKLOG signal, so narrow
+            # it to actual work: tasks and problems. Reporting the raw open count
+            # told the operator 待决(20) on a store of 10 decisions + 10 tasks.
+            def _is_work(item) -> bool:
+                cat = str((item or {}).get("category") or "").lower()
+                return cat in ("task", "problem")
+            open_dec = [x for x in open_dec if _is_work(x)]
+            in_prog = [x for x in in_prog if _is_work(x)]
             if open_dec or in_prog:
                 parts = ["[DECISIONS]"]
                 if open_dec:

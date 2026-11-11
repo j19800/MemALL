@@ -2384,6 +2384,11 @@ def _capture_post_insert(conn, mem_id: int, data: MemoryInput, h: str) -> None:
         logger.warning("pipeline_events insert failed", exc_info=True)
 
     if data.level == "L4":
+        # Decision Arc tracks the LIFECYCLE of an L4 item: it opens when recorded
+        # and closes when completed/superseded. Every L4 row legitimately starts
+        # 'open' (that is the contract the arc tests pin), so the "待决(N)" count
+        # must be narrowed at REPORTING time by category instead of being faked
+        # here — see the decision_arcs bucketing in federation_tools.
         conn.execute("UPDATE memories SET arc_status = 'open' WHERE id = ?", (mem_id,))
         conn.commit()
 

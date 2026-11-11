@@ -296,3 +296,48 @@ def test_read_path_does_not_scan_the_whole_table():
         from memall.config import reset_config
         reset_config()
         cleanup_temp_db(db, orig)
+
+
+def test_pending_count_reflects_reality():
+    """[DECISIONS] 待决(N) must count outstanding work, not every memory.
+
+    arc_status was set to 'open' for every L4 row regardless of category, so a
+    store of 5 settled decisions and 5 tasks reported 待决(10) — the count was
+    the table size, not the backlog.
+    """
+    db, orig = init_temp_db()
+    try:
+        from memall.core.db import get_conn
+        from memall.core.models import MemoryInput
+        from memall.core.thin_waist import capture
+        from memall.pipeline.session import session_start
+
+        for i in range(3):
+            capture(MemoryInput(content=f"第{i}轮决定采用方案{i}，性能指标满足要求。",
+                                level="L4", category="decision",
+                                agent_name="arc", project="pay"))
+            capture(MemoryInput(content=f"第{i}轮待办事项{i}，需要在期限内完成交付。",
+                                level="L4", category="task",
+                                agent_name="arc", project="pay"))
+
+        # arc_status is the LIFECYCLE marker: every L4 row opens on capture and
+        # closes when completed/superseded. All six are therefore 'open' — that
+        # is the contract the arc tests pin.
+        c = get_conn()
+        dist = dict(c.execute(
+            "SELECT arc_status, COUNT(*) FROM memories GROUP BY 1").fetchall())
+        c.close()
+        assert dist.get("open") == 6, f"lifecycle starts open for every L4 row: {dist}"
+
+        # The [DECISIONS] 待决(N) line is a BACKLOG signal, so it must count only
+        # actual work (tasks/problems) — not the settled decisions sharing the
+        # same arc bucket. This is where the count is narrowed.
+        out = session_start(agent_name="arc", auto_inject=True)
+        fmt = out.get("injection_formatted") or ""
+        import re as _re
+        m = _re.search(r"待决\((\d+)\)", fmt)
+        assert m, f"no 待决 count in injection: {fmt!r}"
+        assert int(m.group(1)) == 3, f"backlog should be 3 tasks, got {m.group(1)}: {fmt!r}"
+        print("PASS: test_pending_count_reflects_reality")
+    finally:
+        cleanup_temp_db(db, orig)

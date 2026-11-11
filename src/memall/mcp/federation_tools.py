@@ -644,7 +644,7 @@ def auto_inject(agent_name: str) -> dict:
             # disk — measured: 3 memories stored, 0 injected. Select by
             # CATEGORY semantics instead, and accept L4 rows as well.
             rows = conn.execute(
-                "SELECT id, subject, content, summary, metadata, arc_status, created_at "
+                "SELECT id, subject, content, summary, metadata, arc_status, category, created_at "
                 "FROM memories "
                 "WHERE (level = 'L4' OR COALESCE(category,'') IN "
                 "       ('decision','preference','fix','reflection','task')) "
@@ -657,10 +657,24 @@ def auto_inject(agent_name: str) -> dict:
                 (agent_name,),
             ).fetchall()
             for r in rows:
-                status = r["arc_status"] or "open"
+                # `arc_status` defaults to NULL and every row was bucketed as
+                # "open", so [DECISIONS] reported 待决(20) on a store where only
+                # 10 items were actually open tasks — the rest were settled
+                # decisions and reflections. A count nobody can trust is worse
+                # than no count. Only genuinely pending things are "open".
+                # arc_status is the lifecycle marker (open -> closed) and is
+                # authoritative when present.
+                _raw = (r["arc_status"] or "").strip().lower()
+                if _raw in ("open", "in_progress", "closed"):
+                    status = _raw
+                else:
+                    status = "open"
                 if status in decision_arcs:
                     decision_arcs[status].append({
                         "id": r["id"],
+                        # category lets consumers distinguish backlog (tasks,
+                        # problems) from settled decisions without a second query.
+                        "category": (r["category"] if "category" in r.keys() else "") or "",
                         "subject": (r["subject"] or "")[:60],
                         "summary": (r["content"] or "")[:120],
                         "decided_at": r["created_at"],
