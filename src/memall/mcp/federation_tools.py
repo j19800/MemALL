@@ -19,6 +19,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from memall.core.db import get_conn
+from memall.core.kb_policy import KB_SOURCE_PIPELINES
 from memall.core.status import NOT_ARCHIVED, task_status_of
 from memall.config import get_config
 from memall.pipeline.convergence import check_pending_discussions
@@ -191,7 +192,6 @@ def fed_publish(memory_id: int, source_agent: str = "",
     # retrieve() already filters, but by-id retrieval historically
     # short-circuited the trust filter; assert it once more explicitly so
     # publishing can never become a laundering path.
-    from memall.core.db import get_conn
     from memall.core.thin_waist import _row_to_memory
 
     conn_chk = get_conn()
@@ -330,10 +330,8 @@ def _pending_l5_for(conn, agent_name: str) -> tuple:
     pending_tasks = []
     l5_active_global = []
     try:
-        from memall.core.kb_policy import KB_SOURCE_PIPELINES
-        _kbs = "','".join(KB_SOURCE_PIPELINES)
-        _kbm = "COALESCE(json_extract(metadata, '$.source_pipeline'), '')"
-        _kb_excl = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
+        from memall.core.kb_policy import kb_sql_exclusion_clauses
+        _kb_excl = " AND ".join(kb_sql_exclusion_clauses())
         rows = conn.execute(
             "SELECT id, content, summary, subject, metadata, category, level, created_at "
             "FROM memories "
@@ -468,10 +466,8 @@ def auto_inject(agent_name: str) -> dict:
         # ══ 2.5. L7 Lessons (learned patterns extracted from L6 reflections) ══
         l7_lessons = []
         try:
-            from memall.core.kb_policy import KB_SOURCE_PIPELINES
-            _kbs = "','".join(KB_SOURCE_PIPELINES)
-            _kbm = "COALESCE(json_extract(metadata, '$.source_pipeline'), '')"
-            _kb_excl = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
+            from memall.core.kb_policy import kb_sql_exclusion_clauses
+            _kb_excl = " AND ".join(kb_sql_exclusion_clauses())
             rows = conn.execute(
                 "SELECT id, content, category, weight, created_at, metadata FROM memories "
                 "WHERE agent_name = ? AND level = 'L7' "
@@ -524,10 +520,8 @@ def auto_inject(agent_name: str) -> dict:
             # Supplement L1 from memories table (catches classify_step assignments
             # that identity_step hasn't processed yet)
             try:
-                from memall.core.kb_policy import KB_SOURCE_PIPELINES
-                _kbs = "','".join(KB_SOURCE_PIPELINES)
-                _kbm = "COALESCE(json_extract(metadata, '$.source_pipeline'), '')"
-                _kb_excl = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
+                from memall.core.kb_policy import kb_sql_exclusion_clauses
+                _kb_excl = " AND ".join(kb_sql_exclusion_clauses())
                 l1_rows = conn.execute(
                     "SELECT content, metadata FROM memories "
                     "WHERE agent_name = ? AND level = 'L1' "
@@ -547,10 +541,8 @@ def auto_inject(agent_name: str) -> dict:
 
             # Supplement L7 from memories table (catches distill_l7_step lessons)
             try:
-                from memall.core.kb_policy import KB_SOURCE_PIPELINES
-                _kbs = "','".join(KB_SOURCE_PIPELINES)
-                _kbm = "COALESCE(json_extract(metadata, '$.source_pipeline'), '')"
-                _kb_excl = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
+                from memall.core.kb_policy import kb_sql_exclusion_clauses
+                _kb_excl = " AND ".join(kb_sql_exclusion_clauses())
                 l7_rows = conn.execute(
                     "SELECT content, metadata FROM memories "
                     "WHERE agent_name = ? AND level = 'L7' "
@@ -590,10 +582,8 @@ def auto_inject(agent_name: str) -> dict:
         workflow_skills = []
         try:
             # L3 scope: agent=own agent only, family/shared=all agents, NULL=agent (backward compat)
-            from memall.core.kb_policy import KB_SOURCE_PIPELINES
-            _kbs = "','".join(KB_SOURCE_PIPELINES)
-            _kbm = "COALESCE(json_extract(metadata, '$.source_pipeline'), '')"
-            _kb_excl = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
+            from memall.core.kb_policy import kb_sql_exclusion_clauses
+            _kb_excl = " AND ".join(kb_sql_exclusion_clauses())
             rows = conn.execute(
                 "SELECT id, subject, content, category, metadata FROM memories "
                 "WHERE level = 'L3' AND LENGTH(TRIM(content)) > 50 "
@@ -633,10 +623,8 @@ def auto_inject(agent_name: str) -> dict:
         decision_arcs = {"open": [], "in_progress": [], "closed": []}
         l4_recent_global = []
         try:
-            from memall.core.kb_policy import KB_SOURCE_PIPELINES
-            _kbs = "','".join(KB_SOURCE_PIPELINES)
-            _kbm = "COALESCE(json_extract(metadata, '$.source_pipeline'), '')"
-            _kb_excl = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
+            from memall.core.kb_policy import kb_sql_exclusion_clauses
+            _kb_excl = " AND ".join(kb_sql_exclusion_clauses())
             # Session restore needs the *content that matters*, not one storage
             # level. Requiring level='L4' matched nothing for typical captures
             # (they land at the default P2), so a session restarted with an
@@ -757,6 +745,20 @@ def auto_inject(agent_name: str) -> dict:
         except Exception:
             logger.warning("auto_inject behavior_patterns failed", exc_info=True)
 
+        # ── 14. Active self-evolution corrections (personal + promoted global) ──
+        active_corrections = []
+        try:
+            from memall.pipeline.improve import get_active_corrections
+            active_corrections = get_active_corrections(agent_name)[:8]
+            # TD-EVOL-TRACK-01: optional injection counters (config-gated,
+            # default off, fail-open; no behavior change when disabled).
+            if active_corrections:
+                from memall.pipeline.improve import record_corrections_injection
+                record_corrections_injection(
+                    agent_name, [c.get("pattern_id", "") for c in active_corrections])
+        except Exception:
+            logger.warning("auto_inject corrections failed", exc_info=True)
+
         result = {
             "agent_name": agent_name,
             "persona": persona,
@@ -773,6 +775,7 @@ def auto_inject(agent_name: str) -> dict:
             "l4_recent_global": l4_recent_global,
             "l5_active_global": l5_active_global,
             "behavior_patterns": behavior_patterns,
+            "active_corrections": active_corrections,
             "kb_excluded": True,
             "excluded_source_pipelines": list(KB_SOURCE_PIPELINES),
             "injected_at": datetime.now(timezone.utc).isoformat(),
@@ -812,7 +815,6 @@ def hub_sync(direction: str = "bidirectional", limit: int = 20,
         hub_send_message, hub_get_group_messages, hub_health,
     )
     from memall.core.thin_waist import capture, retrieve
-    from memall.core.db import get_conn as get_db_conf
 
     result = {"to_hub": {"memories_pushed": 0, "messages_sent": 0, "errors": []},
               "from_hub": {"agents_pulled": 0, "memories_pulled": 0,
@@ -829,7 +831,7 @@ def hub_sync(direction: str = "bidirectional", limit: int = 20,
 
     if direction in ("to_hub", "bidirectional"):
         # Push recent MemALL memories as messages to Hub group chat
-        db = get_db_conf()
+        db = get_conn()
         try:
             db.row_factory = sqlite3.Row
             rows = db.execute(

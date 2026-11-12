@@ -82,9 +82,12 @@ def auto_summarize_step() -> dict:
     """自动摘要管线步骤: 对未处理的 L4/L6 记忆生成 L9 摘要。"""
     with pool_conn() as conn:
         # 按 (agent, category) 分组
+        from memall.core.kb_policy import kb_sql_exclusion_clauses
+        _kb = " AND ".join(kb_sql_exclusion_clauses())
         rows = conn.execute(
             "SELECT id, content, agent_name, category, level FROM memories "
             "WHERE level IN ('L4','L6') AND LENGTH(TRIM(content)) > 20 "
+            f"AND {_kb} "
             "ORDER BY agent_name, category"
         ).fetchall()
 

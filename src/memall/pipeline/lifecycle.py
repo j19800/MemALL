@@ -75,10 +75,14 @@ def _cluster_by_embedding(conn) -> list[dict]:
         logger.info("lifecycle: sentence-transformers unavailable, skipping embedding clustering")
         return []
 
+    from memall.core.kb_policy import kb_sql_exclusion_clauses
+    _kb = " AND ".join(kb_sql_exclusion_clauses())
     rows = conn.execute(
         "SELECT id, content, agent_name, category FROM memories "
         "WHERE level IN ('L4','L6') AND LENGTH(TRIM(content)) > 20 "
-        "AND memory_status IS NULL ORDER BY id"
+        "AND memory_status IS NULL "
+        f"AND {_kb} "
+        "ORDER BY id"
     ).fetchall()
 
     if not rows:

@@ -48,6 +48,16 @@ def setup_module():
     """Clean up lingering gateway processes before running tests."""
     _free_port(GW_PORT_HEALTH)
     _free_port(GW_PORT_CAPTURE)
+    # Warm jieba BEFORE the first /capture request. Word segmentation loads
+    # lazily inside the request handler; on slow disks the cold load (~4-6s)
+    # exceeded the client timeout and made this file order-dependent (green
+    # in full-suite runs only because earlier tests had already loaded jieba
+    # in-process). Preloading removes the flake without touching product code.
+    try:
+        import jieba
+        jieba.cut("预热")
+    except Exception:
+        pass
 
 
 def _wait_for_health(host: str, port: int, timeout: float = 5) -> bool:
@@ -123,7 +133,7 @@ def test_gateway_capture():
                 "Authorization": f"Bearer {gw._auth_token}",
             },
         )
-        resp = urllib.request.urlopen(req, timeout=3)
+        resp = urllib.request.urlopen(req, timeout=15)
         data = json.loads(resp.read().decode())
         assert "id" in data or "success" in data, (
             f"No success indicator in: {data}"

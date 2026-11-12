@@ -2,7 +2,7 @@ import logging
 import json
 from memall.core.thin_waist import retrieve, vector_search, hybrid_search
 from memall.core.db import get_conn
-from memall.core.kb_policy import KB_SOURCE_PIPELINES, source_kind_from_pipeline
+from memall.core.kb_policy import KB_SOURCE_PIPELINES, kb_sql_exclusion_clauses, source_kind_from_pipeline
 from memall.search.intent_router import classify, resolve_mode
 logger = logging.getLogger(__name__)
 
@@ -343,13 +343,7 @@ def handle_recap(arguments: dict) -> str:
         # observations, not the pipeline's own echoes. KB evidence is not
         # user-state continuity (P2: kb_policy.kb_sql_exclusion_clauses).
         recent: list = []
-        try:
-            from memall.core.kb_policy import kb_sql_exclusion_clauses
-            _kb_excl = " AND ".join(kb_sql_exclusion_clauses())
-        except Exception:
-            _kbs = "','".join(KB_SOURCE_PIPELINES)
-            _kbm = "COALESCE(json_extract(metadata,'$.source_pipeline'),'')"
-            _kb_excl = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
+        _kb_excl = " AND ".join(kb_sql_exclusion_clauses())
         mwhere = f"WHERE level IN ('L4','L5') AND {_kb_excl} "
         mparams: list = []
         if agent:

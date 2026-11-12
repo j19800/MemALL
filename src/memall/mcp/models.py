@@ -1018,6 +1018,16 @@ class KBEnrichActionInput(BaseModel):
     timeout_seconds: Optional[float] = Field(None, ge=0, le=60)
 
 
+class CorrectionReportInput(BaseModel):
+    """memall_system action=correction_report (TD-EVOL-TRACK-01, read-only).
+
+    Optional agent_name scopes the effectiveness report to that agent's
+    personal + global corrections; absent = whole ledger.
+    """
+    model_config = {"extra": "ignore"}
+    agent_name: Optional[str] = Field(None, max_length=200)
+
+
 # ── Hooks ──
 
 

@@ -201,6 +201,19 @@ class MemAllGateway(HtmlHandlersMixin, RestHandlersMixin,
                 # Non-fatal: worker start is optional and config-gated.
                 pass
 
+            # Dev auto-reload (default OFF): watch src/memall and execv-restart
+            # the process in place when code settles and compiles. Gated by
+            # MEMALL_AUTORELOAD env or gateway.autoreload.enabled config.
+            # Never fatal: watcher errors are swallowed by design.
+            try:
+                from memall.gateway_autoreload import autoreload_enabled, watch_and_restart
+                if autoreload_enabled():
+                    _src = Path(__file__).resolve().parent  # .../src/memall
+                    watch_and_restart(_src)
+                    logger.info("gateway autoreload watcher active (dev mode)")
+            except Exception:
+                logger.debug("gateway autoreload not active", exc_info=True)
+
     def stop(self) -> None:
         """优雅关闭 gateway"""
         with self._lock:

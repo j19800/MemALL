@@ -43,6 +43,11 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         # all default to 9920; keep this aligned (was 9919, which drifted).
         "port": 9920,
         "secret_key": "",  # auto-generated on first start if empty
+        # Dev-only auto-reload (gateway_autoreload watcher + in-place execv
+        # restart when .py files settle and compile). Default False; also
+        # force-enabled with env MEMALL_AUTORELOAD=1. A restart can cut an
+        # in-flight request — never enable in shared/production deployments.
+        "autoreload": {"enabled": False},
     },
     "discovery": {
         "port": 9920,
@@ -172,6 +177,34 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "ttl_days": 90,
         "low_value_days": 7,
     },
+    "evolution": {
+        "l4_to_l6_enabled": True,
+        "l4_to_l6_min_confidence": 0.7,
+        "rule_effectiveness_tracking": True,
+        "cross_agent_consensus_threshold": 2,
+        # TD-EVOL-TRACK-01: correction lifecycle observability counters
+        # (injected/adopted). Read-only report `correction_effectiveness_report()`
+        # always works; these gates control whether WRITE paths count events.
+        # Default False: no behavior change, no extra writes.
+        "correction_injection_tracking_enabled": False,
+        "correction_adoption_tracking_enabled": False,
+        # TD-EVOL-TRACK-01: automatic session-window adoption/violation judge
+        # (evaluate_session_corrections). Default OFF. When on but the adoption
+        # gate above is off, the judge runs as a DRY RUN (verdicts, no writes)
+        # — the intended gray-release preview mode.
+        "correction_auto_adoption_eval": False,
+        "internalization_keywords": [
+            "已内化", "不再需要", "已经习惯", "形成肌肉记忆", "自然遵循", "默认做法",
+            "internalized", "habitual", "second nature", "automatic", "default practice"
+        ],
+    },
+    "intelligence": {
+        "auto_subject_enabled": True,
+        "auto_summary_enabled": True,
+        "auto_edge_creation_enabled": True,
+        "utility_driven_retention": True,
+        "subject_prefix_style": "compact",
+    },
     "capture": {
         # Project inference is always-on (root-cause fix for empty-project defect).
         "project_inference_enabled": True,
@@ -181,9 +214,39 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         # Enable deliberately where the trade-off is acceptable; the existing
         # ``deduplicate()`` op remains the recommended remediation for historical
         # duplicates. Exact-content (hash) de-dup always runs regardless.
+        # Semantic de-dup v2: TF-IDF + shingle Jaccard + optional embedding cosine.
+        # Defaults are conservative to avoid false merges; enable for production.
         "semantic_dedup_enabled": False,
-        "semantic_dedup_threshold": 0.92,
-        "semantic_dedup_window": 30,
+        "semantic_dedup_threshold_jaccard": 0.85,
+        "semantic_dedup_threshold_cosine": 0.90,
+        "semantic_dedup_window_same_agent": 50,
+        "semantic_dedup_window_cross_agent": 0,
+        "semantic_dedup_window_cross_session": 0,
+        "semantic_dedup_use_embeddings": False,
+        # Auto-capture extraction minimum content length (chars). Config-aware in
+        # src/memall/auto_capture.py; falls back to quality_gate.lenient_min_len
+        # then legacy default 20. Keep >= quality gate lenient floor to avoid
+        # capturing content that intelligent_capture will always reject.
+        "auto_capture_min_content_len": 20,
+        # Enable/disable auto-capture hook (ask/reflect/discussion on memall_*).
+        # Default True for backward compatibility; set False to opt out.
+        "auto_capture_enabled": True,
+        # TD-AUTO-SRC-01: optional restriction of the extractor whitelist
+        # (list of "tool.action" strings, e.g. ["memall_persona.ask"]).
+        # Absent/None = built-in whitelist (ask/reflect/respond). This key can
+        # only NARROW the set; widening is explicit via
+        # auto_capture.register_auto_capture_extractor() + contract tests.
+        "auto_capture_extractors": None,
+        # TD hardening: persistent short-window dedup tuning. Defaults keep the
+        # existing contract exactly (300s window, skip at 2nd hit, retention =
+        # max(window*12, 3600)). Clamped internally; fail-open on config errors.
+        "auto_capture_persistent_window_seconds": 300,
+        "auto_capture_persistent_min_hits": 2,
+        # 0 = derive retention from window (window*12, floor 3600s).
+        "auto_capture_retention_seconds": 0,
+        # Row-count cap for auto_capture_recent (0 disables the cap). Bounds
+        # table growth under load beyond what TTL cleanup guarantees.
+        "auto_capture_max_rows": 10000,
         # Phase 2 resolve engine: slot_key + NOOP/MERGE/UPDATE/SUPERSEDE/CONFLICT/REVIEW (rules-first, non-destructive)
         "resolve_enabled": True,
         # Thread inference: link new memories to a thread root within N minutes.
@@ -227,6 +290,11 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "auto_tags_enabled": True,
         # Upper bound on auto-derived tags per memory.
         "auto_tags_max": 8,
+    },
+    "quality_gate": {
+        "strict_min_len": 30,
+        "lenient_min_len": 15,
+        "fallback_to_p2": True,
     },
     # Heat-based level promotion configuration (M4)
     "promotion": {

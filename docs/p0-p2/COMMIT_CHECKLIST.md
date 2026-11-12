@@ -159,3 +159,69 @@ PYTHONPATH=.:src ./.venv/bin/python -m pytest \
 - 文档：`independent-review-report.md`（第三轮章节）、`acceptance-review-status.md`（§7）、`CHANGELOG`/`TECH_DEBT`（第三轮条目）、`PRECOMMIT`（第三轮全量数字）。
 - 验收：定向 19 passed；全量见 PRECOMMIT 第三轮；py_compile OK；提交态自洽。
 - 门禁：只暂存上述文件；**排除 `thin_waist.py.bak_phase1`**；本地 commit（`DeepSeek Harness <noreply@deepseek-harness.local>`），**不 push**。
+
+## 2026-11 local pass（自动入库/语义去重/自进化边界加固，未提交）
+- [x] 代码：`thin_waist.py` 语义线程回退增加可选 project 边界（`_semantic_dedup_lookup(..., project=...)` + `_infer_thread_root` 传参）；`improve.py` 个人/全局 correction 重复运行幂等合并唯一 `source_l6_ids`、`hit_count`/severity；`config.py`/`auto_capture.py` 增加 `capture.auto_capture_enabled`（默认 True，可配置关闭）。
+- [x] 测试：新增/扩展 `test_capture_thread_inference.py`、`test_improve.py`、`test_auto_capture.py` 契约用例。
+- [x] 验收：定向 `tests/test_improve.py tests/test_auto_capture.py tests/test_capture_thread_inference.py` -> 19 passed；全量 `pytest -q` -> 683 passed, 2 skipped, 192 warnings（exit 0，job bash-3337c20e928547b8）。
+- [x] 文档追踪：`docs/improvement/AUTO_INTEL_PROGRESS_2026-04-10.md`、`docs/p0-p2/TECH_DEBT_LEDGER.md`、本清单已更新；`TRANSFORMATION_DOC.md` 可在提交前补充本轮摘要。
+- [ ] 本地 commit（不 push），待用户明确要求且最终验收确认。
+
+## 2026-11 local pass: P0-1/P0-2（待提交，未 push）
+
+- [x] **P0-1 Semantic dedup layered decision + reason/observability**: hash-dedup path emits additive dedup metadata (`thin_waist.py`); legacy/v2 key precedence, char-jaccard fallback, `_NEG_RE`/`_QTY_RE`, project/thread boundaries, reserved knobs default-off all preserved. Contract: `test_legacy_semantic_dedup_keys_take_precedence_in_capture_path` green.
+- [x] **P0-2 Auto-ingest info-increment + persistent short-window dedup**: `_looks_low_information`/`_information_increment_ratio` gates, 300s/2-hit persistent dedup (`auto_capture_recent`), agent-scoped keys, observable decisions/reasons, config-aware min length, discussion agent propagation fix. Contracts: `test_auto_capture_*` (9 tests) green.
+- [x] **Tests updated/added**: `tests/test_auto_capture.py` hardened (config reset, low-info cases, persistent dedup, increment-gate toggle).
+- [x] **Targeted validation**: 34 passed (7 files). **Broader validation**: 54 passed (9 files).
+- [x] **Docs updated**: `docs/improvement/AUTO_INTEL_PROGRESS_2026-04-10.md`, `docs/p0-p2/TRANSFORMATION_DOC.md`, `docs/p0-p2/TECH_DEBT_LEDGER.md`, `docs/p0-p2/COMMIT_CHECKLIST.md`.
+- [ ] Exclude `src/memall/core/thin_waist.py.bak_phase1` and unrelated artifacts from commit scope.
+- [ ] Local commit (no push) — awaiting explicit user approval after final validation.
+
+## 2026-11-12 第二轮：四项开放债务推进（待提交集增补，未提交）
+
+### 本轮改动文件（追加到既有未提交集）
+- `src/memall/auto_capture.py`：extractor 注册/注销/白名单查询 + `capture.auto_capture_extractors` 收窄 + `_persistent_dedup_settings()`（窗口/min-hits/retention/max-rows 可配、钳制、rowid 裁剪）。
+- `src/memall/config.py`：新增 `capture.auto_capture_extractors/auto_capture_persistent_window_seconds/auto_capture_persistent_min_hits/auto_capture_retention_seconds/auto_capture_max_rows`；`evolution.correction_injection_tracking_enabled/correction_adoption_tracking_enabled`（默认 False）。
+- `src/memall/pipeline/improve.py`：corrections 加性观测列迁移；`record_corrections_injection` / `record_correction_adoption` / `correction_effectiveness_report`；`get_active_corrections` 输出加性字段；模块 logger。
+- `src/memall/mcp/federation_tools.py`：auto_inject corrections 注入计数接入（默认 no-op）。
+- `src/memall/mcp/models.py` / `validator.py` / `tools/__init__.py`：MCP `correction_report`（CorrectionReportInput、路由、enum/描述）。
+- `tests/test_auto_capture.py`（+3）、`tests/test_improve.py`（+4）、`tests/test_semantic_dedup_config_contract.py`（+2）。
+- 文档：`TECH_DEBT_LEDGER.md`、`TRANSFORMATION_DOC.md`、`COMMIT_CHECKLIST.md`、`docs/improvement/AUTO_INTEL_PROGRESS_2026-04-10.md`。
+
+### 默认行为不变的兼容性门禁（必须保持绿的测试）
+- `test_legacy_semantic_dedup_keys_take_precedence_in_capture_path`
+- `test_auto_capture_persistent_dedup_across_restart_and_reports_reason`（300s/2 hits 契约）
+- `test_correction_tracking_defaults_off_no_writes`（tracking 默认关）
+- `test_v2_cross_scope_windows_reserved_no_behavior_change` 与本轮新增 2 个预留契约
+
+### 验收
+- 定向：`tests/test_improve.py tests/test_auto_capture.py tests/test_semantic_dedup_config_contract.py tests/test_auto_inject_corrections.py tests/test_session.py tests/test_kb_ingest_p2_expanded.py` → 68 passed。
+- 全量：第二轮后 **698 passed, 2 skipped (exit 0)**；第三轮（自动采纳判定器）后 **703 passed, 2 skipped, 192 warnings in 893.18s (exit 0)**（689 基线 + 14 新增，零回归）。
+
+### 第三轮追加改动文件（TD-EVOL-TRACK-01 自动采纳判定器）
+- `src/memall/pipeline/improve.py`：`evaluate_session_corrections()` 三态判定器（默认关、fail-open、dry-run 模式）。
+- `src/memall/pipeline/session.py`：`session_end` 加性 `corrections_eval`；`session_start` stale 路径加性 `stale_corrections_eval`。
+- `src/memall/config.py`：`evolution.correction_auto_adoption_eval`（默认 False）。
+- `tests/test_improve.py`：+5 契约测试（默认 no-op / 三态 / dry-run / session_end 端到端 / 默认形状不变）。
+
+### 提交门禁
+- [ ] `git status --short` 复核：仅暂存 ADR0028 主线 + 本轮文件；排除 `gateway_start.py`、`gateway_keepalive.sh.bak.*`、`gateway.log` 等运行产物。
+- [ ] 全量测试绿后由用户显式请求再 commit（不 push）。
+
+## 部署备注（2026-11-12 实测教训，提交/上线前必读）
+- **改完 `src/` 后运行中的 gateway 不会自动加载新代码**；涉及新模块/新类（如本轮 `CorrectionReportInput`）时，惰性导入可能拼出"混血"模块状态——一旦某个请求触发 ImportError，Python 的失败导入缓存会让**所有 MCP 请求持续 500**，直到进程重启（2026-11-12 12:47 启动的进程即在 13 点改动后进入该状态，14:18 经 `kill` + keepalive 脚本重启恢复）。
+- 重启后验收三件套（本机 9920）：
+  1. `POST /mcp initialize`（带 `X-MemAll-Agent` 或 clientInfo.agent_name，强制身份声明）
+  2. `tools/list` 应返回 8 个工具
+  3. 抽一个动作调用（如 `memall_system.correction_report`、`memall_read.search`）确认非 error
+- **当前托管方式**：`gateway_keepalive.sh`（nohup，崩溃自动重启）。如需回到 systemd：先停脚本进程，再 `sudo systemctl start memall-gateway.service`（本次会话无 sudo，未能直接验证 unit 拉起）。
+- 安全操作顺序建议：先本地全量测试绿 → 再重启 gateway → 立即跑上面三件套；避免"改一半、进程边跑边读新码"。
+
+## 2026-11-12 第四轮追加（网关热重载 + 缺陷修复，未提交）
+- 新增：`src/memall/gateway_autoreload.py`、`tests/test_gateway_autoreload.py`、`gateway_start_dev_reload.py`（dev wrapper，提交与否用户定）。
+- 修改：`src/memall/gateway.py`（start() 门控接线，默认关）、`src/memall/config.py`（gateway.autoreload 默认 False；**并修复 DEFAULTS 重复 "gateway" 键覆盖 port 的自引入缺陷**）、`tests/test_gateway.py`（jieba 预热 + capture 超时 15s，修复单跑必挂的顺序依赖）。
+- 全量验收：**708 passed, 2 skipped (exit 0)**。
+
+## ✅ 提交完成（2026-11-12）
+- commit `b7d703b`（本地，未 push）：30 files, 3445+/236-，含第四轮热重载与缺陷修复；排除项保持未跟踪（gateway_start.py / gateway_start_dev_reload.py / bak）。
+- 本条为提交后补记（amend 于同一本地提交）。

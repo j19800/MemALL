@@ -29,16 +29,22 @@
   - [x] `src/memall/core/kb_policy.py`：`KB_SOURCE_PIPELINES` + `kb_sql_exclusion_clauses()`（已完成）。
   - [x] `src/memall/mcp/tools/retrieve.py`：`handle_recap` 使用 `kb_sql_exclusion_clauses()`（已完成）。
   - [x] `src/memall/pipeline/session.py`：L3/L4/L5 工作流使用 `kb_sql_exclusion_clauses()`（已完成）。
-  - [ ] `src/memall/pipeline/auto_dream.py` / `pipeline/cross_agent.py` / `pipeline/lifecycle.py` / `pipeline/llm_enhance.py`——仍有剩余 `source_pipeline` 检查，待 P2-4 阶段统一改造。
-  - [ ] `tests/` 中的任何硬编码 SQL 片段或 pipeline 名称字符串。
+  - [x] `src/memall/pipeline/auto_dream.py` / `pipeline/cross_agent.py` / `pipeline/lifecycle.py` / `pipeline/llm_enhance.py`——已统一使用 `kb_sql_exclusion_clauses()`（P2-3 收敛，2026-11-12）。
+  - [x] `src/memall/mcp/federation_tools.py`：auto_inject 多 bucket 统一 KB 排除（已收敛，2026-11-12）。
+  - [ ] `tests/` 中的任何硬编码 SQL 片段或 pipeline 名称字符串（需按需清理）。
 
 ## P1：mode=continuity / continuity injection 边界测试（P1 续篇）
 - **目标**：补全 `mode=continuity` 与 validity/resolve 过滤边界的端到端契约测试。
-- **缺失测试集**（待后续 PR）：
-  1. `test_p1_continuity_pack_validity_filter`：`build_continuity_pack(include_conflicts=False)` 时，`valid_from/invalid_at` 字段是否正确过滤已过期记忆。
-  2. `test_p1_continuity_pack_resolve_filter`：`include_conflicts=False` 时，`resolve.status` 为 `CONFLICT`/`REVIEW` 的记忆是否被正确排除。
-  3. `test_p1_session_start_kb_exclusion`：`session_start(agent_name=...)` 返回的 `injected_memories` 是否明确 `kb_excluded=True` 且不含 KB 证据。
-  4. `test_p1_continuity_pack_include_conflicts_kb_still_excluded`：`include_conflicts=True` 时 `kb_excluded` 必须为 True（冲突包含不等于 KB 证据进入）。
+- **现有覆盖**（`tests/test_kb_ingest_p2_expanded.py`，2026-11-12）：
+  1. [x] `test_p1_continuity_pack_contract_and_kb_exclusion`
+  2. [x] `test_p1_continuity_pack_mcp_handler_contract`
+  3. [x] `test_p1_continuity_pack_include_conflicts_boundary` + `test_p1_continuity_pack_include_conflicts_respects_validity`
+  4. [x] `test_p1_continuity_pack_validity_filter_excludes_expired`
+  5. [x] `test_p1_continuity_pack_recent_supersedes_boundary`
+  6. [x] `test_p1_resolve_status_pending_decisions_respects_validity`
+  7. [x] `test_p1_include_conflicts_false_suppresses_review_status_rows`
+  8. [x] `test_p1_session_start_mcp_kb_exclusion_contract`、`test_p1_session_start_auto_inject_per_bucket_kb_exclusion`
+- **备注**：原列出的 4 条缺失用例大多已覆盖（validity_filter/include_conflicts_kb_still_excluded/session_start_kb_exclusion/resolve_filter 均有对应断言）；如需更细分命名可按需增补但当前契约已满足。
 
 ## P3（最小，保守）——效用反馈闭环
 - **目标**：确认 `record_interaction` 已在 `memall_write` 路由中存在；`search.enhancements.record_interaction`/`personalize`/`context_boost` 均为 opt-in（默认 off）；不改变 ranking 默认行为。
@@ -171,7 +177,7 @@
 - [x] 逐条对照表 `docs/p0-p2/blueprint-completion-matrix.md`；`p4-deferred-design.md` 状态行标注「部分过时（历史设计前置）」。
 - [ ] 已知偏差（非欠账，登记）：P3 配置键前缀 `quality.utility.*` vs 蓝图顶层 `utility.*`；P4 为非破坏性标记而非静默改写 `resolve.decision`；P1 注入 opt-in。若需严格消除偏差可加配置别名 / 显式 resolve.status 改写策略。
 - [ ] P3 灰度前置（遥测/基线/白名单/改默认）与 P2-4 worker 真实 handler 仍按各节在账（这些是「启用前/增强」负债，不是蓝图 §2 交付缺口）。
-- [x] `thin_waist.py.bak_phase1` 备份处置仍待决策（不纳入任何提交）。  *(2026-11-11 已删除：git 历史保有 81 个版本，无需冗余备份)*
+- [x] `thin_waist.py.bak_phase1` 备份处置已决策（不纳入任何提交；文件不存在/不保留冗余备份）。  *(2026-11-11 已删除：git 历史保有 81 个版本，无需冗余备份)*
 
 - [x] 「按蓝图补齐」轮次已落地本地 commit `3ee3372`（21 files，未 push）；提交态自洽校验通过。
 
@@ -271,3 +277,58 @@
 - `retrieve()` 的 human viewer 可读 `visibility='private'` 行 —— 属既有信任模型设计，收紧会影响全仓，需单独评估。
 - rollback 定位限于审计尾窗口（4MB/20000 行）—— 保守拒绝符合 fail-safe，需在运维文档说明。
 - `on_capture` pipeline 与前台写入争 SQLite 写锁 —— 建议加 config 开关，属性能/部署议题。
+
+
+## 2026-11-11 本轮：语义去重 v2 配置/契约收敛（本地验收，未提交）
+
+| 债务项 | 优先级 | 涉及文件 | 描述 | 状态 |
+|---|---|---|---|---|
+| 语义去重 v2 关键字生效（捕获路径） | medium | `src/memall/core/thin_waist.py` | 遗留键不存在时，`semantic_dedup_threshold_cosine`、`semantic_dedup_window_same_agent` 生效；遗留键存在时保持优先。 | ✅ 本轮完成并契约化（13 passed） |
+| 字符级回退阈值 v2 化 | medium | `src/memall/core/thin_waist.py` | 无遗留阈值键时改用专用 `semantic_dedup_threshold_jaccard`；有遗留键时保持 `max(0.5, legacy-0.2)`。 | ✅ 本轮完成并契约化 |
+| 跨智能体/跨会话窗口与嵌入开关保留键化 | low | `src/memall/core/thin_waist.py`, `src/memall/config.py` | `semantic_dedup_window_cross_agent/cross_session`、`semantic_dedup_use_embeddings` 仅为保留键（默认 0/False），捕获路径**不**启用跨作用域合并与嵌入去重。 | ✅ 本轮契约化（无行为变更） |
+| 自动入库来源扩展 | medium | `src/memall/auto_capture.py` | 当前仅 `ask/reflect/discussion`；会话/代码/错误/任务事件源未落地。 | 仍在账（与本轮正交） |
+| 自进化有效性追踪与更宽演化 | medium | `src/memall/pipeline/improve.py` | 活跃纠偏已注入；有效性计数、L4→L6 抽取、跨智能体共识演化配置仍缺。 | 仍在账 |
+| 智能化层与专用测试 | low | `tests/test_intelligent*`, `tests/test_dream*` | 无全套智能层（自动摘要/边创建/效用驱动保留）与对应测试。 | 仍在账 |
+
+
+## 2026-11 local pass (auto-ingest/semantic dedup/self-evolution hardening, uncommitted)
+
+| ID | Area | Status | Notes |
+|---|---|---|---|
+| TD-AUTO-OPT-01 | Auto-capture kill switch | Resolved (local) | Added `capture.auto_capture_enabled` (default `True`) and hook gate in `auto_capture.py`; contract test `test_auto_capture_can_be_disabled_by_config`. |
+| TD-THREAD-PROJ-01 | Thread inference semantic project boundary | Resolved (local) | `_semantic_dedup_lookup` accepts optional `project`; semantic fallback in `_infer_thread_root` passes `project=data.project`. Regression: `test_thread_inference_semantic_fallback_respects_project_boundary`. |
+| TD-EVOL-IDEMP-01 | Correction evidence merge idempotency | Resolved (local) | `improve_step` merges unique `source_l6_ids` and recomputes `hit_count`/severity for personal+global corrections on repeat; global existing rows now updated/merged. Contracts: `test_improve_global_correction_merges_on_repeat`, `test_improve_personal_correction_merges_unique_hits`. |
+| TD-EVOL-TRACK-01 | Self-evolution effectiveness/lifecycle depth | Open | No effectiveness tracking, L4→L6 extraction pipeline, cross-agent consensus evolution config, or dedicated `tests/test_intelligent*`/`tests/test_dream*`. Expiry behavior remains heuristic (internalization/stale signals). |
+
+Validation: targeted 19 passed; full suite `683 passed, 2 skipped` (exit 0). No commit/push.
+
+## 2026-11 local pass: P0-1/P0-2 自动入库/语义去重/智能化强化（已完成，本地验收）
+
+| ID | Area | Status | Notes |
+|---|---|---|---|
+| TD-P0-SEM-OBS-01 | Hash-dedup observability | Resolved (local) | `status="dedup_hash"` capture path now emits additive dedup metadata (`layer=exact_hash`, `reason=exact_hash_match`, `decision=merge`, `target_id`, `similarity=1.0`) via `_build_capture_contract`; exception fallback still returns `CaptureId(..., status="dedup_hash")` for compatibility. |
+| TD-P0-AUTO-INFO-01 | Auto-capture info-increment gate | Resolved (local) | `_looks_low_information` + `_information_increment_ratio` for `ask` path; config `auto_capture_info_increment_enabled` (default True), `auto_capture_info_increment_min_ratio` (default 0.15), fail-open; observable `_REASON_SKIPPED_LOW_INFORMATION`. Contract: `test_auto_capture_records_decision_reasons_and_low_information_skip`. |
+| TD-P0-AUTO-PD-01 | Persistent short-window dedup | Resolved (local) | `auto_capture_recent` table/indexes, 300s window, MIN_HITS=2, agent-scoped fingerprint keys with legacy empty-agent compatibility, fail-open DB handling. Contract: `test_auto_capture_persistent_dedup_across_restart_and_reports_reason`. |
+| TD-P0-AUTO-AGENT-01 | Discussion agent propagation | Resolved (local) | `memall_discussion.respond` extractor emits `agent_name`; hook resolves from hints/arguments. Contract: `test_auto_capture_reflect_and_discussion_extractors`. |
+| TD-P0-AUTO-OBS-01 | Decision observability | Resolved (local) | Bounded in-process decision cache (`_last_decisions`, max 512) with `get_last_auto_capture_decision`; reason constants for skip/hit/capture outcomes. |
+
+Validation: targeted 34 passed (7 files), broader 54 passed (9 files), full baseline 683 passed/2 skipped. No commit/push.
+
+
+## 2026-11-12 补充：auto_capture_recent 表机会式 TTL 清理（已完成，本地验收）
+- **变更**：`src/memall/auto_capture.py::_already_persistently_captured()` 入口处插入 `DELETE FROM auto_capture_recent WHERE last_seen_at < ?`，阈值 `max(_PERSISTENT_DEDUP_WINDOW_SECONDS * 12, 3600)`（≥1h 或 12×去重窗口），失败静默忽略（fail-open，不阻塞捕获路径）。
+- **动机**：持久化去重表无独立清理守护进程，仅依赖写入路径自然触发，防止长期运行无界增长。
+- **验收**：全量回归 689 passed/2 skipped；`tests/test_auto_capture.py::test_auto_capture_persistent_dedup_across_restart_and_reports_reason` 等通过。
+
+## 2026-11-12（第二轮）：四项开放债务推进（未提交）
+
+| 债务项 | 优先级 | 状态 | 本轮进展 | 仍开放部分 |
+|---|---|---|---|---|
+| TD-AUTO-SRC-01 自动入库来源白名单 | medium | [~] 部分清偿 | 显式扩展点 `register/unregister_auto_capture_extractor()`；config `capture.auto_capture_extractors` 只可收窄白名单；默认三源不变；契约测试 +2 | 新来源的实际 extractor（如 goal_deliberate 结论）仍需逐个带测试引入；不做自动放宽 |
+| auto_capture_recent 保留/并发加固 | medium | [x] 本地清偿 | 窗口/min-hits/retention/max-rows 全部可配且默认=旧契约；rowid 最旧裁剪兜底 TTL；`_persistent_dedup_settings()` fail-open；契约测试 +1 | 5000+/并发真实负载压测仍待做（WAL+busy_timeout 已有）；多进程行级冲突观测 |
+| TD-EVOL-TRACK-01 自进化有效性/生命周期 | medium | [~] 观测闭环建立 | corrections 加性观测列（injected/adopted 计数+时间，自动迁移）；写路径默认关（两枚 evolution 门）；`correction_effectiveness_report()` + MCP `correction_report`（validator 登记）；auto_inject 接入注入计数（关时 no-op）；测试 +4 | 基于 effectiveness 的自动过期/降级策略未启用（保持启发式）。**2026-11-12 第三轮更新**：自动判定器 `evaluate_session_corrections()` 已落地（三态 adoption/violation/no_signal，双门默认关 + dry-run 灰度预览，挂 session_end 与 session_start stale 两钩子，+5 测试）；仍开放：关键词启发式的精度替代方案（LLM 判定/人工标注）与 effectiveness 驱动的自动降级 |
+| TD-DEDUP-V2-01 跨 agent/session/embedding 预留 | low | [x] 预留语义锁定 | 新增 2 个加固契约：embedding 旋钮不引入后端依赖、cross_session=0 不改变 same-agent 行为；跨 agent 既有契约保留 | 真正的 cross-agent/cross-session 窗口与 embedding 层实现（需独立设计与灰度） |
+
+### 兼容性声明（本轮）
+- 全部默认值保持既有契约：auto-capture 默认三源、300s/2 次持久去重、语义去重默认关、corrections 行为/注入/过期逻辑不变。
+- 新列均带 DEFAULT，新 config 键缺失即取默认；`correction_report` 为加性 MCP 动作。

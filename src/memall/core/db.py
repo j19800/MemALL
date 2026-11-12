@@ -629,12 +629,51 @@ def get_conn(db_path=None) -> sqlite3.Connection:
         try:
             _ensure_interaction_columns(conn)
             _ensure_missing_columns(conn)
+            _ensure_auto_capture_dedup_table(conn)
             conn.commit()
         except sqlite3.Error:
             logger.debug("db.py: get_conn column re-assert skipped", exc_info=True)
 
     return conn
 
+
+
+def _ensure_auto_capture_dedup_table(conn):
+    """Create/ensure table for persistent short-window auto-capture dedup.
+    
+    Stores fingerprints of recently auto-captured content to prevent duplicate
+    ingestion across process restarts and concurrent calls. Additive and idempotent.
+    """
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auto_capture_recent (
+                fingerprint TEXT NOT NULL,
+                source_key TEXT NOT NULL DEFAULT '',
+                agent_name TEXT NOT NULL DEFAULT '',
+                content_hash TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                hit_count INTEGER NOT NULL DEFAULT 1,
+                metadata TEXT DEFAULT '{}',
+                PRIMARY KEY (fingerprint, agent_name)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_auto_capture_recent_seen "
+            "ON auto_capture_recent(last_seen_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_auto_capture_recent_agent "
+            "ON auto_capture_recent(agent_name, created_at)"
+        )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
 
 def _ensure_missing_columns(conn):
     """Add columns that migrations assume exist but SCHEMA_SQL may not create.

@@ -118,36 +118,53 @@ _INTENT_CATEGORY = {
 
 
 def _generate_subject(content: str, intent: str) -> str:
-    """从内容中自动生成 subject。"""
-    # 取第一句有意义的内容
-    for sep in ["\n", "。", ". ", "！", "？", "!", "?"]:
-        if sep in content:
-            first = content.split(sep)[0].strip()
-            if len(first) > 10:
+    """从内容中自动生成 subject（语义紧凑，避免机械冗余）。"""
+    text = (content or "").strip()
+    # Strip common leading labels/noise
+    for prefix_noise in ("问：", "答：", "Q:", "A:", "问题：", "回答："):
+        if text.startswith(prefix_noise):
+            text = text[len(prefix_noise):].strip()
+    # Remove structured wrapper labels like [支持] / [反对]
+    text = re.sub(r"^\[[^\]\n]{1,12}\]\s*", "", text)
+    # Take first meaningful clause/sentence
+    first = text
+    for sep in ["\n", "。", "！", "？", ". ", "! ", "? ", "；", "; "]:
+        if sep in text:
+            cand = text.split(sep)[0].strip()
+            if len(cand) >= 6:
+                first = cand
                 break
-    else:
-        first = content[:80]
-
-    # 去掉开头填充词
-    fillers = ["好的，", "明白了，", "嗯，", "那个，", "所以，", "然后，", "对了，"]
-    for f in fillers:
-        if first.startswith(f):
-            first = first[len(f):]
-            break
-
-    # 添加意图前缀
-    prefix = {
-        "decision": "决策: ",
-        "lesson": "教训: ",
-        "preference": "偏好: ",
-        "plan": "计划: ",
-        "identity": "身份: ",
-        "knowledge": "知识: ",
-        "fact": "",
-        "general": "",
+    # Filler cleanup
+    fillers = ["好的，", "好的 ", "明白了，", "明白了 ", "嗯，", "嗯 ", "那个，", "那个 ", "所以，", "所以 ", "然后，", "然后 ", "对了，", "其实", "目前", "现在"]
+    changed = True
+    while changed:
+        changed = False
+        for f in fillers:
+            if first.startswith(f):
+                first = first[len(f):].strip()
+                changed = True
+                break
+    # Collapse whitespace and trim boilerplate punctuation
+    first = re.sub(r"\s+", " ", first).strip(" ：:，,。.;；-—")
+    # If first clause is too short/generic, fall back to a longer slice
+    if len(first) < 8:
+        first = re.sub(r"\s+", " ", text)[:60].strip()
+    # Intent prefix only when it adds signal (avoid doubling with level prefix later)
+    intent_prefix = {
+        "decision": "决策",
+        "lesson": "教训",
+        "preference": "偏好",
+        "plan": "计划",
+        "identity": "身份",
+        "knowledge": "知识",
     }.get(intent, "")
-
-    return (prefix + first)[:200]
+    if intent_prefix and not first.startswith(intent_prefix):
+        # keep compact: "决策: ..."
+        label = f"{intent_prefix}: {first}" if first else intent_prefix
+    else:
+        label = first or text[:40]
+    # Soft cap; thin_waist will further normalize/prefix by level
+    return label[:120]
 
 
 def score_importance(content: str, intent: str, entities: list) -> float:
@@ -196,9 +213,15 @@ def intelligent_capture(content: str, agent_name: str = "system", **overrides) -
     Returns:
         记忆 ID
     """
-    # 0. 长度检查
-    if len(content.strip()) < 15:
-        logger.debug("intelligent_capture: content too short (%d chars), skipping", len(content.strip()))
+    # 0. 长度检查（可配置；默认保持兼容：lenient/strict 最小值至少 15）
+    try:
+        from memall.config import get_config
+        min_len = int(get_config("quality_gate.lenient_min_len", 15) or 15)
+    except Exception:
+        min_len = 15
+    min_len = max(1, min(min_len, 100))
+    if len(content.strip()) < min_len:
+        logger.debug("intelligent_capture: content too short (%d chars < %d), skipping", len(content.strip()), min_len)
         return 0
 
     # 1. 意图识别

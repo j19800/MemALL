@@ -65,10 +65,13 @@ def _defrag(conn) -> dict:
     """
     merged = 0
     deleted = set()
+    from memall.core.kb_policy import kb_sql_exclusion_clauses
+    _kb = " AND ".join(kb_sql_exclusion_clauses())
     rows = conn.execute(
         "SELECT id, content, agent_name, category, level FROM memories "
         "WHERE level IN ('P2','L4') AND LENGTH(TRIM(content)) > 20 "
         "AND COALESCE(category, '') <> 'goal' "
+        f"AND {_kb} "
         "ORDER BY agent_name, category, created_at"
     ).fetchall()
 
@@ -109,9 +112,12 @@ def _extract_patterns(conn) -> dict:
     now = datetime.now(timezone.utc).isoformat()
 
     # 查找高频关键词模式
+    from memall.core.kb_policy import kb_sql_exclusion_clauses
+    _kb = " AND ".join(kb_sql_exclusion_clauses())
     rows = conn.execute(
         "SELECT content, agent_name, category FROM memories "
         "WHERE level IN ('L6','L7') AND LENGTH(TRIM(content)) > 20 "
+        f"AND {_kb} "
         "ORDER BY created_at DESC LIMIT 500"
     ).fetchall()
 
@@ -157,10 +163,13 @@ def _distill_knowledge(conn) -> dict:
     created = 0
     now = datetime.now(timezone.utc).isoformat()
 
-    # 收集 L6 教训，按主题聚类
+    # 收集 L6 教训，按主题聚类 (exclude KB evidence)
+    from memall.core.kb_policy import kb_sql_exclusion_clauses
+    _kb = " AND ".join(kb_sql_exclusion_clauses())
     lessons = conn.execute(
         "SELECT id, content, agent_name FROM memories "
         "WHERE level = 'L6' AND LENGTH(TRIM(content)) > 20 "
+        f"AND {_kb} "
         "ORDER BY confidence DESC LIMIT 200"
     ).fetchall()
 
@@ -213,20 +222,26 @@ def _schedule_forgetting(conn) -> dict:
     """Phase 4: 遗忘调度 — 基于重要性自动遗忘。"""
     scheduled = 0
 
-    # 标记低价值 P2 记忆为遗忘候选
+    # 标记低价值 P2 记忆为遗忘候选 (exclude KB evidence)
+    from memall.core.kb_policy import kb_sql_exclusion_clauses
+    _kb = " AND ".join(kb_sql_exclusion_clauses())
     conn.execute(
         "UPDATE memories SET memory_status = 'dormant' "
         "WHERE level = 'P2' AND confidence < 0.3 AND access_count = 0 "
-        "AND memory_status IS NULL AND created_at < datetime('now', '-7 days')"
+        "AND memory_status IS NULL AND created_at < datetime('now', '-7 days') "
+        f"AND {_kb}"
     )
     scheduled += conn.execute("SELECT changes()").fetchone()[0]
 
-    # 标记孤立记忆（无边、无引用、低置信度）
+    # 标记孤立记忆（无边、无引用、低置信度）(exclude KB evidence)
+    from memall.core.kb_policy import kb_sql_exclusion_clauses
+    _kb = " AND ".join(kb_sql_exclusion_clauses())
     conn.execute(
         "UPDATE memories SET memory_status = 'dormant' "
         "WHERE id NOT IN (SELECT source_id FROM edges UNION SELECT target_id FROM edges) "
         "AND level IN ('P2','P3','P4') AND confidence < 0.4 "
-        "AND memory_status IS NULL AND created_at < datetime('now', '-14 days')"
+        "AND memory_status IS NULL AND created_at < datetime('now', '-14 days') "
+        f"AND {_kb}"
     )
     scheduled += conn.execute("SELECT changes()").fetchone()[0]
 

@@ -84,3 +84,39 @@ def test_thread_inference_disabled_by_zero_window():
         assert _thread_of(m2) is None
     finally:
         config.reset_config()
+
+def test_thread_inference_semantic_fallback_respects_project_boundary():
+    """Semantic fallback must not link threads across different projects."""
+    from datetime import datetime, timezone, timedelta
+    from memall import config
+    from memall.core.db import get_conn
+
+    config.reset_config()
+    config.get_config()
+    # Disable temporal window to force semantic fallback path, keep semantic fallback enabled.
+    config._config["capture"]["thread_inference_window_minutes"] = 0
+    config._config["capture"]["thread_inference_semantic_window"] = 50
+    config._config["capture"]["thread_inference_semantic_threshold"] = 0.5
+    try:
+        m1 = capture(
+            "语义线程回退项目边界测试：数据库主库选用 PostgreSQL 16 保证事务稳定性。",
+            agent_name="thr_sem_proj",
+            project="alpha",
+        )
+        # Place m1 in recent past so temporal path would not find it even if window were on,
+        # and ensure it is a valid semantic candidate.
+        old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        with get_conn() as conn:
+            conn.execute("UPDATE memories SET created_at = ?, updated_at = ? WHERE id = ?", (old, old, m1))
+            conn.commit()
+
+        m2 = capture(
+            "语义线程回退项目边界测试：数据库主库选用 PostgreSQL 16 保证事务稳定性与可靠性。",
+            agent_name="thr_sem_proj",
+            project="beta",
+        )
+        assert _thread_of(m1) is None
+        # Cross-project semantic fallback must not link.
+        assert _thread_of(m2) is None
+    finally:
+        config.reset_config()

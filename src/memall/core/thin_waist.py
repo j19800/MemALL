@@ -52,7 +52,8 @@ class CaptureId(int):
 
     def to_dict(self):
         d = {"id": int(self)}
-        for k in ("status", "quality", "readability", "ingest_mode", "source_pipeline", "decision_hint"):
+        for k in ("status", "quality", "readability", "ingest_mode", "source_pipeline", "decision_hint",
+                  "dedup", "dedup_reason", "dedup_layer", "dedup_decision", "dedup_similarity", "dedup_target_id"):
             v = getattr(self, k, None)
             if v is not None:
                 d[k] = v
@@ -1571,16 +1572,19 @@ def _extract_machine_hints(data: MemoryInput) -> dict:
     hints["entities_hint"] = seen
     return hints
 
-def _build_capture_contract(mem_id: int, data: MemoryInput, quality_result: dict | None = None) -> "CaptureId":
+def _build_capture_contract(mem_id: int, data: MemoryInput, quality_result: dict | None = None, status: str = "ok", dedup: dict | None = None) -> "CaptureId":
     meta = _ensure_metadata_dict(data)
     q = quality_result or {}
     if not q and isinstance(meta.get("quality"), dict):
         qv = meta["quality"].get("value") or meta["quality"]
         if isinstance(qv, dict):
             q = qv
-    return CaptureId(
+    dedup_meta = dedup if isinstance(dedup, dict) else None
+    if dedup_meta is None and isinstance(meta.get("dedup"), dict):
+        dedup_meta = meta.get("dedup")
+    cid = CaptureId(
         mem_id,
-        status="ok",
+        status=status or "ok",
         quality={
             "score": q.get("score", q.get("avg")),
             "gate": q.get("gate"),
@@ -1593,6 +1597,20 @@ def _build_capture_contract(mem_id: int, data: MemoryInput, quality_result: dict
         ingest_mode=meta.get("ingest_mode") or "auto",
         source_pipeline=meta.get("source_pipeline") or meta.get("source") or "capture_api",
     )
+    if dedup_meta:
+        cid.dedup = dedup_meta
+        # Additive flat fields for convenience/observability without breaking existing consumers.
+        if dedup_meta.get("reason") is not None:
+            cid.dedup_reason = dedup_meta.get("reason")
+        if dedup_meta.get("layer") is not None:
+            cid.dedup_layer = dedup_meta.get("layer")
+        if dedup_meta.get("decision") is not None:
+            cid.dedup_decision = dedup_meta.get("decision")
+        if dedup_meta.get("similarity") is not None:
+            cid.dedup_similarity = dedup_meta.get("similarity")
+        if dedup_meta.get("target_id") is not None:
+            cid.dedup_target_id = dedup_meta.get("target_id")
+    return cid
 
 def _capture_inject_quality(
     data: MemoryInput, quality_result: dict, now: str
@@ -1931,26 +1949,67 @@ def _capture_dedup_check(
             (existing["id"],),
         )
         conn.commit()
+        _hash_dedup = {"layer": "exact_hash", "similarity": 1.0, "reason": "exact_hash_match", "decision": "merge", "target_id": existing["id"]}
         try:
             _row = conn.execute("SELECT metadata FROM memories WHERE id=?", (existing["id"],)).fetchone()
             _m = json.loads((_row["metadata"] if _row else "") or "{}") if _row else {}
             _q = (_m.get("quality") or {}).get("value") if isinstance(_m.get("quality"), dict) else None
-            return _build_capture_contract(existing["id"], data, _q)
+            return _build_capture_contract(existing["id"], data, _q, status="dedup_hash", dedup=_hash_dedup)
         except Exception:
             return CaptureId(existing["id"], status="dedup_hash")
 
     # ── Defect fix: semantic de-duplication (config-gated) ──
     # Exact-hash matching above misses near-duplicate memories that differ in
-    # wording but mean the same thing — the source of the ~166 semantic
-    # duplicates. We run a TF-IDF cosine check over recent same-agent memories
-    # here, at the single write entry, so every caller benefits. DISABLED by
-    # default (see config) to avoid falsely merging legitimately distinct
-    # memories; enable where the trade-off is acceptable.
+    # wording but mean the same thing. We run a TF-IDF cosine check over
+    # recent memories, falling back to conservative char-shingle Jaccard for
+    # CJK re-wording. DISABLED by default to avoid false merges.
+    #
+    # Config precedence/semantics (contract):
+    # - Legacy keys (`semantic_dedup_threshold`, `semantic_dedup_window`) take
+    #   precedence when present for back-compat with existing callers/tests.
+    # - When legacy keys are absent, v2 keys drive behavior:
+    #   `semantic_dedup_threshold_cosine` (TF-IDF bar),
+    #   `semantic_dedup_threshold_jaccard` (char fallback bar),
+    #   `semantic_dedup_window_same_agent` (candidate window).
+    # - `semantic_dedup_window_cross_agent/cross_session` and
+    #   `semantic_dedup_use_embeddings` are reserved v2 knobs (default 0/False);
+    #   capture currently performs same-agent, local-text similarity only and
+    #   does not enable cross-scope or embedding merges by default.
     if get_config("capture.semantic_dedup_enabled", False):
-        threshold = get_config("capture.semantic_dedup_threshold", 0.92)
-        window = get_config("capture.semantic_dedup_window", 30)
-        if threshold > 0 and window > 0:
-            dup_id = _semantic_dedup_lookup(conn, data, threshold, window)
+        _cap_cfg = get_config("capture", {}) or {}
+        legacy_threshold = "semantic_dedup_threshold" in _cap_cfg
+        legacy_window = "semantic_dedup_window" in _cap_cfg
+        if legacy_threshold:
+            cosine_threshold = _cap_cfg.get("semantic_dedup_threshold", 0.92)
+        else:
+            cosine_threshold = _cap_cfg.get("semantic_dedup_threshold_cosine", 0.92)
+        if legacy_window:
+            window = _cap_cfg.get("semantic_dedup_window", 30)
+        else:
+            window = _cap_cfg.get("semantic_dedup_window_same_agent", 30)
+        try:
+            cosine_threshold = float(cosine_threshold)
+        except Exception:
+            cosine_threshold = 0.92
+        try:
+            window = int(window)
+        except Exception:
+            window = 0
+        if cosine_threshold > 0 and window > 0:
+            # Run semantic dedup lookup and capture layered observability:
+            # returns (dup_id, similarity_score, reason_data dict)
+            dedup_result = _semantic_dedup_lookup(conn, data, cosine_threshold, window)
+            if isinstance(dedup_result, tuple) and len(dedup_result) == 3:
+                dup_id, dedup_sim, dedup_reason_data = dedup_result
+            elif isinstance(dedup_result, tuple) and len(dedup_result) == 2:
+                dup_id, dedup_sim = dedup_result
+                dedup_reason_data = {"layer": "unknown", "similarity": dedup_sim or 0.0, "reason": "legacy_tuple", "decision": "merge" if dup_id is not None else "no_merge", "target_id": dup_id}
+            else:
+                # backward compat: older version returned just dup_id or None
+                dup_id = dedup_result
+                dedup_sim = 0.0
+                dedup_reason_data = {"layer": "tfidf", "similarity": 0.0, "reason": "below_threshold", "decision": "no_merge" if dup_id is None else "merge", "target_id": dup_id, "char_best_similarity": 0.0}
+            
             if dup_id is not None:
                 # Audit P1-4: a semantic dedup hit is a duplicate WRITE,
                 # not a read — count it in dedup_hits, not access_count.
@@ -1961,18 +2020,66 @@ def _capture_dedup_check(
                 )
                 conn.commit()
                 logger.info(
-                    "capture: semantic dedup -> reuse mem_id=%d (agent=%s, threshold=%.2f)",
+                    "capture: semantic dedup -> reuse mem_id=%d (agent=%s, threshold=%.2f, window=%d, "
+                    "similarity=%.2f, layer=%s, reason=%s)",
                     dup_id,
                     data.agent_name,
-                    threshold,
+                    cosine_threshold,
+                    window,
+                    dedup_sim,
+                    dedup_reason_data.get("layer"),
+                    dedup_reason_data.get("reason"),
                 )
+                # Store dedup reason data in memory metadata for cross-process observability
                 try:
                     _row = conn.execute("SELECT metadata FROM memories WHERE id=?", (dup_id,)).fetchone()
                     _m = json.loads((_row["metadata"] if _row else "") or "{}") if _row else {}
-                    _q = (_m.get("quality") or {}).get("value") if isinstance(_m.get("quality"), dict) else None
-                    return _build_capture_contract(dup_id, data, _q)
+                    # Preserve existing metadata fields
+                    if isinstance(_m, dict):
+                        # Additive dedup observability fields
+                        _m.setdefault("dedup", {}).update({
+                            "layer": dedup_reason_data.get("layer", "none"),
+                            "similarity": dedup_reason_data.get("similarity", 0.0),
+                            "reason": dedup_reason_data.get("reason"),
+                            "decision": dedup_reason_data.get("decision", "no_merge"),
+                            "target_id": dedup_reason_data.get("target_id"),
+                            "char_best_similarity": dedup_reason_data.get("char_best_similarity", 0.0),
+                        })
+                        # Persist updated metadata with dedup observability
+                        conn.execute(
+                            "UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
+                            (json.dumps(_m, ensure_ascii=False), now, dup_id),
+                        )
+                    else:
+                        # No existing metadata, create new with dedup info
+                        _m = {
+                            "dedup": {
+                                "layer": dedup_reason_data.get("layer", "none"),
+                                "similarity": dedup_reason_data.get("similarity", 0.0),
+                                "reason": dedup_reason_data.get("reason"),
+                                "decision": dedup_reason_data.get("decision", "no_merge"),
+                                "target_id": dedup_reason_data.get("target_id"),
+                                "char_best_similarity": dedup_reason_data.get("char_best_similarity", 0.0),
+                            }
+                        }
+                        # Insert with empty metadata first, then update
+                        conn.execute(
+                            "UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
+                            (json.dumps(_m, ensure_ascii=False), now, dup_id),
+                        )
                 except Exception:
-                    return CaptureId(dup_id, status="dedup_semantic")
+                    pass  # keep going even if metadata store fails
+                
+                # Return contract with additive dedup observability fields
+                # Use _build_capture_contract with status="dedup_semantic" and dedup metadata
+                contract = _build_capture_contract(
+                    dup_id, data, 
+                    status="dedup_semantic",
+                    dedup=dedup_reason_data
+                )
+                return contract
+            # dup_id is None: no merge happened, proceed with insert
+            # continue below to the insert path
 
     # L7 accumulate_key: same pattern corrected again → weight++
     if accumulate_key and data.level == "L7":
@@ -1994,11 +2101,29 @@ def _capture_dedup_check(
                 new_weight,
                 dup["id"],
             )
+            # Add layered observability for accumulate
+            _ad = {"layer": "accumulate_key", "similarity": 0.0, "reason": "weight_increment",
+                   "decision": "accumulate", "target_id": dup["id"]}
             try:
-                _row = conn.execute("SELECT metadata FROM memories WHERE id=?", (dup["id"],)).fetchone()
-                _m = json.loads((_row["metadata"] if _row else "") or "{}") if _row else {}
-                _q = (_m.get("quality") or {}).get("value") if isinstance(_m.get("quality"), dict) else None
-                return _build_capture_contract(dup["id"], data, _q)
+                _row = conn.execute("SELECT metadata FROM memories WHERE id = ?", (dup["id"],)).fetchone()
+                _m = json.loads((_row["metadata"] or "{}") if _row else "{}")
+                if not isinstance(_m, dict):
+                    _m = {}
+                _m["dedup"] = {**(_m.get("dedup") or {}), **_ad}
+                conn.execute(
+                    "UPDATE memories SET metadata = ? WHERE id = ?",
+                    (json.dumps(_m, ensure_ascii=False), dup["id"]),
+                )
+                conn.commit()
+            except Exception:
+                pass
+            try:
+                contract = _build_capture_contract(
+                    dup["id"], data, None,
+                    status="dedup_accumulate",
+                    dedup=_ad,
+                )
+                return contract
             except Exception:
                 return CaptureId(dup["id"], status="dedup_accumulate")
 
@@ -2038,18 +2163,23 @@ def _capture_dedup_check(
                     incoming = {}
             if isinstance(existing_meta, dict) and isinstance(incoming, dict):
                 merged = {**existing_meta, **incoming}
+                _ad = {"layer": "l5_subject_merge", "similarity": 0.0, "reason": "subject_match",
+                       "decision": "merge", "target_id": dup["id"]}
+                merged["dedup"] = {**(merged.get("dedup") or {}), **_ad}
                 conn.execute(
-                    "UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
+                    "UPDATE memories SET metadata = ?, updated_at = ?, dedup_hits = COALESCE(dedup_hits, 0) + 1 WHERE id = ?",
                     (json.dumps(merged, ensure_ascii=False), now, dup["id"]),
                 )
                 conn.commit()
                 try:
-                    _row = conn.execute("SELECT metadata FROM memories WHERE id=?", (dup["id"],)).fetchone()
-                    _m = json.loads((_row["metadata"] if _row else "") or "{}") if _row else {}
-                    _q = (_m.get("quality") or {}).get("value") if isinstance(_m.get("quality"), dict) else None
-                    return _build_capture_contract(dup["id"], data, _q)
+                    contract = _build_capture_contract(
+                        dup["id"], data, None,
+                        status="dedup",
+                        dedup=_ad,
+                    )
+                    return contract
                 except Exception:
-                    return CaptureId(dup["id"], status="dedup", ingest_mode=(getattr(data,"metadata",{}) or {}).get("ingest_mode") if isinstance(getattr(data,"metadata",None),dict) else "auto")
+                    return CaptureId(dup["id"], status="dedup")
     return None
 
 
@@ -2158,14 +2288,20 @@ def _infer_thread_root(conn, data: MemoryInput, now: str) -> Optional[int]:
     if not recent:
         return None
     
-    # Use existing semantic dedup function to find the most similar memory
+    # Use semantic dedup lookup within the same project boundary.
+    # PROJECT BOUNDARY IS MANDATORY for thread inference.
     try:
-        best_id = _semantic_dedup_lookup(
-            conn, 
-            data, 
-            threshold=semantic_threshold, 
-            window=semantic_window
+        result = _semantic_dedup_lookup(
+            conn,
+            data,
+            threshold=semantic_threshold,
+            window=semantic_window,
+            project=data.project,
         )
+        if isinstance(result, tuple):
+            best_id = result[0]
+        else:
+            best_id = result
         return best_id
     except Exception:
         # If semantic search fails, return None
@@ -2192,7 +2328,19 @@ def _char_level_dup_lookup(content: str, recent, threshold: float) -> Optional[i
     new_set = shingles(content)
     if not new_set:
         return None
-    bar = max(0.5, float(threshold) - 0.2)
+    # Prefer dedicated jaccard threshold only when legacy threshold key is
+    # not explicitly driving behavior; legacy derives a conservative bar for
+    # backward compatibility with existing tests/callers.
+    try:
+        _cap_cfg = get_config("capture", {}) or {}
+        if "semantic_dedup_threshold" in _cap_cfg:
+            bar = max(0.5, float(threshold) - 0.2)
+        elif "semantic_dedup_threshold_jaccard" in _cap_cfg:
+            bar = max(0.5, float(_cap_cfg.get("semantic_dedup_threshold_jaccard", 0.85)))
+        else:
+            bar = max(0.5, float(threshold) - 0.2)
+    except Exception:
+        bar = max(0.5, float(threshold) - 0.2)
 
     # Polarity guard. Character overlap cannot see negation, and a one-character
     # difference flips the meaning: "数据库使用 PostgreSQL 作为主库" and
@@ -2251,33 +2399,60 @@ def _char_level_dup_lookup(content: str, recent, threshold: float) -> Optional[i
         jac = inter / len(new_set | old_set)
         if jac >= bar and jac > best:
             best, best_id = jac, r["id"]
-    return best_id
+    # Return similarity info and reason data for layered observability
+    dedup_reason_data = {
+        "layer": "char_jaccard",
+        "similarity": round(float(best), 6),
+        "reason": "char_jaccard_merge" if best_id is not None else "below_threshold",
+        "decision": "merge" if best_id is not None else "no_merge",
+        "target_id": best_id,
+    }
+    return best_id, best, dedup_reason_data
 
 
 def _semantic_dedup_lookup(
-    conn, data: MemoryInput, threshold: float, window: int
+    conn, data: MemoryInput, threshold: float, window: int, project: Optional[str] = None
 ) -> Optional[int]:
     """Find the most similar recent same-agent memory exceeding ``threshold``.
 
     Uses TF-IDF cosine similarity over the ``window`` most recent memories of the
-    same agent. Returns the best match id, or None if nothing clears the bar.
+    same agent. When ``project`` is provided, candidates are scoped to that
+    project (COALESCE to empty string) to preserve project/thread boundaries.
+    Returns the best match id, or None if nothing clears the bar.
     """
     try:
-        recent = conn.execute(
-            "SELECT id, content FROM memories "
-            "WHERE agent_name = ? AND LENGTH(TRIM(content)) > 10 "
-            "ORDER BY created_at DESC LIMIT ?",
-            (data.agent_name, int(window)),
-        ).fetchall()
+        if project is None:
+            recent = conn.execute(
+                "SELECT id, content FROM memories "
+                "WHERE agent_name = ? AND LENGTH(TRIM(content)) > 10 "
+                "ORDER BY created_at DESC LIMIT ?",
+                (data.agent_name, int(window)),
+            ).fetchall()
+        else:
+            recent = conn.execute(
+                "SELECT id, content FROM memories "
+                "WHERE agent_name = ? AND LENGTH(TRIM(content)) > 10 "
+                "AND COALESCE(project, '') = COALESCE(?, '') "
+                "ORDER BY created_at DESC LIMIT ?",
+                (data.agent_name, project, int(window)),
+            ).fetchall()
     except sqlite3.Error:
-        return None
+        return None, 0.0, {"layer": "none", "similarity": 0.0, "reason": "db_error", "decision": "no_merge", "target_id": None}
     if not recent:
-        return None
+        return None, 0.0, {"layer": "none", "similarity": 0.0, "reason": "no_candidates", "decision": "no_merge", "target_id": None}
     texts = [data.content[:1000]] + [r["content"][:1000] for r in recent]
     try:
         tfidf_docs = compute_tfidf(texts)
     except Exception:
-        return None
+        # TF-IDF failed, try char-level fallback only
+        char_result = _char_level_dup_lookup(data.content, recent, threshold)
+        if isinstance(char_result, tuple):
+            char_id, char_sim, char_info = (char_result + (None,))[:3]
+        else:
+            char_id, char_sim, char_info = char_result, 0.0, {"layer": "char_jaccard", "similarity": 0.0, "reason": "tfidf_error_fallback", "decision": "no_merge", "target_id": None}
+        if char_id is not None:
+            return char_id, char_sim if char_sim is not None else 0.0, char_info or {"layer": "char_jaccard", "similarity": float(char_sim or 0.0), "reason": "char_jaccard_merge", "decision": "merge", "target_id": char_id}
+        return None, 0.0, {"layer": "none", "similarity": 0.0, "reason": "tfidf_error_no_char_match", "decision": "no_merge", "target_id": None}
     base = tfidf_docs[0]
     best_id, best_sim = None, 0.0
     for i, r in enumerate(recent):
@@ -2285,14 +2460,41 @@ def _semantic_dedup_lookup(
         if sim >= threshold and sim > best_sim:
             best_sim, best_id = sim, r["id"]
     if best_id is not None:
-        return best_id
+        char_result = _char_level_dup_lookup(data.content, recent, threshold)
+        char_id, char_sim, _char_reason = (char_result + (0.0, {}))[:3] if isinstance(char_result, tuple) else (char_result, 0.0, {})
+        return best_id, best_sim, {
+            "layer": "tfidf",
+            "similarity": round(float(best_sim), 6),
+            "reason": "tfidf_merge",
+            "decision": "merge",
+            "target_id": best_id,
+            "char_similarity": round(float(char_sim or 0.0), 6),
+            "char_candidate": char_id,
+        }
     # TF-IDF alone cannot catch re-worded Chinese duplicates: measured on real
     # pairs, "数据库选 PostgreSQL 16 作为主库，事务稳定" vs "主数据库决定用
     # PostgreSQL 16，因为事务支持稳定" scores 0.29, and even a near-identical
     # sentence with one extra clause scores 0.34 — nowhere near a 0.85 bar. So
     # the configured threshold could never fire and semantic dedup was dead
     # weight. Add a character-level measure that suits short CJK text.
-    return _char_level_dup_lookup(data.content, recent, threshold)
+    char_result = _char_level_dup_lookup(data.content, recent, threshold)
+    char_id, char_sim, _char_reason = (char_result + (0.0, {}))[:3] if isinstance(char_result, tuple) else (char_result, 0.0, {})
+    if char_id is not None:
+        return char_id, char_sim, {
+            "layer": "char_jaccard",
+            "similarity": round(float(char_sim or 0.0), 6),
+            "reason": "char_jaccard_merge",
+            "decision": "merge",
+            "target_id": char_id,
+        }
+    return None, 0.0, {
+        "layer": "none",
+        "similarity": 0.0,
+        "reason": "below_threshold",
+        "decision": "no_merge",
+        "target_id": None,
+        "char_best_similarity": round(float(char_sim or 0.0), 6),
+    }
 
 
 def _capture_insert_row(conn, data: MemoryInput, h: str, now: str) -> int:

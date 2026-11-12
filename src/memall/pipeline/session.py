@@ -8,7 +8,7 @@ ended_at TEXT, memory_count INTEGER, summary TEXT, status TEXT)
 """
 
 import logging
-from memall.core.kb_policy import KB_SOURCE_PIPELINES
+from memall.core.kb_policy import KB_SOURCE_PIPELINES, kb_sql_exclusion_clauses
 import sqlite3
 
 logger = logging.getLogger(__name__)
@@ -426,11 +426,13 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
             "ORDER BY started_at DESC LIMIT 1",
             (agent_name,),
         ).fetchone()
+        _stale_closed = None
         if stale and stale["started_at"]:
             try:
                 stale_start = datetime.fromisoformat(stale["started_at"])
                 if (datetime.now(timezone.utc) - stale_start) > timedelta(hours=2):
                     _mark_session_inline(conn, stale["session_id"])
+                    _stale_closed = (stale["session_id"], stale["started_at"])
             except Exception:
                 logger.warning("session.py: failed to close stale session", exc_info=True)
 
@@ -443,6 +445,23 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
         conn.commit()
 
         result = {"session_id": sid, "agent_name": agent_name, "started_at": now, "status": "active"}
+
+        # TD-EVOL-TRACK-01: the stale close above ends a session nobody called
+        # session_end for. Run the (default-off, fail-open) corrections
+        # auto-adoption judge over that closed window here — session_start is
+        # the reliable hook (see correction rule `session_end_unreliable`).
+        if _stale_closed and agent_name:
+            try:
+                from .improve import evaluate_session_corrections
+                _eval = evaluate_session_corrections(
+                    agent_name, _stale_closed[1], now, _stale_closed[0])
+                if _eval.get("evaluated"):
+                    result["stale_corrections_eval"] = {
+                        k: _eval.get(k) for k in
+                        ("session_id", "adopted", "violations", "no_signal", "written", "dry_run")
+                    }
+            except Exception:
+                logger.debug("session_start stale corrections eval failed", exc_info=True)
 
         # ── First-create notice (P2.13, from dsh-meow-memory #37) ──
         # A brand-new store is invisible: the agent never learns where its
@@ -496,16 +515,8 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                 injection["kb_excluded"] = True
                 injection["excluded_source_pipelines"] = list(_kb_sp)
             result["injection"] = injection
-            result["l4_recent"] = (injection or {}).get("l4_recent_global", []) if isinstance(injection, dict) else []
-            result["l5_active"] = (injection or {}).get("l5_active_global", []) if isinstance(injection, dict) else []
-            result["kb_excluded"] = True
-            result["excluded_source_pipelines"] = list(_kb_sp)
-            result["injection"] = injection
-
-            result["l4_recent"] = injection.get("l4_recent_global", [])
-
-            l5_todos = injection.get("l5_active_global", [])
-            result["l5_active"] = l5_todos
+            result["l4_recent"] = injection.get("l4_recent_global", []) if isinstance(injection, dict) else []
+            result["l5_active"] = injection.get("l5_active_global", []) if isinstance(injection, dict) else []
             # P1/P2 contract: session continuity surfaces exclude KB evidence (additive, back-compat)
             result["kb_excluded"] = True
             result["excluded_source_pipelines"] = list(_kb_sp)
@@ -519,13 +530,8 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                     (agent_name,),
                 ).fetchone()
                 if last_cat and last_cat["category"]:
-                    try:
-                        from memall.core.kb_policy import kb_sql_exclusion_clauses
-                        _kb_l3 = " AND ".join(kb_sql_exclusion_clauses())
-                    except Exception:
-                        _kbs = "','".join(KB_SOURCE_PIPELINES)
-                        _kbm = "COALESCE(json_extract(metadata, '$.source_pipeline'), '')"
-                        _kb_l3 = f"{_kbm} NOT IN ('{_kbs}') AND NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')"
+                    from memall.core.kb_policy import kb_sql_exclusion_clauses
+                    _kb_l3 = " AND ".join(kb_sql_exclusion_clauses())
                     l3_rows = conn.execute(
                         "SELECT id, subject, summary, content FROM memories "
                         "WHERE level = 'L3' AND category = ? "
@@ -558,13 +564,16 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
 
             # ── Collect data for narrative greeting (Direction 1) ──
             # (queries happen inline below; results collected here)
+            l5_todos = result.get("l5_active") or []
+            if not isinstance(l5_todos, list):
+                l5_todos = []
             narrative_data: dict[str, any] = {
                 "hours_elapsed": None,
                 "new_memories": 0,
                 "epoch_label": None,
                 "has_todo": bool(l5_todos),
                 "todo_count": len(l5_todos),
-                "todo_p0": any(t.get("level_tag") == "(P0)" for t in l5_todos),
+                "todo_p0": any(isinstance(t, dict) and t.get("level_tag") == "(P0)" for t in l5_todos),
                 "open_arcs_count": 0,
                 "discussions": [],
                 "p0_alert": p0_count > 0,
@@ -641,6 +650,19 @@ def session_start(agent_name: str = "", auto_inject: bool = True) -> dict:
                     return f"{txt}[x{w}]" if w > 1 else txt
                 lessons_tips = " · ".join(_fmt_lesson(l) for l in l7_lessons[:3])
                 stable_parts.append(f"[LESSONS] {lessons_tips}")
+
+            # [EVOLVE] Active self-evolution correction rules (personal + global)
+            active_corrections = injection.get("active_corrections", []) if isinstance(injection, dict) else []
+            if active_corrections:
+                def _fmt_corr(c):
+                    sev = str(c.get("severity") or "").strip()
+                    txt = str(c.get("rule_text") or c.get("summary") or "").strip()[:90]
+                    return f"[{sev}] {txt}" if sev and txt else txt
+                corr_tips = " · ".join(
+                    t for t in (_fmt_corr(c) for c in active_corrections[:4]) if t
+                )
+                if corr_tips:
+                    stable_parts.append(f"[EVOLVE] {corr_tips}")
 
             # [WORKFLOW] L3 workflow skills — available tools/routines
             skills = injection.get("workflow_skills", [])
@@ -925,6 +947,21 @@ def session_end(session_id: str, auto_extract: bool = False) -> dict:
                     "total_strong": len(strong),
                     "note": f"session had {len(strong)} mandatory correction rules that should have been followed",
                 }
+            # TD-EVOL-TRACK-01: automatic adoption/violation judge for the
+            # closed session window. Gated by evolution.correction_auto_adoption_eval
+            # (default off); writes additionally require the adoption tracking
+            # gate, otherwise it is a dry run. Fail-open, never affects end result.
+            try:
+                from .improve import evaluate_session_corrections
+                _eval = evaluate_session_corrections(
+                    agent_name or "", started_at, now, session_id)
+                if _eval.get("evaluated"):
+                    result["corrections_eval"] = {
+                        k: _eval.get(k) for k in
+                        ("adopted", "violations", "no_signal", "written", "dry_run")
+                    }
+            except Exception:
+                logger.debug("session_end corrections eval failed", exc_info=True)
             # improve_step / identity_step must NOT run here: session_end is
             # a dead path (sessions are rarely ended) and both are full-store
             # scans.  Two independent fixes agreed on this: the remote branch
@@ -1202,15 +1239,7 @@ def build_continuity_pack(
         base_params.append(now_ts)
         base_where.append("(invalid_at IS NULL OR invalid_at = '' OR invalid_at > ?)")
         base_params.append(now_ts)
-        try:
-            from memall.core.kb_policy import kb_sql_exclusion_clauses
-            base_where.extend(kb_sql_exclusion_clauses())
-        except Exception:
-            # kb_policy-equivalent fallback: derive from KB_SOURCE_PIPELINES to avoid literal drift
-            _kbm = "COALESCE(json_extract(metadata,'$.source_pipeline'),'')"
-            _kbsps = "','".join(KB_SOURCE_PIPELINES)
-            base_where.append(f"{_kbm} NOT IN ('{_kbsps}')")
-            base_where.append(f"NOT (COALESCE(category,'')='knowledge' AND {_kbm} LIKE 'document.%')")
+        base_where.extend(kb_sql_exclusion_clauses())
         if not include_conflicts:
             base_where.append("(memory_status IS NULL OR (memory_status NOT LIKE '%CONFLICT%' AND memory_status NOT LIKE '%REVIEW%'))")
 
@@ -1289,11 +1318,7 @@ def build_continuity_pack(
         _conflicts = unresolved
         _pending = [m for m in _active if (m.get("resolve_status") or "") in ("REVIEW", "PENDING", "CONFLICT")]
         _recent_supersedes = [m for m in _active if (m.get("memory_status") or "").lower().find("supersed") >= 0]
-        try:
-            from memall.core.kb_policy import KB_SOURCE_PIPELINES as _KB_SPS
-            _excluded_sps = list(_KB_SPS)
-        except Exception:
-            _excluded_sps = ["document.import", "kb_ingest"]
+        _excluded_sps = list(KB_SOURCE_PIPELINES)
         _why = {
             "filters": ["validity_aware", "temporal_validity", "kb_excluded", "non_archived", "agent/project scoped"],
             "kb_excluded": True,

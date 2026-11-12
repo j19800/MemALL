@@ -109,11 +109,14 @@ def knowledge_distill_step() -> dict:
     """
     with pool_conn() as conn:
         # 1. 收集高分 L6 教训 (confidence >= 0.5, 至少被 2 个 Agent 共享)
+        from memall.core.kb_policy import kb_sql_exclusion_clauses
+        _kb = " AND ".join(kb_sql_exclusion_clauses())
         lessons = conn.execute(
             "SELECT id, content, subject, agent_name, confidence, weight FROM memories "
             "WHERE level = 'L6' AND confidence >= 0.5 AND LENGTH(TRIM(content)) > 20 "
             # Archived rows are soft-deleted — not shared lessons.
             "AND COALESCE(memory_status, '') != 'archived' "
+            f"AND {_kb} "
             "ORDER BY confidence DESC LIMIT 500"
         ).fetchall()
 
