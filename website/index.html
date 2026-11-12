@@ -30,7 +30,7 @@
   <canvas id="hero-graph" aria-hidden="true"></canvas>
   <div class="hero-inner">
     <div class="hero-badges" style="margin-bottom:22px">
-      <span class="badge"><span class="dot"></span>v0.1.80 持续迭代</span>
+      <span class="badge"><span class="dot"></span>v0.1.82 持续迭代</span>
       <span class="badge">MIT 开源</span>
       <span class="badge">Python ≥ 3.10</span>
       <span class="badge">零云端依赖</span>
@@ -64,7 +64,7 @@
       <div class="stat"><b>8</b><span>MCP 工具 · 72 actions</span></div>
       <div class="stat"><b>512</b><span>维本地向量 + RRF</span></div>
       <div class="stat"><b>55</b><span>个 CLI 命令</span></div>
-      <div class="stat"><b>45</b><span>个迁移 · 98 条 HTTP 路由</span></div>
+      <div class="stat"><b>49</b><span>个幂等迁移 · 74 个 CLI 命令</span></div>
     </div>
   </div>
 </section>
@@ -97,7 +97,7 @@
       <div class="card reveal"><div class="icon">🔍</div><h3>混合检索，可解释</h3><p>FTS5 全文 + sqlite-vec 512 维 KNN，真 RRF 融合（k=60）；默认走本地 ONNX INT8 重排器，无 GPU、无 PyTorch 也能重排。</p></div>
       <div class="card reveal"><div class="icon">♻️</div><h3>31 步自进化管线</h3><p>记忆入库后自动富化、分类、建边、回声评分、时期检测、反思、蒸馏、整合、衰减、归档——每步幂等、带质量门、逐步提交。</p></div>
       <div class="card reveal"><div class="icon">🌐</div><h3>多 Agent 联邦</h3><p>跨设备 UDP 发现与配对码握手，publish / query / conflicts / inject / deliver；冲突检测自动聚类矛盾记忆，跨 Agent 蒸馏产出 L10/L11。</p></div>
-      <div class="card reveal"><div class="icon">🔌</div><h3>MCP 原生</h3><p>8 个聚合工具、72 个 action（另有 21 个中文别名），stdio 与 Streamable HTTP 双通道；Claude Desktop / Cursor / Cline / Qoder 三行配置即接即用。</p></div>
+      <div class="card reveal"><div class="icon">🔌</div><h3>MCP 原生</h3><p>8 个聚合工具、100+ action（另有中文别名），stdio 与 Streamable HTTP 双通道；Claude Desktop / Cursor / Cline / Qoder 三行配置即接即用。</p></div>
     </div>
   </div>
 </section>
@@ -154,12 +154,30 @@
     <div class="section-head reveal">
       <span class="eyebrow">自进化管线</span>
       <h2>存入之后，记忆继续生长</h2>
-      <p>31 个核心步骤 + 5 个可选步骤（以 <code style="font-family:var(--font-mono);color:var(--accent)">list_pipeline_steps()</code> 为准），
+      <p>31 个核心步骤 + 6 个可选步骤（以 <code style="font-family:var(--font-mono);color:var(--accent)">list_pipeline_steps()</code> 为准），
         由 Hook 事件异步触发或手动运行。悬停查看每一步做什么——全部为确定性启发式实现，离线可跑、结果可复现。</p>
     </div>
     <div class="pipe-grid reveal" id="pipe-grid"></div>
     <p class="hint" id="pipe-tip" style="min-height:22px;margin-top:16px;color:var(--fg-muted)">悬停任意步骤查看职责说明。</p>
     <div class="pipe-legend reveal"><span><i style="background:var(--accent)"></i>核心步骤（默认全跑）</span><span><i style="background:var(--purple);opacity:.6"></i>可选步骤（按需开关）</span></div>
+  </div>
+</section>
+
+<section class="section section-alt" id="cognitive-loop">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">认知闭环 · v0.1.82 新增</span>
+      <h2>写进去 → 检索 → 纠正 → 自我评估，全链路闭环</h2>
+      <p>记忆不再是单向写入。从自动入库到语义去重，从纠正注入到有效性自评，每一步可观测、可门控、默认行为不变——新能力一律 config/env 门控。</p>
+    </div>
+    <div class="grid grid-3">
+      <div class="card reveal"><div class="icon">📥</div><h3>自动入库 auto-capture</h3><p>ask / reflect / respond 三源提取候选记忆，信息增量门（默认阈值 0.15）过滤低信号；进程内 + 持久双层去重，extractor 白名单可显式扩展。</p></div>
+      <div class="card reveal"><div class="icon">🎯</div><h3>语义去重分层决策</h3><p>TF-IDF cosine → 字符 3-gram Jaccard 兜底；<code style="font-family:var(--font-mono)">layer / reason / similarity / target_id</code> 全程可观测并持久化。否定词 / 数量词守卫防止"合并语义反转"。</p></div>
+      <div class="card reveal"><div class="icon">🧩</div><h3>KB 边界策略收敛</h3><p>所有读路径的 KB 排除逻辑收敛到单一 <code style="font-family:var(--font-mono)">kb_policy</code> 模块（session / continuity / recap / auto_inject / cross_agent…），一处改动全路径生效。</p></div>
+      <div class="card reveal"><div class="icon">🔁</div><h3>自进化有效性闭环</h3><p>corrections 注入 / 采纳计数；<code style="font-family:var(--font-mono)">evaluate_session_corrections()</code> 三态判定（采纳 / 违反 / 无证据不动）；有效性报告以 <code style="font-family:var(--font-mono)">memall_system action=correction_report</code> 暴露。</p></div>
+      <div class="card reveal"><div class="icon">⚙️</div><h3>durable kb_enrich worker</h3><p>持久队列 claim / lease / CAS / 退避 / 重试 / 幂等 / 跨进程 drain；网关 best-effort 自启（默认关）。崩溃后队列不丢，告警阈值可配。</p></div>
+      <div class="card reveal"><div class="icon">🔧</div><h3>网关热重载（dev-only）</h3><p><code style="font-family:var(--font-mono)">gateway_autoreload.py</code> watcher + <code style="font-family:var(--font-mono)">os.execv</code> 原地重启（防抖 + 编译守卫）；<code style="font-family:var(--font-mono)">MEMALL_AUTORELOAD=1</code> 开启，绝不进程内 reload 模块。</p></div>
+    </div>
   </div>
 </section>
 
@@ -218,8 +236,8 @@
   <div class="wrap">
     <div class="section-head reveal">
       <span class="eyebrow">接入面</span>
-      <h2>8 个 MCP 工具，72 个 action</h2>
-      <p>每个端点是按域聚合的合并工具（action 派发），一次注册覆盖读写、图谱、人格、讨论、联邦、消息总线、系统运维与 Hook 活动。另有 21 个中文别名（"记一下""随手记""每日摘要"）可直接当 action 用。</p>
+      <h2>8 个 MCP 工具，100+ action</h2>
+      <p>每个端点是按域聚合的合并工具（action 派发），一次注册覆盖读写、图谱、人格、讨论、联邦、消息总线、系统运维与 Hook 活动。另有中文别名（如"记一下"）可直接当 action 用。</p>
     </div>
     <div class="tools reveal">
       <div class="tool"><code>memall_write</code><span class="n">19 actions</span><ul><li>capture · smart_store · store_batch</li><li>update · connect · forget · ops</li><li>task_claim/resolve/block · goal_*（6 个）</li><li>record_interaction · quick</li></ul></div>
@@ -231,7 +249,7 @@
       <div class="tool"><code>memall_system</code><span class="n">16 actions</span><ul><li>run_pipeline · distill · reflect · adaptive</li><li>gateway · hub_connect · hub_sync · db</li><li>session_start/end/summary · security</li><li>onboarding · index_rebuild · digest · hot</li></ul></div>
       <div class="tool"><code>memall_hooks_recent</code><span class="n">无 action</span><ul><li>异步管线执行记录</li><li>通知与提醒检查</li></ul></div>
     </div>
-    <p class="hint reveal" style="margin-top:18px">同一核心也暴露 98 条 HTTP 路由（含 MCP Streamable HTTP <code style="font-family:var(--font-mono)">POST /mcp</code>）与 55 个 CLI 命令；网关仅绑定 127.0.0.1，Bearer token + CSRF + GET 100/min、POST 30/min 限流，本机 loopback 页面免 token。浏览器端另有 Memory Explorer（<code style="font-family:var(--font-mono)">/explorer</code>：多面筛选 + 分页 + 详情带边与线程上下文）与数据看板（<a href="dashboard.html">本站示例</a>）。</p>
+    <p class="hint reveal" style="margin-top:18px">同一核心也暴露一组 HTTP 路由（含 MCP Streamable HTTP <code style="font-family:var(--font-mono)">POST /mcp</code>）与 74 个 CLI 子命令；网关仅绑定 127.0.0.1，Bearer token + CSRF + GET 100/min、POST 30/min 限流，本机 loopback 页面免 token。浏览器端另有 Memory Explorer（<code style="font-family:var(--font-mono)">/explorer</code>：多面筛选 + 分页 + 详情带边与线程上下文）与数据看板（<a href="dashboard.html">本站示例</a>）。</p>
   </div>
 </section>
 
@@ -247,7 +265,7 @@
         <tbody>
           <tr><td>记忆模型</td><td>user/session</td><td>agent/记忆块</td><td>session/摘要</td><td>无结构</td><td class="ours">3+11 共 14 级，DB 约束强制</td></tr>
           <tr><td>知识图谱</td><td class="xk">—</td><td class="xk">—</td><td class="xk">部分</td><td class="xk">—</td><td class="ours"><span class="ck">✓</span> 8 种边 + 本体遍历 + 决策弧</td></tr>
-          <tr><td>自进化管线</td><td class="xk">—</td><td class="xk">—</td><td class="xk">—</td><td class="xk">手动</td><td class="ours"><span class="ck">✓</span> 31+5 步，幂等 + 质量门</td></tr>
+          <tr><td>自进化管线</td><td class="xk">—</td><td class="xk">—</td><td class="xk">—</td><td class="xk">手动</td><td class="ours"><span class="ck">✓</span> 31+6 步，幂等 + 质量门</td></tr>
           <tr><td>混合检索</td><td>云侧</td><td>需外接</td><td>云侧</td><td class="xk">grep</td><td class="ours"><span class="ck">✓</span> FTS5+vec0 RRF，本地 ONNX 重排</td></tr>
           <tr><td>多 Agent 共享</td><td class="xk">—</td><td>同 Agent</td><td class="xk">—</td><td class="xk">—</td><td class="ours"><span class="ck">✓</span> 联邦 + 冲突检测 + 主动推送</td></tr>
           <tr><td>协议</td><td>REST</td><td>REST/gRPC</td><td>REST</td><td class="xk">—</td><td class="ours">MCP 原生（stdio + HTTP）</td></tr>
@@ -274,7 +292,7 @@
       </div></div>
       <div class="step reveal"><div>
         <h3>初始化并启动</h3>
-        <p><code>memall init</code> 自动建库并顺序应用 45 个幂等迁移（最新 <code>040_create_wake_claims</code>）、启动网关、注册 MCP、打开浏览器。网关监听 <code>127.0.0.1:9920</code>。</p>
+        <p><code>memall init</code> 自动建库并顺序应用 49 个幂等迁移（最新 <code>043_create_ops_facts</code>）、启动网关、注册 MCP、打开浏览器。网关监听 <code>127.0.0.1:9920</code>。</p>
         <pre>memall quickstart     <span style="color:var(--fg-soft)"># 或 memall init &amp;&amp; memall start</span><button class="btn btn-sm copy" data-copy="memall quickstart">复制</button></pre>
       </div></div>
       <div class="step reveal"><div>
@@ -297,9 +315,9 @@
     <div class="section-head reveal"><span class="eyebrow">FAQ</span><h2>几个诚实的回答</h2></div>
     <div class="faq reveal">
       <details><summary>数据存在哪里？会上传云端吗？</summary><div class="a">全部存在本地 <code>~/.memall/memall.db</code>（SQLite 单文件），网关只绑定 127.0.0.1，联邦仅在局域网配对后通信。注意：当前版本没有静态加密，请把机器本身当作信任边界。</div></details>
-      <details><summary>管线需要 LLM 或联网吗？</summary><div class="a">不需要。31 个核心步骤（+5 个可选）全部是确定性启发式（正则、SQL、Jaccard、TF-IDF），离线可跑、结果可复现。向量嵌入用本地小模型（bge-small-zh，512 维），重排默认本地 ONNX INT8，并有三级降级链；接大模型增强属于可选外挂。</div></details>
+      <details><summary>管线需要 LLM 或联网吗？</summary><div class="a">不需要。31 个核心步骤（+6 个可选）全部是确定性启发式（正则、SQL、Jaccard、TF-IDF），离线可跑、结果可复现。向量嵌入用本地小模型（bge-small-zh，512 维），重排默认本地 ONNX INT8，并有三级降级链；接大模型增强属于可选外挂。</div></details>
       <details><summary>Agent 不会主动调用工具，这套记忆不就闲置了？</summary><div class="a">这正是"无人值守"部分要解决的：<code>scheduler/agent_round</code> 周期性为每个注册 Agent 写 P2 提醒记忆，<code>wake_claims</code> 做跨进程唤醒认领，目标的下一步由确定性 tick 算出来。Agent 下次醒来时，待办和讨论已经在等它。</div></details>
-      <details><summary>说好的"30 步管线""11 层"，代码里到底是多少？</summary><div class="a">以运行时接口和源码为准（当前 v0.1.80，数字最初于 v0.1.68 逐项核对）：<code>list_pipeline_steps()</code> = 31 核心 + 5 可选；层级 P0–P2 + L1–L11 共 14 级；MCP 8 个聚合端点、72 个 action（+21 个中文别名）；<code>gateway_routes.py</code> 注册 98 条 HTTP 路由；CLI 55 个顶层命令；<code>migrations/</code> 下 45 个幂等迁移。本站数字会随版本复核更新，不靠记忆写文案。</div></details>
+      <details><summary>说好的"30 步管线""11 层"，代码里到底是多少？</summary><div class="a">以运行时接口和源码为准（当前 v0.1.82，数字随版本复核更新，不靠记忆写文案）：<code>list_pipeline_steps()</code> = 31 核心 + 5 可选；层级 P0–P2 + L1–L11 共 14 级；MCP 8 个聚合端点、100+ action（另有中文别名可直接当 action 用）；<code>gateway_routes.py</code> 注册 84 条 HTTP 路由；CLI 74 个顶层命令；<code>migrations/</code> 下 49 个幂等迁移（最新 <code>043_create_ops_facts</code>）。</div></details>
       <details><summary>百万条记忆扛得住吗？</summary><div class="a">FTS5 与 vec0 都是索引化的；当前默认路径面向十万级优化，百万级建议启用 FAISS extra 并调低同步重排。仓库内有压测与基准脚本可复现。</div></details>
       <details><summary>和 Mem0 / Letta 怎么共存？</summary><div class="a">它们可作为上层框架保留，MemALL 只做记忆底座：通过 MCP 对任意 Agent 暴露同一份记忆。规划的 MemPort 工具将支持从它们一次性迁移。</div></details>
       <details><summary>什么规模算"够用"？</summary><div class="a">单 Agent 个人助手也值得装——一次 capture 换回的是以后每次检索的上下文；多 Agent 团队收益随共享记忆数近似线性增长。</div></details>
