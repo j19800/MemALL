@@ -1,3 +1,26 @@
+## [v0.1.82] - 2026-11-12
+
+ADR 0028「Memory Cognitive Loop」主线整批落地（覆盖自 origin/master 起的 30 个 commit；逐轮过程记录见 `docs/p0-p2/`）。全部默认行为不变，新能力一律 config/env 门控。
+
+### Feat
+- **语义去重分层决策**：TF-IDF cosine → 字符 3-gram Jaccard 兜底，`layer/reason/similarity/target_id` 全程可观测并持久化进 metadata 与 capture 契约（`dedup_hash|dedup_semantic|dedup_accumulate|dedup`）；legacy 键优先级保留；跨 agent/跨会话窗口与 embedding 旋钮为惰性预留（契约测试锁定其无效性）。否定词/数量词守卫防止「合并语义反转」。
+- **自动入库（auto-capture）**：ask/reflect/respond 三源提取 + 信息增量/低信号门（fail-open，默认阈值 0.15）+ 进程内与持久双层去重（300s 窗口/2 次命中/agent 作用域）；extractor 白名单成为显式扩展点（`register_auto_capture_extractor`），config 仅可收窄不可放宽；窗口/保留期/行数上限全部可调且默认值精确保持旧契约。
+- **KB 边界策略集中化（P2-3）**：所有读路径 KB 排除收敛到 `core/kb_policy.KB_SOURCE_PIPELINES` / `kb_sql_exclusion_clauses()`（session/continuity/recap/auto_inject/auto_dream/cross_agent/lifecycle/llm_enhance）。
+- **自进化有效性闭环（TD-EVOL-TRACK-01）**：corrections 表加性注入/采纳计数（自动迁移）；`evaluate_session_corrections()` 三态自动判定（adoption 需注入证据、violation 只阻断不罚、无证据不动计数），挂 `session_end` 与 `session_start` stale 关闭双钩；`correction_effectiveness_report()` 以 `memall_system action=correction_report` 暴露。三道默认关的门 + dry-run 灰度预览模式。
+- **P2-4 durable worker**：kb_enrich 持久队列（`pipeline_jobs` claim/lease/CAS/退避/重试/幂等/reprocess/告警阈值/跨进程 drain），gateway best-effort autostart（默认 off）。
+- **网关热重载（dev-only，默认 off）**：`gateway_autoreload.py` watcher + `os.execv` 原地重启（防抖 + 编译守卫，绝不在进程内 reload 模块）；`MEMALL_AUTORELOAD=1` 或 `gateway.autoreload.enabled` 开启；`gateway_start_dev_reload.py` 为专用入口。
+- 另含 ADR0028 主线批次：P0 resolve/validity 增量暴露、P1 continuity pack 契约与时序有效性、P3 效用遥测/重排（默认 off）、P4 maintenance 幂等等（详见 `docs/p0-p2/TRANSFORMATION_DOC.md` 与 `blueprint-completion-matrix.md`）。
+
+### Fixed
+- `config.DEFAULTS` 重复 `"gateway"` 键静默覆盖 `gateway.port=9920`（dict 字面量后键吃前键）→ 合并回原节。
+- `test_gateway_capture` 顺序依赖假绿：jieba 在 /capture 请求内冷加载 ~4-6s 超过 3s 客户端超时，仅因全量中更早测试已热载进程而偶绿 → setup 预热 + 15s 超时。
+- autoreload watcher 启动竞态（首快照改同步取，消除「调用后立即写入被吞」）。
+- 混血模块教训入档：src 热改后运行中 gateway 惰性导入可拼出 ImportError 缓存态、毒化全部 /mcp 500，需重启才净（见 `docs/p0-p2/COMMIT_CHECKLIST.md` 部署备注）。
+
+### Tests
+- 新增 `test_auto_capture.py`、`test_semantic_dedup_config_contract.py`、`test_auto_inject_corrections.py`、`test_gateway_autoreload.py`、`test_kb_enrich_worker_p2.py`、`test_utility_rerank_p3.py`、`test_blueprint_completion.py`、`test_mcp_protocol_e2e.py` 等；扩展 improve/session/thread-inference 契约。
+- 全量验收：**708 passed / 2 skipped**（2026-11-12）。
+
 ## [v0.1.81] - 2026-11-08
 
 技术债巡检后的基础设施批次：scheduler 保活化、死路径接线纠正、会话清扫收敛性、daily forget 止血。

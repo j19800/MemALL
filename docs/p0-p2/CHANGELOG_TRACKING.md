@@ -282,3 +282,15 @@
 - 审查员确认无 SQL 注入、无路径穿越、无连接泄漏、bounded 真实有效。
 - 审查签字定性为**有条件通过**；flakes 已修并验证稳定，其余待办如实登记在 `TECH_DEBT_LEDGER.md`。
 - 工作区仅剩 `thin_waist.py.bak_phase1` 未跟踪。**未 push**。
+
+### ✅ 2026-11-12 批次：四开放债务 + 热重载 + 缺陷修复（已 commit）
+- **commit `63b7fba`**：`feat(memall): layered semantic dedup, auto-capture hardening, KB policy convergence, correction effectiveness loop, gateway auto-reload`（30 files, +3445/−236）。
+  - TD-AUTO-SRC-01：extractor 注册扩展点 + config 收窄（默认三源不变）。
+  - auto_capture_recent：窗口/min-hits/retention/max-rows 可配，默认精确旧契约 + rowid 裁剪。
+  - TD-EVOL-TRACK-01：corrections 注入/采纳计数（默认关）+ `evaluate_session_corrections()` 三态判定 + MCP `correction_report`。
+  - TD-DEDUP-V2-01：cross-session/embedding 预留无效性契约锁定。
+  - 网关热重载：watcher+execv（防抖+编译守卫，默认 off）+ 启动竞态修复。
+  - 修复：config DEFAULTS 重复 "gateway" 键覆盖 port；test_gateway_capture jieba 冷载顺序依赖假绿。
+  - 验收：全量 **708 passed / 2 skipped (exit 0)**。
+- **入口脚本提交**（amend 后最终 hash 见 `git log -1`）：`gateway_start.py`（线上 systemd 实际 ExecStart，之前竟未入库）+ `gateway_start_dev_reload.py`；`.bak` 核对一致后删除。
+- **v0.1.82**：CHANGELOG 汇总条目 + README/README.zh-CN badge 与路线图 + `__init__` 版本 bump。

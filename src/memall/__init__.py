@@ -1,3 +1,3 @@
 """MemALL — multi-agent collaborative memory OS."""
 
-__version__ = "0.1.80"  # v0.1.80: B1 stance guard + B3 dependency notification (pushed to origin)
+__version__ = "0.1.82"  # v0.1.82: ADR0028 cognitive-loop batch (semantic dedup / auto-capture / KB policy / correction effectiveness / gateway auto-reload)

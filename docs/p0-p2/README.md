@@ -1,7 +1,7 @@
 # ADR 0028 P0–P2 改造文档索引
 
-> **文档状态**：现行（commit `92863b6` 基线；2026-11-10 持续推进，工作区含未提交改动）  
-> 最新扩展 scoped regression（9 文件）**70 passed**（详见 [PRECOMMIT_SCOPED_REPORT_2026-11-10.md](PRECOMMIT_SCOPED_REPORT_2026-11-10.md)）。  
+> **文档状态**：现行（**2026-11-12 已提交**：`63b7fba` 主线批次 + 入口脚本提交；v0.1.82 入 CHANGELOG）  
+> 最新全量验收 **708 passed / 2 skipped**（2026-11-12，零回归基线）。历史 scoped 记录见 [PRECOMMIT_SCOPED_REPORT_2026-11-10.md](PRECOMMIT_SCOPED_REPORT_2026-11-10.md)。  
 > 范围：ADR 0028 Memory Cognitive Loop 的 P0/P1/P2 实现、验收、提交清单与技术债务；并延伸记录 P2-4 CAS 加固与 P3 默认关闭效用重排（本轮新增 `tests/test_utility_rerank_p3.py`）。
 
 ## 文档清单
