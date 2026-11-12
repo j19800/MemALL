@@ -225,3 +225,4 @@ PYTHONPATH=.:src ./.venv/bin/python -m pytest \
 ## ✅ 提交完成（2026-11-12）
 - commit `b7d703b`（本地，未 push）：30 files, 3445+/236-，含第四轮热重载与缺陷修复；排除项保持未跟踪（gateway_start.py / gateway_start_dev_reload.py / bak）。
 - 本条为提交后补记（amend 于同一本地提交）。
+- 追加 commit（入口脚本，最终 hash 见 `git log -2`，amend 后以 git 为准）：gateway_start.py + gateway_start_dev_reload.py 入库（用户决定“全部提交”）；bak 重复文件已核对一致后删除。工作区干净。
